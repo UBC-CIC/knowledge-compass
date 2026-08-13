@@ -41,14 +41,11 @@ export class GlueStack extends cdk.Stack {
       ],
     });
 
-    // Secrets Manager — only the three SharePoint secrets + DB user secret
+    // Secrets Manager — DB user secret only
     glueRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["secretsmanager:GetSecretValue"],
       resources: [
-        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:KBA-SharePoint-Credentials*`,
-        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:Sharepoint-REST-Cert-Pfx-B64*`,
-        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:Sharepoint-REST-Cert-Pfx-Password*`,
         dbStack.secretPathUser.secretArn,
       ],
     }));
@@ -96,7 +93,7 @@ export class GlueStack extends cdk.Stack {
     const connectionName = `${id}-VpcConnection-v2`;
 
     // Glue VPC connection — uses private-with-egress subnet so NAT is available
-    // for Microsoft Graph API calls while still being able to reach RDS Proxy
+    // and the job can reach RDS Proxy
     const glueConnection = new glue.Connection(this, `${id}-GlueConnection`, {
       connectionName,
       type: glue.ConnectionType.NETWORK,
@@ -119,9 +116,6 @@ export class GlueStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(120),
       maxConcurrentRuns: 1,
       defaultArguments: {
-        "--SHAREPOINT_SECRET_NAME": "KBA-SharePoint-Credentials",
-        "--SHAREPOINT_CERT_SECRET": "Sharepoint-REST-Cert-Pfx-B64",
-        "--SHAREPOINT_CERT_PASSWORD_SECRET": "Sharepoint-REST-Cert-Pfx-Password",
         "--DB_SECRET_NAME": dbStack.secretPathUser.secretName,
         "--RDS_PROXY_ENDPOINT": dbStack.rdsProxyEndpoint,
         "--FORCE_FULL": "false",

@@ -1,8 +1,7 @@
 import {
-  signUp,
-  confirmSignUp,
   signIn,
   signOut,
+  confirmSignIn,
   getCurrentUser,
   fetchAuthSession,
   fetchUserAttributes,
@@ -14,30 +13,33 @@ export class AuthService {
   static AUTH_CACHE_KEY = "auth_session";
   static TOKEN_CACHE_KEY = "auth_token";
 
-  static async signUp(email, password, firstName, lastName) {
+  static async signUp(email) {
     try {
-      const { user } = await signUp({
-        username: email,
-        password,
-        attributes: {
-          email,
-          given_name: firstName,
-          family_name: lastName,
-        },
-      });
-      return { success: true, user };
+      const response = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}signup`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, error: data.error || "Sign-up failed" };
+      }
+      return { success: true, message: data.message };
     } catch (error) {
       return { success: false, error: error.message };
     }
   }
 
-  static async confirmSignUp(email, confirmationCode) {
+  static async handleNewPasswordRequired(newPassword) {
     try {
-      await confirmSignUp({
-        username: email,
-        confirmationCode,
+      const { isSignedIn, nextStep } = await confirmSignIn({
+        challengeResponse: newPassword,
       });
-      return { success: true };
+      this.clearAuthCache();
+      return { success: true, isSignedIn, nextStep };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -64,14 +66,9 @@ export class AuthService {
       apiCache.clear();
       await signOut();
     } catch {
-      // ignore — redirect regardless
+      // ignore
     }
-
-    // signOut() only clears local tokens; the Cognito session cookie lives on a
-    // different domain and must be cleared via Cognito's /logout endpoint.
-    const clientId = import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID;
-    const domain = import.meta.env.VITE_COGNITO_DOMAIN;
-    window.location.href = `https://${domain}/logout?client_id=${clientId}&logout_uri=${encodeURIComponent(window.location.origin)}`;
+    window.location.href = "/landing";
   }
 
   static async getCurrentUser() {

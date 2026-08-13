@@ -53,6 +53,39 @@ x-common-options: &commonOptions
               {}
 
 paths:
+  /signup:
+    <<: *commonOptions
+    post:
+      tags: [User]
+      summary: Self-service sign-up — creates a Cognito user and emails a temporary password
+      operationId: signup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Account created; temporary password sent by email
+        "400":
+          description: Invalid request (missing or malformed email)
+        "409":
+          description: An account with this email already exists
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${signupHandler.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/ingestion/trigger:
     <<: *commonOptions
     post:

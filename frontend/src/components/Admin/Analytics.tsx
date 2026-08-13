@@ -197,27 +197,8 @@ export default function Analytics() {
 
   const effectiveTimeRange = isAllTime ? "all" : timeRange;
 
-  // Fetch groups once on mount — default all selected
-  useEffect(() => {
-    if (groupsFetchedRef.current) return;
-    groupsFetchedRef.current = true;
-    const load = async () => {
-      try {
-        const token = await AuthService.getIdToken();
-        const res = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/admin/entra_groups?limit=50`,
-          { headers: { Authorization: token } }
-        );
-        if (res.ok) {
-          const data = await res.json();
-          const loaded: Group[] = data.groups ?? [];
-          setGroups(loaded);
-          setSelectedGroupIds(new Set(loaded.map(g => g.id)));
-        }
-      } catch { /* non-fatal */ }
-    };
-    load();
-  }, []);
+  // Group-based filtering removed — no groups to fetch
+  useEffect(() => {}, []);
 
   useEffect(() => {
     if (overlayMode) {

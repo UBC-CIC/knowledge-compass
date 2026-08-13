@@ -20,9 +20,6 @@
  *  - migration 014 added composite indexes on chat_sessions and
  *    chat_messages but never dropped the old single-column indexes from
  *    migration 000. This file creates only the composite indexes.
- *  - user_memberships.entra_group_id has no FK to entra_groups (dropped
- *    in migration 016 and never re-added). Preserved as-is here since
- *    it reflects the current production schema, not a design choice.
  *  - data_source_type and ingestion_status enums were never explicitly
  *    dropped by the incremental migrations (their tables/columns were
  *    removed but the types were left as unused objects). This file omits
@@ -106,28 +103,8 @@ exports.up = (pgm) => {
       last_seen_at timestamptz,
       messages_sent bigint DEFAULT 0,
       messages_window_started_at timestamptz NOT NULL DEFAULT now(),
-      metadata jsonb DEFAULT '{}',
-      entra_groups_refreshed_at timestamptz,
-      tenant_upn text
+      metadata jsonb DEFAULT '{}'
     );
-
-    CREATE INDEX IF NOT EXISTS idx_users_tenant_upn ON users(tenant_upn);
-
-    CREATE TABLE IF NOT EXISTS entra_groups (
-      id text PRIMARY KEY,
-      display_name text
-    );
-
-    -- NOTE: entra_group_id intentionally has no FK to entra_groups.
-    -- Migration 016 dropped the original FK when renaming
-    -- user_entra_groups -> user_memberships and it was never re-added.
-    CREATE TABLE IF NOT EXISTS user_memberships (
-      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      entra_group_id text NOT NULL,
-      PRIMARY KEY (user_id, entra_group_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_user_memberships_entra_group_id ON user_memberships(entra_group_id);
 
     -- ==============================
     -- CHAT
@@ -323,15 +300,6 @@ exports.up = (pgm) => {
       updated_at timestamptz DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS site_source_access (
-      site_source_id uuid NOT NULL REFERENCES site_sources(id) ON DELETE CASCADE,
-      entra_group_id text NOT NULL REFERENCES entra_groups(id) ON DELETE CASCADE,
-      created_at timestamptz DEFAULT now(),
-      PRIMARY KEY (site_source_id, entra_group_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_site_source_access_group ON site_source_access(entra_group_id);
-
     -- ==============================
     -- EXPORTS
     -- ==============================
@@ -389,8 +357,6 @@ exports.up = (pgm) => {
     BEGIN
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'readwrite') THEN
         REVOKE DELETE ON system_settings FROM readwrite;
-        REVOKE INSERT, UPDATE, DELETE ON entra_groups FROM readwrite;
-        REVOKE INSERT, UPDATE, DELETE ON site_source_access FROM readwrite;
       END IF;
     END$$;
 
@@ -523,7 +489,6 @@ exports.down = (pgm) => {
     DROP TABLE IF EXISTS notifications CASCADE;
     DROP TABLE IF EXISTS ws_connections CASCADE;
     DROP TABLE IF EXISTS export_runs CASCADE;
-    DROP TABLE IF EXISTS site_source_access CASCADE;
     DROP TABLE IF EXISTS ingestion_schedule CASCADE;
     DROP TABLE IF EXISTS ingestion_runs CASCADE;
     DROP TABLE IF EXISTS document_vectors CASCADE;
@@ -535,8 +500,6 @@ exports.down = (pgm) => {
     DROP TABLE IF EXISTS message_ratings CASCADE;
     DROP TABLE IF EXISTS chat_messages CASCADE;
     DROP TABLE IF EXISTS chat_sessions CASCADE;
-    DROP TABLE IF EXISTS user_memberships CASCADE;
-    DROP TABLE IF EXISTS entra_groups CASCADE;
     DROP TABLE IF EXISTS users CASCADE;
 
     DROP TYPE IF EXISTS notification_type;

@@ -48,19 +48,12 @@ def _vector_literal(values: List[float]) -> str:
 def retrieve_documents(
     query: str,
     num_results: int,
-    user_groups: List[str],
     db_connection,
 ) -> List[Dict[str, Any]]:
     """
     Embed the query, then retrieve the top-N semantically similar chunks
-    from pgvector filtered by the user's Entra group IDs.
+    from pgvector.
     """
-    if not user_groups:
-        logger.warning("retrieve_documents: no user groups — returning empty.")
-        return []
-
-    user_groups = sorted({g.lower() for g in user_groups if g})
-
     try:
         embedding = _embed_text(query)
     except Exception as e:
@@ -77,7 +70,6 @@ def retrieve_documents(
         FROM document_vectors v
         JOIN documents d ON d.id = v.document_id
         WHERE d.status = 'ingested'
-          AND (v.metadata->'group_ids') ?| %s
         ORDER BY v.embedding <=> %s::vector
         LIMIT %s
     """
@@ -86,15 +78,13 @@ def retrieve_documents(
         with db_connection.cursor() as cur:
             cur.execute(sql, (
                 _vector_literal(embedding),
-                user_groups,
                 _vector_literal(embedding),
                 num_results,
             ))
             columns = [desc[0] for desc in cur.description]
             results = [dict(zip(columns, row)) for row in cur.fetchall()]
             logger.info(
-                f"retrieve_documents: {len(results)} chunks for query='{query[:60]}' "
-                f"groups={user_groups}"
+                f"retrieve_documents: {len(results)} chunks for query='{query[:60]}'"
             )
             return results
     except Exception as e:

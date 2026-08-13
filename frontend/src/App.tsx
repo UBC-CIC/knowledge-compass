@@ -7,7 +7,6 @@ import HomePage from "./pages/HomePage";
 import AdminDashboard from "./pages/Admin/AdminDashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { Amplify } from "aws-amplify";
-import { Hub } from "aws-amplify/utils";
 
 Amplify.configure({
   API: {
@@ -21,24 +20,8 @@ Amplify.configure({
     Cognito: {
       userPoolClientId: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID,
       userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID,
-      loginWith: {
-        oauth: {
-          domain: import.meta.env.VITE_COGNITO_DOMAIN,
-          scopes: ["openid", "email", "profile"],
-          redirectSignIn: [window.location.origin],
-          redirectSignOut: [window.location.origin],
-          responseType: "code",
-        },
-      },
     },
   },
-});
-
-// Listen for OAuth redirect completion and reload session
-Hub.listen("auth", ({ payload }) => {
-  if (payload.event === "signInWithRedirect") {
-    window.location.href = "/";
-  }
 });
 
 function App() {

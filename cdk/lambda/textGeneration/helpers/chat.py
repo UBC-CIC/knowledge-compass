@@ -5,7 +5,7 @@ from helpers.bedrock import get_bedrock_llm_client
 
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message,
-    update_last_active_session, get_user_groups
+    update_last_active_session,
 )
 from helpers.logic import get_current_prompt
 from helpers.bedrock import retrieve_documents, format_context_for_prompt
@@ -69,7 +69,6 @@ def _prepare_conversation(
     llm_region: str,
     chat_session_id: str,
     user_id: Optional[str],
-    user_groups: List[str],
     db_connection,
     save_user_message: bool = True,
 ) -> Tuple[List[Dict[str, Any]], str, str, List[Dict[str, Any]]]:
@@ -110,7 +109,6 @@ def _prepare_conversation(
     sources = retrieve_documents(
         query=search_query,
         num_results=config.MAX_CONTEXT_CHUNKS,
-        user_groups=user_groups,
         db_connection=db_connection,
     )
 
@@ -245,17 +243,12 @@ def get_response(
             if guardrail_result['action'] == ACTION_ANONYMIZED:
                 query = guardrail_result['text']
 
-        # 3. Fetch user groups from DB
-        user_groups = get_user_groups(user_id, db_connection)
-        logger.info(f"User {user_id} groups for retrieval: {user_groups}")
-
-        # 4. Prepare conversation
+        # 3. Prepare conversation
         bedrock_messages, static_system_prompt, dynamic_prompt, sources = _prepare_conversation(
             query=query,
             llm_region=llm_region,
             chat_session_id=chat_session_id,
             user_id=user_id,
-            user_groups=user_groups,
             db_connection=db_connection,
             save_user_message=save_user_message,
         )

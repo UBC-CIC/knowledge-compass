@@ -12,6 +12,7 @@
 
 const { getCorsHeaders } = require("./utils/cors.js");
 const { getAuthenticatedUserId, buildAuditEntry } = require("./utils/handlerUtils.js");
+const { CognitoIdentityProviderClient, AdminCreateUserCommand } = require("@aws-sdk/client-cognito-identity-provider");
 const { GlueClient, StartJobRunCommand, GetJobRunCommand, BatchStopJobRunCommand } = require("@aws-sdk/client-glue");
 const { CloudWatchLogsClient, GetLogEventsCommand, DescribeLogStreamsCommand } = require("@aws-sdk/client-cloudwatch-logs");
 const { SchedulerClient, GetScheduleCommand, CreateScheduleCommand, UpdateScheduleCommand, DeleteScheduleCommand } = require("@aws-sdk/client-scheduler");
@@ -22,6 +23,7 @@ const { initConnection, getSqlConnection } = require("./initializeConnection.js"
 
 const PRESIGN_TTL = 900; // 15 minutes
 
+const cognitoClient = new CognitoIdentityProviderClient({});
 const glueClient = new GlueClient({});
 const logsClient = new CloudWatchLogsClient({});
 const schedulerClient = new SchedulerClient({});
@@ -689,9 +691,8 @@ exports.handler = async (event) => {
         }
       }
 
-      // POST /admin/users - Create new admin user in the system
-      case "POST /admin/users":
-        // Parse JSON request body containing new user data
+      // POST /admin/users - Invite a new user via Cognito AdminCreateUser
+      case "POST /admin/users": {
         let userData;
         try {
           userData = parseBody(event.body);
@@ -701,35 +702,43 @@ exports.handler = async (event) => {
           break;
         }
 
-        // Extract user fields from request body
-        const { display_name, email, institution_id } = userData;
-
-        // Validate required fields
-        if (!display_name || !email) {
+        const newUserEmail = (userData?.email || "").trim().toLowerCase();
+        if (!newUserEmail || !newUserEmail.includes("@")) {
           response.statusCode = 400;
-          response.body = JSON.stringify({
-            error: "display_name and email are required",
-          });
+          response.body = JSON.stringify({ error: "A valid email address is required" });
           break;
         }
 
-        // Insert new admin user into database
-        // Using postgres library template literal syntax for better performance
-        const result = await getSqlConnection()`
-          INSERT INTO users (display_name, email, institution_id)
-          VALUES (${display_name}, ${email}, ${institution_id || null})
-          RETURNING id, display_name, email, institution_id, created_at
-        `;
+        console.log(JSON.stringify(buildAuditEntry(getAuthenticatedUserId(event), "create_user", newUserEmail)));
 
-        response.statusCode = 201; // Created
-        data = result[0];
-        response.body = JSON.stringify(data);
+        try {
+          await cognitoClient.send(new AdminCreateUserCommand({
+            UserPoolId: process.env.USER_POOL_ID,
+            Username: newUserEmail,
+            UserAttributes: [
+              { Name: "email", Value: newUserEmail },
+              { Name: "email_verified", Value: "true" },
+            ],
+            DesiredDeliveryMediums: ["EMAIL"],
+          }));
+        } catch (cognitoErr) {
+          if (cognitoErr.name === "UsernameExistsException") {
+            response.statusCode = 409;
+            response.body = JSON.stringify({ error: "An account with this email already exists." });
+            break;
+          }
+          throw cognitoErr;
+        }
+
+        response.statusCode = 201;
+        response.body = JSON.stringify({ message: "User invited. They will receive an email with a temporary password." });
         break;
+      }
 
       // Get analytics data
       case "GET /admin/analytics": {
         const qs = event.queryStringParameters ?? {};
-        const groupId = qs.groupId && qs.groupId !== "all" ? qs.groupId : null;
+        const groupId = null; // Group-based filtering removed
 
         // "all" timeRange = no date cutoff; otherwise parse Nd/Nm/Ny
         const timeRangeParam = typeof qs.timeRange === "string" ? qs.timeRange.trim() : "";
@@ -966,120 +975,6 @@ exports.handler = async (event) => {
         response.statusCode = 200;
         response.body = JSON.stringify(rows[0] ?? fallback);
         break;
-      }
-
-      // GET /admin/entra_groups — paginated list of Glue-known groups with member counts
-      case "GET /admin/entra_groups": {
-        try {
-          const qs = event.queryStringParameters ?? {};
-          const limit = Math.min(parseInt(qs.limit ?? "20", 10), 50);
-          const offset = Math.max(parseInt(qs.offset ?? "0", 10), 0);
-
-          const rows = await getSqlConnection()`
-            SELECT
-              eg.id,
-              eg.display_name,
-              COUNT(um.user_id)::int AS member_count
-            FROM entra_groups eg
-            LEFT JOIN user_memberships um ON um.entra_group_id = eg.id
-            GROUP BY eg.id, eg.display_name
-            ORDER BY eg.display_name ASC
-            LIMIT ${limit} OFFSET ${offset}
-          `;
-
-          const [{ total }] = await getSqlConnection()`
-            SELECT COUNT(*)::int AS total FROM entra_groups
-          `;
-
-          response.statusCode = 200;
-          response.body = JSON.stringify({ groups: rows, total, limit, offset });
-          break;
-        } catch (err) {
-          console.error("GET /admin/entra_groups error:", err);
-          response.statusCode = 500;
-          response.body = JSON.stringify({ error: "Internal Server Error" });
-          break;
-        }
-      }
-
-      // GET /admin/entra_groups/{groupId}/users — paginated users within a group
-      case "GET /admin/entra_groups/{groupId}/users": {
-        try {
-          const groupId = event.pathParameters?.groupId;
-          if (!groupId) {
-            response.statusCode = 400;
-            response.body = JSON.stringify({ error: "groupId is required" });
-            break;
-          }
-
-          const qs = event.queryStringParameters ?? {};
-          const limit = Math.min(parseInt(qs.limit ?? "10", 10), 50);
-          const offset = Math.max(parseInt(qs.offset ?? "0", 10), 0);
-
-          const rows = await getSqlConnection()`
-            SELECT
-              u.id,
-              u.email,
-              u.display_name,
-              u.last_seen_at
-            FROM user_memberships um
-            JOIN users u ON u.id = um.user_id
-            WHERE um.entra_group_id = ${groupId}
-            ORDER BY u.email ASC
-            LIMIT ${limit} OFFSET ${offset}
-          `;
-
-          const [{ total }] = await getSqlConnection()`
-            SELECT COUNT(*)::int AS total
-            FROM user_memberships
-            WHERE entra_group_id = ${groupId}
-          `;
-
-          response.statusCode = 200;
-          response.body = JSON.stringify({ users: rows, total, limit, offset });
-          break;
-        } catch (err) {
-          console.error("GET /admin/entra_groups/{groupId}/users error:", err);
-          response.statusCode = 500;
-          response.body = JSON.stringify({ error: "Internal Server Error" });
-          break;
-        }
-      }
-
-      // GET /admin/entra_groups/unassigned/users — users with no group memberships
-      case "GET /admin/entra_groups/unassigned/users": {
-        try {
-          const qs = event.queryStringParameters ?? {};
-          const limit = Math.min(parseInt(qs.limit ?? "10", 10), 50);
-          const offset = Math.max(parseInt(qs.offset ?? "0", 10), 0);
-
-          const rows = await getSqlConnection()`
-            SELECT u.id, u.email, u.display_name, u.last_seen_at
-            FROM users u
-            WHERE NOT EXISTS (
-              SELECT 1 FROM user_memberships um WHERE um.user_id = u.id
-            )
-            ORDER BY u.email ASC
-            LIMIT ${limit} OFFSET ${offset}
-          `;
-
-          const [{ total }] = await getSqlConnection()`
-            SELECT COUNT(*)::int AS total
-            FROM users u
-            WHERE NOT EXISTS (
-              SELECT 1 FROM user_memberships um WHERE um.user_id = u.id
-            )
-          `;
-
-          response.statusCode = 200;
-          response.body = JSON.stringify({ users: rows, total, limit, offset });
-          break;
-        } catch (err) {
-          console.error("GET /admin/entra_groups/unassigned/users error:", err);
-          response.statusCode = 500;
-          response.body = JSON.stringify({ error: "Internal Server Error" });
-          break;
-        }
       }
 
       // fetches the list of users for admin to view
@@ -1813,23 +1708,11 @@ exports.handler = async (event) => {
             er.requested_at,
             er.completed_at,
             CASE
-              WHEN er.scope::text = 'group' THEN eg.display_name
-              WHEN er.scope::text = 'user'  THEN u2.email
+              WHEN er.scope::text = 'user' THEN u2.email
               ELSE NULL
-            END AS _scope_base,
-            CASE
-              WHEN er.scope::text = 'analytics' AND jsonb_typeof(er.metadata->'groupId') = 'array' THEN (
-                SELECT STRING_AGG(eg2.display_name, ', ' ORDER BY eg2.display_name)
-                FROM jsonb_array_elements_text(er.metadata->'groupId') AS gid
-                JOIN entra_groups eg2 ON eg2.id::text = gid
-              )
-              WHEN er.scope::text = 'analytics' THEN eg_meta.display_name
-              ELSE NULL
-            END AS _meta_group_name
+            END AS _scope_base
           FROM export_runs er
-          LEFT JOIN entra_groups eg      ON eg.id = er.scope_id::text AND er.scope::text = 'group'
-          LEFT JOIN users u2             ON u2.id = er.scope_id AND er.scope::text = 'user'
-          LEFT JOIN entra_groups eg_meta ON eg_meta.id::text = (er.metadata->>'groupId') AND er.scope::text = 'analytics' AND jsonb_typeof(er.metadata->'groupId') = 'string'
+          LEFT JOIN users u2 ON u2.id = er.scope_id AND er.scope::text = 'user'
           WHERE er.requested_by = ${adminUserId}
           ${exportTypeFilter ? getSqlConnection()`AND er.export_type = ${exportTypeFilter}::export_type` : getSqlConnection()``}
           ORDER BY er.requested_at DESC
@@ -1840,16 +1723,15 @@ exports.handler = async (event) => {
           const meta = (typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata) ?? {};
           let scope_label;
           if (r.scope === 'analytics') {
-            const groupPart = r._meta_group_name ?? 'All groups';
             const timePart = meta.timeRange === 'all' ? 'All time'
               : meta.timeRange ? `Last ${meta.timeRange}` : null;
-            scope_label = [groupPart, timePart].filter(Boolean).join(' · ');
+            scope_label = timePart ?? 'Analytics';
           } else if (r.scope === 'all') {
             scope_label = 'All chats';
           } else {
             scope_label = r._scope_base ?? r.scope;
           }
-          const { _scope_base, _meta_group_name, metadata, s3_key, ...rest } = r;
+          const { _scope_base, metadata, s3_key, ...rest } = r;
 
           const EXPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
           const url_expires_at = r.completed_at

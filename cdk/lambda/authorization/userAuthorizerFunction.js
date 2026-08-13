@@ -37,20 +37,7 @@ exports.handler = async (event) => {
     const arnParts = event.methodArn.split("/");
     const wildcardResource = `${arnParts.slice(0, 2).join("/")}/*/*`;
 
-    // Derive display email from custom:upn if no direct email claim
-    const tenantUpn = payload["custom:upn"] || "";
-    let email = payload.email || "";
-    if (!email && tenantUpn) {
-      if (tenantUpn.includes("#EXT#")) {
-        const base = tenantUpn.split("#EXT#")[0];
-        const lastUnderscore = base.lastIndexOf("_");
-        email = lastUnderscore !== -1
-          ? base.slice(0, lastUnderscore) + "@" + base.slice(lastUnderscore + 1)
-          : tenantUpn;
-      } else {
-        email = tenantUpn;
-      }
-    }
+    const email = payload.email || "";
 
     return {
       principalId: payload.sub,

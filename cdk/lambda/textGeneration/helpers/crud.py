@@ -121,26 +121,6 @@ def update_last_active_session(db_connection, chat_session_id: str) -> None:
     except Exception as e:
         logger.error(f"update_last_active_session failed: {e}")
 
-def get_user_groups(user_id: str, db_connection) -> List[str]:
-    """Fetch Entra group IDs for a user from the junction table."""
-    try:
-        with db_connection.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT entra_group_id FROM user_memberships WHERE user_id = %s",
-                (user_id,)
-            )
-            rows = cur.fetchall()
-            if rows:
-                groups = [row[0].lower() for row in rows if row[0]]
-                logger.info(f"User {user_id} groups: {groups}")
-                return groups
-            logger.warning(f"No Entra groups found for user {user_id}")
-            return []
-    except Exception as e:
-        logger.error(f"get_user_groups failed for {user_id}: {e}")
-        return []
-
-
 def fetch_system_config(db_connection) -> Dict[str, Any]:
     """
     Fetches system_messages (latest active version per type) and system_settings.

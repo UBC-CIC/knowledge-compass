@@ -152,9 +152,6 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-      customAttributes: {
-        upn: new cognito.StringAttribute({ mutable: true }),
-      },
     });
 
     // Cognito hosted UI domain — required for OIDC federation
@@ -167,59 +164,16 @@ export class ApiGatewayStack extends cdk.Stack {
     this.cognitoHostedUIDomain = `${cognitoDomainPrefix}.auth.${this.region}.amazoncognito.com`;
     const cognitoHostedUIDomain = this.cognitoHostedUIDomain;
 
-    // Microsoft Entra ID OIDC identity provider
-    // Credentials are read from the existing KBA-SharePoint-Credentials secret in Secrets Manager.
-    // CloudFormation resolves {{resolve:secretsmanager:...}} at deploy time — never stored in context or template.
-    const entraSecret = secretsmanager.Secret.fromSecretNameV2(this, `${id}-EntraSecret`, "KBA-SharePoint-Credentials");
-    const entraClientId     = entraSecret.secretValueFromJson("client_id").unsafeUnwrap();
-    const entraClientSecret = entraSecret.secretValueFromJson("client_secret").unsafeUnwrap();
-    const entraTenantId     = entraSecret.secretValueFromJson("tenant_id").unsafeUnwrap();
-
-    const entraOidcProvider = new cognito.UserPoolIdentityProviderOidc(this, `${id}-EntraOIDC`, {
-      userPool: this.userPool,
-      name: "EntraID",
-      clientId: entraClientId,
-      clientSecret: entraClientSecret,
-      issuerUrl: `https://login.microsoftonline.com/${entraTenantId}/v2.0`,
-      scopes: ["openid", "email", "profile"],
-      endpoints: {
-        authorization: `https://login.microsoftonline.com/${entraTenantId}/oauth2/v2.0/authorize`,
-        token: `https://login.microsoftonline.com/${entraTenantId}/oauth2/v2.0/token`,
-        jwksUri: `https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys`,
-        userInfo: "https://graph.microsoft.com/oidc/userinfo",
-      },
-      attributeMapping: {
-        givenName: cognito.ProviderAttribute.other("given_name"),
-        familyName: cognito.ProviderAttribute.other("family_name"),
-        custom: {
-          "custom:upn": cognito.ProviderAttribute.other("upn"),
-        },
-      },
-    });
-
-    // Create app client with OAuth for OIDC federation
+    // Create app client for native email/password auth
     this.appClient = this.userPool.addClient(`${id}-pool`, {
       userPoolClientName: userPoolName,
       authFlows: {
         userPassword: true,
-        custom: true,
+        adminUserPassword: true,
         userSrp: true,
-      },
-      supportedIdentityProviders: [
-        cognito.UserPoolClientIdentityProvider.custom("EntraID"),
-      ],
-      oAuth: {
-        flows: { authorizationCodeGrant: true },
-        scopes: [
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.EMAIL,
-          cognito.OAuthScope.PROFILE,
-        ],
-        callbackUrls: ["http://localhost:5173"],
-        logoutUrls: ["http://localhost:5173"],
+        custom: true,
       },
     });
-    this.appClient.node.addDependency(entraOidcProvider);
 
     this.identityPool = new cognito.CfnIdentityPool(
       this,
@@ -805,7 +759,7 @@ export class ApiGatewayStack extends cdk.Stack {
         timeout: Duration.seconds(30),
         // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
         // before deploying. Verify in Lambda console → Account settings → Concurrency.
-        reservedConcurrentExecutions: 10,
+        // reservedConcurrentExecutions: 10, // TODO: enable once account-level concurrency is raised
         environment: {
           SM_COGNITO_CREDENTIALS: this.secret.secretName,
         },
@@ -846,7 +800,7 @@ export class ApiGatewayStack extends cdk.Stack {
         memorySize: 256,
         // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
         // before deploying. Verify in Lambda console → Account settings → Concurrency.
-        reservedConcurrentExecutions: 10,
+        // reservedConcurrentExecutions: 10, // TODO: enable once account-level concurrency is raised
         layers: [jwt],
         role: publicRole,
         environment: {
@@ -888,10 +842,6 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
-    const sharepointSecret = secretsmanager.Secret.fromSecretNameV2(
-      this, `${id}-SharePointSecretRef`, "KBA-SharePoint-Credentials"
-    );
-
     const AutoSignupLambda = new lambda.Function(
       this,
       `${id}-addAdminOnSignUp`,
@@ -903,7 +853,6 @@ export class ApiGatewayStack extends cdk.Stack {
         environment: {
           SM_DB_CREDENTIALS: db.secretPathTableCreator.secretName,
           RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
-          SHAREPOINT_SECRET_NAME: "KBA-SharePoint-Credentials",
         },
         vpc: vpcStack.vpc,
         securityGroups: [vpcStack.appSecurityGroup],
@@ -913,8 +862,6 @@ export class ApiGatewayStack extends cdk.Stack {
         role: coglambdaRole,
       }
     );
-
-    sharepointSecret.grantRead(coglambdaRole);
 
     this.userPool.addTrigger(
       cognito.UserPoolOperation.POST_AUTHENTICATION,
@@ -938,7 +885,7 @@ export class ApiGatewayStack extends cdk.Stack {
         role: textGenRole,
         // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
         // before deploying. Verify in Lambda console → Account settings → Concurrency.
-        reservedConcurrentExecutions: 20,
+        // reservedConcurrentExecutions: 20, // TODO: enable once account-level concurrency is raised
         layers: [psycopgLayer, powertoolsLayer],
         vpc: vpcStack.vpc,
         securityGroups: [vpcStack.appSecurityGroup],
@@ -1117,7 +1064,7 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 512,
       // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
       // before deploying. Verify in Lambda console → Account settings → Concurrency.
-      reservedConcurrentExecutions: 20,
+      // reservedConcurrentExecutions: 20,
       layers: [postgres],
       role: publicRole,
       tracing: lambda.Tracing.ACTIVE,
@@ -1261,6 +1208,7 @@ export class ApiGatewayStack extends cdk.Stack {
         environment: {
           SM_DB_CREDENTIALS: db.secretPathUser.secretName,
           RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+          USER_POOL_ID: this.userPool.userPoolId,
         },
         functionName: `${id}-adminFunction`,
         memorySize: 512,
@@ -1356,6 +1304,50 @@ export class ApiGatewayStack extends cdk.Stack {
     const cfnLambda_admin = lambdaAdminFunction.node
       .defaultChild as lambda.CfnFunction;
     cfnLambda_admin.overrideLogicalId("adminFunction");
+
+    // ── signupHandler: public self-service sign-up (no authorizer) ─────────────
+    // Calls AdminCreateUser so Cognito generates and emails a temporary password.
+    // No VPC — only calls Cognito public endpoints; no RDS access needed.
+    const signupRole = new iam.Role(this, `${id}-signupLambdaRole`, {
+      roleName: `${id}-signupLambdaRole`,
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+    });
+    signupRole.addToPolicy(cwLogsPolicy);
+    signupRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["cognito-idp:AdminCreateUser"],
+      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${this.userPool.userPoolId}`],
+    }));
+
+    const signupHandlerFn = new lambda.Function(this, `${id}-signupHandler`, {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      code: lambda.Code.fromAsset("lambda"),
+      handler: "handlers/signupHandler.handler",
+      timeout: Duration.seconds(30),
+      memorySize: 256,
+      functionName: `${id}-signupHandler`,
+      role: signupRole,
+      environment: {
+        USER_POOL_ID: this.userPool.userPoolId,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    const cfnSignupHandler = signupHandlerFn.node.defaultChild as lambda.CfnFunction;
+    cfnSignupHandler.overrideLogicalId("signupHandler");
+
+    signupHandlerFn.addPermission("AllowApiGatewayInvoke", {
+      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+      action: "lambda:InvokeFunction",
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/signup*`,
+    });
+
+    // Allow adminHandler to create Cognito users (for admin-initiated user creation)
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["cognito-idp:AdminCreateUser"],
+      resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${this.userPool.userPoolId}`],
+    }));
 
     new lambda.Function(this, `${id}-sqlRunner`, {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -1543,7 +1535,7 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 256,
       // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
       // before deploying. Verify in Lambda console → Account settings → Concurrency.
-      reservedConcurrentExecutions: 20,
+      // reservedConcurrentExecutions: 20,
       tracing: lambda.Tracing.ACTIVE,
       vpc: vpcStack.vpc,
       securityGroups: [vpcStack.appSecurityGroup],
@@ -1604,7 +1596,7 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 256,
       // TODO: Ensure the account has a minimum of 1000 unreserved concurrent executions
       // before deploying. Verify in Lambda console → Account settings → Concurrency.
-      reservedConcurrentExecutions: 20,
+      // reservedConcurrentExecutions: 20,
       tracing: lambda.Tracing.ACTIVE,
       vpc: vpcStack.vpc,
       securityGroups: [vpcStack.appSecurityGroup],

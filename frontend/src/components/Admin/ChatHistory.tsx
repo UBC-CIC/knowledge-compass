@@ -177,68 +177,17 @@ export default function ChatHistory({ initialSessionId, initialMessageId, initia
             }
         }
 
-        offset === 0 ? setLoadingGroups(true) : setLoadingMoreGroups(true);
-        try {
-            const headers = await getAuthHeaders();
-            const res = await fetch(
-                `${import.meta.env.VITE_API_ENDPOINT}/admin/entra_groups?limit=${GROUP_LIMIT}&offset=${offset}`,
-                { headers }
-            );
-            if (!res.ok) throw new Error("Failed to fetch groups");
-            const data = await res.json();
-            const pagination: PaginationState = {
-                offset,
-                total: data.total,
-                hasMore: offset + data.groups.length < data.total,
-            };
-            setGroups(prev => append ? [...prev, ...data.groups] : data.groups);
-            setGroupsPagination(pagination);
-            if (!append) setCached(cacheKey, { groups: data.groups, pagination });
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoadingGroups(false);
-            setLoadingMoreGroups(false);
-        }
+        // Group-based filtering removed
+        setLoadingGroups(false);
+        setLoadingMoreGroups(false);
     };
 
     // ---------------------------------------------------------------------------
     // Fetch users in a group (paginated, append on load-more)
     // ---------------------------------------------------------------------------
-    const fetchGroupUsers = async (groupId: string, offset: number, append: boolean, forceRefresh = false) => {
-        const cacheKey = `admin_chat_group_users_${groupId}_${offset}`;
-        if (!forceRefresh && !append) {
-            const cached = getCached(cacheKey);
-            if (cached) {
-                setGroupUsers(prev => ({ ...prev, [groupId]: append ? [...(prev[groupId] ?? []), ...cached.users] : cached.users }));
-                setGroupUsersPagination(prev => ({ ...prev, [groupId]: cached.pagination }));
-                return;
-            }
-        }
-
-        const url = groupId === UNASSIGNED_ID
-            ? `${import.meta.env.VITE_API_ENDPOINT}/admin/entra_groups/unassigned/users?limit=${USER_LIMIT}&offset=${offset}`
-            : `${import.meta.env.VITE_API_ENDPOINT}/admin/entra_groups/${groupId}/users?limit=${USER_LIMIT}&offset=${offset}`;
-
-        setLoadingGroupUsers(prev => ({ ...prev, [groupId]: true }));
-        try {
-            const headers = await getAuthHeaders();
-            const res = await fetch(url, { headers });
-            if (!res.ok) throw new Error("Failed to fetch group users");
-            const data = await res.json();
-            const pagination: PaginationState = {
-                offset,
-                total: data.total,
-                hasMore: offset + data.users.length < data.total,
-            };
-            setGroupUsers(prev => ({ ...prev, [groupId]: append ? [...(prev[groupId] ?? []), ...data.users] : data.users }));
-            setGroupUsersPagination(prev => ({ ...prev, [groupId]: pagination }));
-            if (!append) setCached(cacheKey, { users: data.users, pagination });
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoadingGroupUsers(prev => ({ ...prev, [groupId]: false }));
-        }
+    const fetchGroupUsers = async (groupId: string, _offset: number, _append: boolean, _forceRefresh = false) => {
+        // Group-based filtering removed
+        setLoadingGroupUsers(prev => ({ ...prev, [groupId]: false }));
     };
 
     // ---------------------------------------------------------------------------

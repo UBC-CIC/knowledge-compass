@@ -2,7 +2,4 @@
 # predates bedrock-runtime (added in 1.28.57). Pin to a recent stable version.
 boto3==1.35.0
 botocore==1.35.0
-azure-identity==1.21.0
-msgraph-sdk==1.27.0
 psycopg2-binary==2.9.9
-httpx==0.27.0
