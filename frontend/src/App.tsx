@@ -1,0 +1,81 @@
+import { BrowserRouter, Routes, Route } from "react-router";
+import AppLayout from "./layouts/AppLayout";
+import AIChatPage from "./pages/ChatInterface/ChatInterface";
+import { UserProvider } from "./providers/UserContext";
+import LandingPage from "./pages/LandingPage";
+import HomePage from "./pages/HomePage";
+import AdminDashboard from "./pages/Admin/AdminDashboard";
+import ProtectedRoute from "./components/ProtectedRoute";
+import { Amplify } from "aws-amplify";
+import { Hub } from "aws-amplify/utils";
+
+Amplify.configure({
+  API: {
+    REST: {
+      MyApi: {
+        endpoint: import.meta.env.VITE_API_ENDPOINT,
+      },
+    },
+  },
+  Auth: {
+    Cognito: {
+      userPoolClientId: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID,
+      userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID,
+      loginWith: {
+        oauth: {
+          domain: import.meta.env.VITE_COGNITO_DOMAIN,
+          scopes: ["openid", "email", "profile"],
+          redirectSignIn: [window.location.origin],
+          redirectSignOut: [window.location.origin],
+          responseType: "code",
+        },
+      },
+    },
+  },
+});
+
+// Listen for OAuth redirect completion and reload session
+Hub.listen("auth", ({ payload }) => {
+  if (payload.event === "signInWithRedirect") {
+    window.location.href = "/";
+  }
+});
+
+function App() {
+  return (
+    <BrowserRouter>
+      <UserProvider>
+        <Routes>
+          {/* Public landing page — outside AppLayout so it has no header */}
+          <Route path="/landing" element={<LandingPage />} />
+
+          <Route element={<AppLayout />}>
+            {/* Chat — any authenticated user */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <HomePage />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="chat" element={<AIChatPage />} />
+            </Route>
+
+            {/* Admin dashboard — admin group only */}
+            <Route
+              path="/admin/dashboard"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+          </Route>
+        </Routes>
+      </UserProvider>
+    </BrowserRouter>
+  );
+}
+
+export default App;

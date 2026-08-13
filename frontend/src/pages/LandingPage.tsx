@@ -1,0 +1,56 @@
+import { useEffect } from "react";
+import { signInWithRedirect } from "aws-amplify/auth";
+import { useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import { AuthService } from "@/functions/authService";
+import Footer from "@/components/Footer";
+
+export default function LandingPage() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const session = await AuthService.getAuthSession(true);
+        if (session?.tokens?.accessToken) {
+          navigate("/", { replace: true });
+        }
+      } catch {
+        // not authenticated, stay on landing
+      }
+    };
+    checkAuth();
+  }, [navigate]);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-gray-50">
+      <div className="flex-1 flex items-center justify-center px-4">
+        <div className="text-center max-w-md">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Knowledge Bridge
+          </h1>
+          <p className="text-gray-500 mb-8">
+            Sign in with your Microsoft account to continue.
+          </p>
+          <Button
+            size="lg"
+            className="w-full"
+            onClick={() => {
+              const clientId = import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID;
+              ["oauthState", "oauthPKCE", "signInDetails"].forEach((key) => {
+                localStorage.removeItem(
+                  `CognitoIdentityServiceProvider.${clientId}.${key}`
+                );
+              });
+              localStorage.removeItem("amplify-signin-with-hostedUI");
+              signInWithRedirect({ provider: { custom: "EntraID" } });
+            }}
+          >
+            Sign in with Microsoft
+          </Button>
+        </div>
+      </div>
+      <Footer />
+    </div>
+  );
+}
