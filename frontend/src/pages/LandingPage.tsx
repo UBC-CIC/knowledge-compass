@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
+import { confirmSignIn } from "aws-amplify/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,26 +54,38 @@ export default function LandingPage() {
       return;
     }
     setLoading(true);
-    const result = await AuthService.handleNewPasswordRequired(newPassword);
-    setLoading(false);
-    if (!result.success) {
-      setError(result.error || "Failed to set password.");
-      return;
+    try {
+      const { isSignedIn } = await confirmSignIn({ challengeResponse: newPassword });
+      AuthService.clearAuthCache();
+      if (isSignedIn) navigate("/", { replace: true });
+    } catch (err: any) {
+      setError(err.message || "Failed to set password.");
+    } finally {
+      setLoading(false);
     }
-    navigate("/", { replace: true });
   }
 
   async function handleSignUp(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const result = await AuthService.signUp(email);
-    setLoading(false);
-    if (!result.success) {
-      setError(result.error || "Sign-up failed.");
-      return;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Sign-up failed.");
+        return;
+      }
+      setView("signUpSuccess");
+    } catch (err: any) {
+      setError(err.message || "Sign-up failed.");
+    } finally {
+      setLoading(false);
     }
-    setView("signUpSuccess");
   }
 
   return (

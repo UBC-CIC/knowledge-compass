@@ -181,7 +181,7 @@ export default function Analytics() {
   const [daysInput, setDaysInput] = useState(90);
 
   const [groupId, setGroupId] = useState<string>("all");
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups] = useState<Group[]>([]);
   const [overlayMode, setOverlayMode] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
 
@@ -193,7 +193,7 @@ export default function Analytics() {
   const [exporting, setExporting] = useState(false);
   const [exportToast, setExportToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const exportToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const groupsFetchedRef = useRef(false);
+
 
   const effectiveTimeRange = isAllTime ? "all" : timeRange;
 

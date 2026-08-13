@@ -108,7 +108,7 @@ export default function ChatHistory({ initialSessionId, initialMessageId, initia
 
     // Users per group — keyed by groupId
     const [groupUsers, setGroupUsers] = useState<Record<string, GroupUser[]>>({});
-    const [groupUsersPagination, setGroupUsersPagination] = useState<Record<string, PaginationState>>({});
+    const [groupUsersPagination] = useState<Record<string, PaginationState>>({});
     const [loadingGroupUsers, setLoadingGroupUsers] = useState<Record<string, boolean>>({});
     const [expandedUserKeys, setExpandedUserKeys] = useState<Set<string>>(new Set()); // `${groupId}:${userId}`
 
