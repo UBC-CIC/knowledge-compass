@@ -141,8 +141,8 @@ Replace with: Knowledge Compass prompts from `textgen_v1.ipynb` — `PROMPT_ROLE
 
 The assembly pattern (plain text variables wrapped in XML tags by `get_current_prompt()`) already matches — just swap the content.
 
-Detective phase: uses Haiku (fast, cheap) — keep this.
-Suggestion phase: uses Sonnet — keep this.
+Both phases: use Haiku by default. Haiku is fast, cheap, and sufficient for this use case.
+Only upgrade to Sonnet if response quality is clearly inadequate after testing — Sonnet is significantly more expensive and should not be the starting point.
 
 **3. `helpers/config.py`**
 Remove: `SPEC_LIST`, `KB_SECRET_NAME`, `KB_ID` (no Bedrock KB needed).
