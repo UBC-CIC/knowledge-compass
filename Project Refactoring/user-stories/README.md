@@ -82,7 +82,7 @@ These are encoded as `PROMPT_GUARDRAILS` in the prompt system.
 
 ## Language Guidelines
 
-See [`../custom_language_toolkit.md`](../custom_language_toolkit.md) (if present) for Inclusion Canada's preferred terminology — person-first language, Deaf/deaf distinction, Autism identity vs. person-first, "People in Canada" vs "Canadians", etc.
+See [`custom_language_toolkit.md`](custom_language_toolkit.md) (if present) for Inclusion Canada's preferred terminology — person-first language, Deaf/deaf distinction, Autism identity vs. person-first, "People in Canada" vs "Canadians", etc.
 
 These are encoded as `PROMPT_LANGUAGE_GUIDELINES` in the prompt system and apply to all responses regardless of journey.
 
