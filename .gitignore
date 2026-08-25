@@ -12,3 +12,7 @@ cdk.out
 
 # CDK context file contains sensitive account information
 cdk.context.json
+
+# testing stuff 
+.claude 
+test

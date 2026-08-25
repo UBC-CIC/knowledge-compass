@@ -45,7 +45,7 @@ export class KnowledgeBaseStack extends Stack {
     super(scope, id, props);
 
     // Keep name very short to avoid 32 character limit on AOSS Collection & Policy Names
-    // e.g. "specex-kb"
+    // e.g. "kc-kb"
     const rawPrefix = props.stackPrefix.toLowerCase().substring(0, 6);
     const accountId = cdk.Stack.of(this).account;
     const region = cdk.Stack.of(this).region;

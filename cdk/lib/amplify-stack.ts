@@ -55,7 +55,7 @@ export class AmplifyStack extends cdk.Stack {
 
     const username = cdk.aws_ssm.StringParameter.valueForStringParameter(
       this,
-      "specEx-owner-name"
+      "KC-owner-name"
     );
 
     const amplifyApp = new App(this, `${id}-amplifyApp`, {

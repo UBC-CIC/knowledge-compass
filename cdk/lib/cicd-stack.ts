@@ -87,7 +87,7 @@ export class CICDStack extends cdk.Stack {
 
     const username = cdk.aws_ssm.StringParameter.valueForStringParameter(
       this,
-      "specEx-owner-name"
+      "KC-owner-name"
     );
 
     // Create GitHub connection using CodeStar Connections

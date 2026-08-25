@@ -249,7 +249,7 @@ export class VpcStack extends Stack {
       const natGatewayProvider = ec2.NatProvider.gateway();
 
       // VPC for application
-      this.vpc = new ec2.Vpc(this, "SpecEx-Vpc", {
+      this.vpc = new ec2.Vpc(this, "KC-Vpc", {
         ipAddresses: ec2.IpAddresses.cidr(this.vpcCidrString),
         natGatewayProvider: natGatewayProvider,
         natGateways: 1,
@@ -270,7 +270,7 @@ export class VpcStack extends Stack {
         ],
       });
 
-      this.vpc.addFlowLog("specEx-vpcFlowLog");
+      this.vpc.addFlowLog("KC-vpcFlowLog");
 
       // Add secrets manager endpoint to VPC
       this.vpc.addInterfaceEndpoint(`${id}-Secrets Manager Endpoint`, {

@@ -90,9 +90,10 @@ const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
 });
 amplifyStack.addDependency(apiStack);
 
+const resolvedPrefix = StackPrefix || "KC";
 const stackTags = {
-  Project: "specEx",
-  StackPrefix: StackPrefix || "SpecEx",
+  Project: resolvedPrefix,
+  StackPrefix: resolvedPrefix,
   Environment: environment || "dev",
   ManagedBy: "CDK",
 };

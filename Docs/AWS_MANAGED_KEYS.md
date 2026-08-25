@@ -204,8 +204,8 @@ The affected secrets are:
 
 | Secret | File | Variable |
 |---|---|---|
-| Cognito credentials | `api-stack.ts` | `this.secret` (`${id}-SpecEx_Cognito_Secrets`) |
-| JWT secret | `api-stack.ts` | `jwtSecret` (`${id}-SpecEx-JWTSecret`) |
+| Cognito credentials | `api-stack.ts` | `this.secret` (`${id}-KC_Cognito_Secrets`) |
+| JWT secret | `api-stack.ts` | `jwtSecret` (`${id}-KC-JWTSecret`) |
 | RDS application user credentials | `database-stack.ts` | `this.secretPathUser` |
 | RDS table creator credentials | `database-stack.ts` | `this.secretPathTableCreator` |
 

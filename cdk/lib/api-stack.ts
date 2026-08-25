@@ -262,7 +262,7 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
-    const secretsName = `${id}-SpecEx_Cognito_Secrets`;
+    const secretsName = `${id}-KC_Cognito_Secrets`;
     this.secret = new secretsmanager.Secret(this, secretsName, {
       secretName: secretsName,
       description: "Cognito Secrets for authentication",
@@ -367,13 +367,13 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Waf Firewall - Enhanced with endpoint-specific and authentication-aware rate limiting
     const waf = new wafv2.CfnWebACL(this, `${id}-waf`, {
-      description: "WAF for SpecEx",
+      description: "WAF for KC",
       scope: "REGIONAL",
       defaultAction: { allow: {} },
       visibilityConfig: {
         sampledRequestsEnabled: true,
         cloudWatchMetricsEnabled: true,
-        metricName: "specEx-firewall",
+        metricName: "KC-firewall",
       },
       rules: [
         // Rule 1: AWS Managed Common Rule Set (SQL injection, XSS, etc.)
@@ -804,7 +804,7 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     const jwtSecret = new secretsmanager.Secret(this, `${id}-JwtSecret`, {
-      secretName: `${id}-SpecEx-JWTSecret`,
+      secretName: `${id}-KC-JWTSecret`,
       generateSecretString: {
         secretStringTemplate: JSON.stringify({}),
         generateStringKey: "jwtSecret",
@@ -822,7 +822,7 @@ export class ApiGatewayStack extends cdk.Stack {
         code: lambda.Code.fromAsset("lambda/adminAuthorizerFunction"),
         handler: "adminAuthorizerFunction.handler",
         timeout: Duration.seconds(30),
-        reservedConcurrentExecutions: 100,
+        // reservedConcurrentExecutions: 100,
         vpc: vpcStack.vpc,
         environment: {
           SM_COGNITO_CREDENTIALS: this.secret.secretName,
@@ -860,7 +860,7 @@ export class ApiGatewayStack extends cdk.Stack {
         handler: "userAuthorizerFunction.handler",
         timeout: Duration.seconds(30),
         memorySize: 256,
-        reservedConcurrentExecutions: 50,
+        // reservedConcurrentExecutions: 50,
         layers: [jwt],
         role: lambdaRole,
         environment: {
@@ -894,7 +894,7 @@ export class ApiGatewayStack extends cdk.Stack {
         runtime: lambda.Runtime.NODEJS_22_X,
         handler: "publicTokenFunction.handler",
         layers: [jwt],
-        reservedConcurrentExecutions: 50,
+        // reservedConcurrentExecutions: 50,
         code: lambda.Code.fromAsset("lambda/publicTokenFunction"),
         environment: {
           JWT_SECRET: jwtSecret.secretArn,
@@ -932,7 +932,7 @@ export class ApiGatewayStack extends cdk.Stack {
       handler: "preSignUp.handler",
       timeout: Duration.seconds(30),
       environment: {
-        ALLOWED_EMAIL_DOMAINS: "/SpecEx/AllowedEmailDomains",
+        ALLOWED_EMAIL_DOMAINS: "/KC/AllowedEmailDomains",
       },
       vpc: vpcStack.vpc,
       functionName: `${id}-preSignupLambda`,
@@ -1011,7 +1011,7 @@ export class ApiGatewayStack extends cdk.Stack {
         code: lambda.Code.fromAsset("lambda/textGeneration"),
         timeout: cdk.Duration.seconds(60),
         role: lambdaRole,
-        reservedConcurrentExecutions: 100,
+        // reservedConcurrentExecutions: 100,
         layers: [psycopgLayer, powertoolsLayer],
         vpc: vpcStack.vpc,
         tracing: lambda.Tracing.ACTIVE,
@@ -1039,15 +1039,15 @@ export class ApiGatewayStack extends cdk.Stack {
           effect: iam.Effect.ALLOW,
           actions: ["ssm:GetParameter", "ssm:GetParameters"],
           resources: [
-            `arn:aws:ssm:${this.region}:${this.account}:parameter/SpecEx/LLM/HaikuArn`,
-            `arn:aws:ssm:${this.region}:${this.account}:parameter/SpecEx/LLM/SonnetArn`,
+            `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
+            `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
           ],
         })
       );
 
       // Add SSM parameter names as environment variables
-      lambdaTextGen.addEnvironment("HAIKU_ARN", "/SpecEx/LLM/HaikuArn");
-      lambdaTextGen.addEnvironment("SONNET_ARN", "/SpecEx/LLM/SonnetArn");
+      lambdaTextGen.addEnvironment("HAIKU_ARN", "/KC/LLM/HaikuArn");
+      lambdaTextGen.addEnvironment("SONNET_ARN", "/KC/LLM/SonnetArn");
 
 
     lambdaTextGen.addToRolePolicy(
@@ -1055,8 +1055,8 @@ export class ApiGatewayStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions:["ssm:GetParameter", "ssm:GetParameters"],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/SpecEx/LLM/HaikuArn`,
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/SpecEx/LLM/SonnetArn`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
         ],
       })
     );
@@ -1339,7 +1339,7 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       functionName: `${id}-userFunction`,
       memorySize: 512,
-      reservedConcurrentExecutions: 50,
+      // reservedConcurrentExecutions: 50,
       layers: [postgres],
       role: lambdaRole,
       tracing: lambda.Tracing.ACTIVE,
@@ -1529,7 +1529,7 @@ export class ApiGatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset("lambda/websocket"),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      reservedConcurrentExecutions: 50,
+      // reservedConcurrentExecutions: 50,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         JWT_SECRET: jwtSecret.secretArn,
@@ -1576,7 +1576,7 @@ export class ApiGatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset("lambda/websocket"),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      reservedConcurrentExecutions: 50,
+      // reservedConcurrentExecutions: 50,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         TEXT_GEN_FUNCTION_NAME: lambdaTextGen.functionName,

@@ -59,7 +59,7 @@ _Note: Consider your expected concurrent users and document processing volume wh
 
 To deploy this solution, you will need to generate a GitHub personal access token. Please visit [here](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) for detailed instruction to create a personal access token.
 
-_Note: Make sure to give access to only the SpecEx repository. Enable Read-only for Contents, and Metadata. For webhooks and Commit statuses enable read and write permissions._
+_Note: Make sure to give access to only the KC repository. Enable Read-only for Contents, and Metadata. For webhooks and Commit statuses enable read and write permissions._
 
 **Once you create a token, please note down its value as you will use it later in the deployment process.**
 
@@ -162,7 +162,7 @@ You will need to upload your GitHub username to Amazon SSM Parameter Store. Repl
 
 ```bash
 aws ssm put-parameter \
-  --name "specEx-owner-name" \
+  --name "KC-owner-name" \
   --value "<YOUR-GITHUB-USERNAME>" \
   --type String \
   --profile <YOUR-PROFILE-NAME>
@@ -175,7 +175,7 @@ aws ssm put-parameter \
 
 ```cmd
 aws ssm put-parameter ^
-  --name "specEx-owner-name" ^
+  --name "KC-owner-name" ^
   --value "<YOUR-GITHUB-USERNAME>" ^
   --type String ^
   --profile <YOUR-PROFILE-NAME>
@@ -188,7 +188,7 @@ aws ssm put-parameter ^
 
 ```powershell
 aws ssm put-parameter `
-  --name "specEx-owner-name" `
+  --name "KC-owner-name" `
   --value "<YOUR-GITHUB-USERNAME>" `
   --type String `
   --profile <YOUR-PROFILE-NAME>
@@ -205,7 +205,7 @@ You would have to supply a custom database username when deploying the solution 
 
 ```bash
 aws secretsmanager create-secret \
-  --name SpecExSecrets \
+  --name KCSecrets \
   --secret-string "{\"DB_Username\":\"<YOUR-DB-USERNAME>\"}" \
   --profile <YOUR-PROFILE-NAME>
 ```
@@ -217,7 +217,7 @@ aws secretsmanager create-secret \
 
 ```cmd
 aws secretsmanager create-secret ^
-  --name SpecExSecrets ^
+  --name KCSecrets ^
   --secret-string "{\"DB_Username\":\"<YOUR-DB-USERNAME>\"}" ^
   --profile <YOUR-PROFILE-NAME>
 ```
@@ -229,7 +229,7 @@ aws secretsmanager create-secret ^
 
 ```powershell
 aws secretsmanager create-secret `
-  --name SpecExSecrets `
+  --name KCSecrets `
   --secret-string '{\"DB_Username\": \"<YOUR-DB-USERNAME>\"}' `
   --profile <YOUR-PROFILE-NAME>
 ```
@@ -242,8 +242,8 @@ For example:
 
 ```bash
 aws secretsmanager create-secret \
-  --name SpecExSecrets \
-  --secret-string '{"DB_Username":"SpecExDatabaseUser"}' \
+  --name KCSecrets \
+  --secret-string '{"DB_Username":"KCDatabaseUser"}' \
   --profile <YOUR-PROFILE-NAME>
 ```
 
@@ -254,7 +254,7 @@ In order to restrict user sign up to specific email domains, upload a comma-sepa
 
 ```bash
 aws ssm put-parameter \
-    --name "/SpecEx/AllowedEmailDomains" \
+    --name "/KC/AllowedEmailDomains" \
     --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" \
     --type SecureString \
     --profile <YOUR-PROFILE-NAME>
@@ -267,7 +267,7 @@ aws ssm put-parameter \
 
 ```cmd
 aws ssm put-parameter ^
-    --name "/SpecEx/AllowedEmailDomains" ^
+    --name "/KC/AllowedEmailDomains" ^
     --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" ^
     --type SecureString ^
     --profile <YOUR-PROFILE-NAME>
@@ -280,7 +280,7 @@ aws ssm put-parameter ^
 
 ```powershell
 aws ssm put-parameter `
-    --name "/SpecEx/AllowedEmailDomains" `
+    --name "/KC/AllowedEmailDomains" `
     --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" `
     --type SecureString `
     --profile <YOUR-PROFILE-NAME>
@@ -294,7 +294,7 @@ For example:
 
 ```bash
 aws ssm put-parameter \
-    --name "/SpecEx/AllowedEmailDomains" \
+    --name "/KC/AllowedEmailDomains" \
     --value "gmail.com,ubc.ca,student.ubc.ca" \
     --type SecureString \
     --profile <YOUR-PROFILE-NAME>
@@ -309,7 +309,7 @@ The application uses two Claude models for text generation, referenced via SSM p
 
 ```bash
 aws ssm put-parameter \
-    --name "/SpecEx/LLM/HaikuArn" \
+    --name "/KC/LLM/HaikuArn" \
     --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
@@ -322,7 +322,7 @@ aws ssm put-parameter \
 
 ```cmd
 aws ssm put-parameter ^
-    --name "/SpecEx/LLM/HaikuArn" ^
+    --name "/KC/LLM/HaikuArn" ^
     --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" ^
     --type String ^
     --profile <YOUR-PROFILE-NAME>
@@ -335,7 +335,7 @@ aws ssm put-parameter ^
 
 ```powershell
 aws ssm put-parameter `
-    --name "/SpecEx/LLM/HaikuArn" `
+    --name "/KC/LLM/HaikuArn" `
     --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" `
     --type String `
     --profile <YOUR-PROFILE-NAME>
@@ -352,7 +352,7 @@ aws ssm put-parameter `
 
 ```bash
 aws ssm put-parameter \
-    --name "/SpecEx/LLM/SonnetArn" \
+    --name "/KC/LLM/SonnetArn" \
     --value "us.anthropic.claude-sonnet-4-6" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
@@ -365,7 +365,7 @@ aws ssm put-parameter \
 
 ```cmd
 aws ssm put-parameter ^
-    --name "/SpecEx/LLM/SonnetArn" ^
+    --name "/KC/LLM/SonnetArn" ^
     --value "us.anthropic.claude-sonnet-4-6" ^
     --type String ^
     --profile <YOUR-PROFILE-NAME>
@@ -378,7 +378,7 @@ aws ssm put-parameter ^
 
 ```powershell
 aws ssm put-parameter `
-    --name "/SpecEx/LLM/SonnetArn" `
+    --name "/KC/LLM/SonnetArn" `
     --value "us.anthropic.claude-sonnet-4-6" `
     --type String `
     --profile <YOUR-PROFILE-NAME>
@@ -717,7 +717,7 @@ _Note: Always read the current value first and append your new origin to avoid r
 
 **Issue: Text generation Lambda fails with parameter not found error**
 
-- Solution: Ensure the `/SpecEx/LLM/HaikuArn` and `/SpecEx/LLM/SonnetArn` SSM parameters were created before deployment. See [Step 2: Upload Secrets & Parameters](#step-2-upload-secrets--parameters).
+- Solution: Ensure the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters were created before deployment. See [Step 2: Upload Secrets & Parameters](#step-2-upload-secrets--parameters).
 
 **Issue: Knowledge Base ingestion fails or returns no results**
 
@@ -756,17 +756,17 @@ To take down the deployed stack for a fresh redeployment in the future, follow t
    - Navigate to AWS Secrets Manager
    - Delete the following secrets:
      - `github-personal-access-token`
-     - `SpecExSecrets`
+     - `KCSecrets`
      - Any database credentials created by the stack
 
 4. **Delete SSM Parameters:**
    - Navigate to AWS Systems Manager → Parameter Store
    - Delete the following parameters:
-     - `specEx-owner-name`
-     - `/SpecEx/AllowedEmailDomains`
-     - `/SpecEx/LLM/HaikuArn`
-     - `/SpecEx/LLM/SonnetArn`
-     - `/SpecEx/API/AllowedOrigins`
+     - `KC-owner-name`
+     - `/KC/AllowedEmailDomains`
+     - `/KC/LLM/HaikuArn`
+     - `/KC/LLM/SonnetArn`
+     - `/KC/API/AllowedOrigins`
 
 5. **Delete ECR Repositories** (if any were created):
    - Navigate to Amazon ECR

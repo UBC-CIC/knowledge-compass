@@ -1,6 +1,6 @@
 openapi: 3.0.0
 info:
-  title: specEx API
+  title: KC API
   description: Specialization Explorer API
   version: 1.0.0
 tags:

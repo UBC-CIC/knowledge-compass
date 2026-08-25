@@ -378,7 +378,7 @@ def _build_updated_web_config(data_source: dict, new_urls: list[str], include_pa
     user_agent_header = updated_crawler_config.get("userAgentHeader")
     if user_agent_header and len(user_agent_header) < 61:
         updated_crawler_config["userAgentHeader"] = (
-            "Mozilla/5.0 (compatible; SpecExKnowledgeBaseCrawler/1.0; +https://example.com/bot)"
+            "Mozilla/5.0 (compatible; KCKnowledgeBaseCrawler/1.0; +https://example.com/bot)"
         )
 
     updated_source_config = {
@@ -465,7 +465,7 @@ def _build_new_web_data_source_payload(template_data_source: dict, new_urls: lis
     user_agent_header = crawler_config.get("userAgentHeader")
     if user_agent_header and len(user_agent_header) < 61:
         crawler_config["userAgentHeader"] = (
-            "Mozilla/5.0 (compatible; SpecExKnowledgeBaseCrawler/1.0; +https://example.com/bot)"
+            "Mozilla/5.0 (compatible; KCKnowledgeBaseCrawler/1.0; +https://example.com/bot)"
         )
 
     return {

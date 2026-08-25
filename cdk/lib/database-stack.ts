@@ -51,14 +51,14 @@ export class DatabaseStack extends Stack {
     const secret = secretmanager.Secret.fromSecretNameV2(
       this,
       "ImportedSecrets",
-      "SpecExSecrets"
+      "KCSecrets"
     );
 
     /**
      * Create Secrets for various users
      */
-    this.secretPathAdminName = `${id}-SpecEx/credentials/rdsDbCredential`;
-    const secretPathUserName = `${id}-SpecEx/userCredentials/rdsDbCredential`;
+    this.secretPathAdminName = `${id}-KC/credentials/rdsDbCredential`;
+    const secretPathUserName = `${id}-KC/userCredentials/rdsDbCredential`;
     this.secretPathUser = new secretsmanager.Secret(this, secretPathUserName, {
       secretName: secretPathUserName,
       description: "Secrets for clients to connect to RDS",
@@ -69,7 +69,7 @@ export class DatabaseStack extends Stack {
       },
     });
 
-    const secretPathTableCreator = `${id}-SpecEx/userCredentials/TableCreator`;
+    const secretPathTableCreator = `${id}-KC/userCredentials/TableCreator`;
     this.secretPathTableCreator = new secretsmanager.Secret(
       this,
       secretPathTableCreator,
@@ -89,7 +89,7 @@ export class DatabaseStack extends Stack {
       `${id}-rdsParameterGroup`,
       {
         engine: rds.DatabaseInstanceEngine.postgres({
-          version: rds.PostgresEngineVersion.VER_16_8,
+          version: rds.PostgresEngineVersion.VER_16_9,
         }),
         description: "Empty parameter group",
         parameters: {
@@ -107,7 +107,7 @@ export class DatabaseStack extends Stack {
         subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       },
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_8,
+        version: rds.PostgresEngineVersion.VER_16_9,
       }),
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.BURSTABLE4_GRAVITON,
@@ -129,7 +129,7 @@ export class DatabaseStack extends Stack {
       backupRetention: Duration.days(7),
       deleteAutomatedBackups: true,
       deletionProtection: true,
-      databaseName: "specEx",
+      databaseName: "KC",
       publiclyAccessible: false,
       cloudwatchLogsRetention: logs.RetentionDays.THREE_MONTHS,
       storageEncrypted: true, // storage encryption at rest

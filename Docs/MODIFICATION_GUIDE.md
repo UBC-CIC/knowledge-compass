@@ -150,14 +150,14 @@ Or use a Vite env variable to avoid rebuilding for content changes:
 
 The text generation Lambda uses two models: **Haiku** (fast, used for query rewriting) and **Sonnet** (main chat model). Their ARNs are stored as SSM parameters:
 
-- `/SpecEx/LLM/HaikuArn`
-- `/SpecEx/LLM/SonnetArn`
+- `/KC/LLM/HaikuArn`
+- `/KC/LLM/SonnetArn`
 
 To update a model, change the SSM parameter value via the AWS Console or CLI:
 
 ```bash
 aws ssm put-parameter \
-  --name "/SpecEx/LLM/HaikuArn" \
+  --name "/KC/LLM/HaikuArn" \
   --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" \
   --type String \
   --overwrite
