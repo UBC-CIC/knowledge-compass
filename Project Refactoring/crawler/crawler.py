@@ -2,15 +2,19 @@
 """
 Prototype web crawler + chunker + embeddings writer for the Inclusion Canada RAG pipeline.
 
-Usage (crawl only):
-    python scripts/crawl_test.py https://www.sourceforinclusiveeducation.ca --max-pages 50
+Usage (crawl only — outputs crawl_output.json):
+    python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 50
 
-Usage (crawl + embed + write to DB):
-    python scripts/crawl_test.py https://www.sourceforinclusiveeducation.ca --max-pages 50 --write-db
+Usage (crawl + fixed-size chunking + write to DB):
+    python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 50 --write-db
+
+Usage (crawl + semantic chunking + write to DB):
+    python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 50 --write-db --semantic
 
 Requirements:
-    pip install "crawlee[playwright]" trafilatura lxml beautifulsoup4 psycopg2-binary boto3
+    pip install -r requirements.txt
     playwright install chromium
+    curl -o AmazonRootCA1.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 """
 
 import argparse
@@ -36,7 +40,7 @@ DB_HOST = "kc-database-kcdatabasedatabase02579448-iw9mhy8sqo4a.crecym6ketcm.ca-c
 DB_NAME = "KC"
 DB_USER = "app_rw"
 DB_PORT = 5432
-SSL_CERT = "../AmazonRootCA1.pem"
+SSL_CERT = "AmazonRootCA1.pem"
 
 EMBED_MODEL_ID = "cohere.embed-english-v3"
 EMBED_BATCH_SIZE = 96  # Cohere API limit per call

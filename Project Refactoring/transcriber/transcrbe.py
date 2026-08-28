@@ -5,13 +5,13 @@ Reads audio_segments from a Transcribe job output, chunks into overlapping
 segments, embeds with Cohere, and writes to video_sources + video_chunks in RDS.
 
 Usage (parse + preview, no DB):
-    python vtt_ingest.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title"
+    python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title"
 
 Usage (parse + embed + write to DB):
-    python vtt_ingest.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title" --write-db
+    python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title" --write-db
 
 Usage (semantic chunking):
-    python vtt_ingest.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title" --write-db --semantic
+    python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title" --write-db --semantic
 """
 
 import argparse
@@ -32,7 +32,7 @@ DB_HOST = "kc-database-kcdatabasedatabase02579448-iw9mhy8sqo4a.crecym6ketcm.ca-c
 DB_NAME = "KC"
 DB_USER = "app_rw"
 DB_PORT = 5432
-SSL_CERT = "../AmazonRootCA1.pem"
+SSL_CERT = "AmazonRootCA1.pem"
 
 EMBED_MODEL_ID   = "cohere.embed-english-v3"
 EMBED_BATCH_SIZE = 96

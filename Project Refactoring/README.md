@@ -137,7 +137,7 @@ def retrieve_from_pgvector(query, db_conn, top_k=10, min_score=0.40):
 
 **2. `helpers/logic.py`**
 Remove: UBC specialization prompt, SPEC_PROMPT, checklist variables.
-Replace with: Knowledge Compass prompts from `textgen_v1.ipynb` — `PROMPT_ROLE`, `PROMPT_GUARDRAILS`, `PROMPT_LANGUAGE_GUIDELINES`, `PROMPT_DETECTIVE`, `PROMPT_SUGGESTION`.
+Replace with: Knowledge Compass prompts from `textgen_v1.ipynb` — `SYSTEM_ROLE`, `PROMPT_GUARDRAILS`, `PROMPT_LANGUAGE_GUIDELINES`, `PROMPT_DETECTIVE`, `PROMPT_SUGGESTION`.
 
 The assembly pattern (plain text variables wrapped in XML tags by `get_current_prompt()`) already matches — just swap the content.
 

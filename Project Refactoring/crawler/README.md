@@ -17,7 +17,7 @@ Change detection: each chunk stores a `content_hash` (sha256[:16] of body text).
 
 ```bash
 # Install
-pip install "crawlee[playwright]" trafilatura lxml beautifulsoup4 psycopg2-binary boto3
+pip install -r requirements.txt
 playwright install chromium
 curl -o AmazonRootCA1.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
