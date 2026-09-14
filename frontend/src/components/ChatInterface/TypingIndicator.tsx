@@ -21,15 +21,8 @@ export default function TypingIndicator({
   }, []);
 
   return (
-    <div
-      className={`flex items-center gap-3 text-muted-foreground/80 ${className}`}
-    >
-      <div className="flex space-x-1">
-        <div className="w-1.5 h-1.5 bg-muted-foreground/60 rounded-full animate-bounce [animation-delay:-0.3s] [animation-duration:1.4s]"></div>
-        <div className="w-1.5 h-1.5 bg-muted-foreground/60 rounded-full animate-bounce [animation-delay:-0.15s] [animation-duration:1.4s]"></div>
-        <div className="w-1.5 h-1.5 bg-muted-foreground/60 rounded-full animate-bounce [animation-duration:1.4s]"></div>
-      </div>
-      <span className="text-sm font-medium">AI is thinking{dots}</span>
+    <div className={`text-[14.5px] text-foreground/70 ${className}`}>
+      Thinking about what you've told me{dots}
     </div>
   );
 }

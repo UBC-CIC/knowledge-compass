@@ -1,15 +1,7 @@
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-
 type MetricCardProps = {
   title: string;
   value: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   trend: string;
   tooltip?: string;
 };
@@ -17,39 +9,19 @@ type MetricCardProps = {
 export default function MetricCard({
   title,
   value,
-  icon,
   trend,
-  tooltip,
 }: MetricCardProps) {
   return (
-    <Card className="border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-      <CardContent className="p-6">
-        <div className="flex items-center justify-between space-y-0 pb-2">
-          <p className="text-sm font-medium text-gray-500">{title}</p>
-          <div className="h-8 w-8 rounded-full bg-gray-50 flex items-center justify-center">
-            {tooltip ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="cursor-help">{icon}</div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs text-xs">{tooltip}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : (
-              icon
-            )}
-          </div>
-        </div>
-        <div className="flex flex-col gap-1">
-          <div className="text-3xl font-bold text-gray-900">{value}</div>
-          <p className="text-xs text-gray-500 flex items-center gap-1">
-            <span className="text-green-600 font-medium">{trend}</span>
-          </p>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="rounded-[13px] border border-foreground/12 bg-white px-[22px] py-5 shadow-sm">
+      <div className="text-[13px] font-bold tracking-[0.01em] text-foreground/80">
+        {title}
+      </div>
+      <div className="mt-2.5 font-serif text-4xl font-semibold leading-none tracking-[-0.02em]">
+        {value}
+      </div>
+      <div className="mt-2 text-[13px] leading-normal text-foreground/75">
+        {trend}
+      </div>
+    </div>
   );
 }

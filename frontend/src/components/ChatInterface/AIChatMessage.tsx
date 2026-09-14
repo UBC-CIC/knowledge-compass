@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { ChevronDown, ChevronUp, BookOpen, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ReactMarkdown from "react-markdown";
@@ -19,6 +18,7 @@ const isSafeUrl = (url: string) => {
 
 type AIChatMessageProps = {
   text: string;
+  question?: string;
   sources?: any[];
   warning?: string | null;
   isTyping?: boolean;
@@ -26,6 +26,7 @@ type AIChatMessageProps = {
 
 export default function AIChatMessage({
   text,
+  question,
   sources = [],
   warning = null,
   isTyping = false,
@@ -130,12 +131,11 @@ export default function AIChatMessage({
 
   return (
     <div className="flex justify-start">
-      <Card className="py-[10px] w-full bg-transparent border-none shadow-none">
-        <CardContent className="px-[10px] text-sm break-words">
-          {isTyping ? (
-            <TypingIndicator className="py-2" />
-          ) : (
-            <ReactMarkdown
+      <div className="max-w-[94%] rounded-[12px] rounded-bl-[3px] bg-muted px-[17px] py-3.5 text-base leading-[1.68] text-foreground text-pretty">
+        {isTyping ? (
+          <TypingIndicator />
+        ) : (
+          <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeSanitize, rehypeHighlight]}
               components={{
@@ -248,6 +248,9 @@ export default function AIChatMessage({
               {text}
             </ReactMarkdown>
           )}
+          {!isTyping && question ? (
+            <p className="mt-2.5 font-bold leading-relaxed">{question}</p>
+          ) : null}
 
           {!isTyping && sources && sources.length > 0 && (() => {
             // Filter out sources that look like S3 URLs (both https://s3... and s3://...)
@@ -262,11 +265,31 @@ export default function AIChatMessage({
             if (renderableSources.length === 0) return null;
 
             return (
-              <div className="mt-4 border-t border-muted pt-2">
+              <div className="mt-5">
+                <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
+                  Where this comes from
+                </div>
+                <div className="mt-2.5 flex flex-col gap-2.5">
+                  {showSources ? (
+                    renderableSources.map((source, index) => (
+                      <div
+                        key={index}
+                        className="rounded-[10px] border border-foreground/14 px-4 py-3.5"
+                      >
+                        <div className="mb-1.5 flex items-baseline gap-2">
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-bold text-foreground/80">
+                            {index + 1}
+                          </span>
+                        </div>
+                        {formatSource(source)}
+                      </div>
+                    ))
+                  ) : null}
+                </div>
                 <Button
                   variant="link"
                   size="sm"
-                  className="flex items-center gap-1 text-xs cursor-pointer text-muted-foreground hover:text-foreground"
+                  className="mt-1 h-auto px-0 text-[13px] font-semibold text-primary"
                   onClick={() => setShowSources(!showSources)}
                 >
                   <BookOpen className="h-3 w-3" />
@@ -278,38 +301,19 @@ export default function AIChatMessage({
                     <ChevronDown className="h-3 w-3" />
                   )}
                 </Button>
-
-                {showSources && (
-                  <div className="mt-3 w-full">
-                    <p className="text-sm font-medium mb-2 text-foreground/80">
-                      References:
-                    </p>
-                    <ul className="space-y-4 list-none pl-0 w-full">
-                      {renderableSources.map((source, index) => (
-                        <li
-                          key={index}
-                          className="w-full bg-muted/30 p-2 rounded-md border border-muted"
-                        >
-                          {formatSource(source)}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             );
           })()}
 
           {!isTyping && warning && (
             <div className="mt-4">
-              <div className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/40 dark:text-orange-200">
+              <div className="rounded-[10px] bg-[oklch(0.97_0.015_268)] px-4 py-3.5 text-sm text-secondary-foreground">
                 {warning}
               </div>
             </div>
           )}
 
-        </CardContent>
-      </Card>
+      </div>
     </div>
   );
 }

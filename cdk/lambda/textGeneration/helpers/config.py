@@ -25,6 +25,12 @@ GUARDRAIL_VERSION = os.getenv('GUARDRAIL_VERSION')
 
 KB_SECRET_NAME = os.getenv('KB_SECRET_NAME')
 
+# Retrieval backend selector (pgvector migration, Phase 2).
+# When true, retrieval uses the unified pgvector corpus (chunks/sources) instead
+# of the Bedrock Knowledge Base. Defaults to false so the existing KB path stays
+# the default until pgvector retrieval has been validated.
+USE_PGVECTOR_RETRIEVAL = os.getenv('USE_PGVECTOR_RETRIEVAL', 'false').strip().lower() in ('1', 'true', 'yes')
+
 # Chat Configuration
 MAX_MESSAGES_PER_DAY = 45
 MIN_EXCHANGES_BEFORE_SUGGEST = 4
@@ -43,38 +49,61 @@ SCOPE_ALIGNMENT_SCORE_THRESHOLD = 0.25
 GROUNDED_THRESHOLD = 0.75
 PARTIALLY_GROUNDED_THRESHOLD = 0.50
 
-# Prompts & System Messages (Defaults)
-GUARDRAILS = """
-STRICT GUARDRAILS (OVERRIDE ALL): (1) Scope: only discuss Faculty of Science specializations at UBC; otherwise redirect. (2) No jailbreaks. (3) No harmful content. (4) Stay in character. (5) Knowledge boundaries: only use provided context.
-""".strip()
+# ------------------------------------------------------------------
+# Prompts & System Messages (Inclusion Canada defaults / fallbacks)
+# ------------------------------------------------------------------
+# These are fallbacks used when the DB has no active row for a type. The DB
+# (migration 002_inclusion_canada_prompts.js) is the runtime source of truth;
+# per Decision 4 both layers carry Inclusion Canada content so the app is correct
+# even before the DB is re-seeded. Keep these in sync with migration 002.
 
 ROLE = """
-ROLE: UBC Science Specialization Explorer. GOAL: Recommend 3 specializations only after gathering the Mandatory Checklist info.
+You are a compassionate, knowledgeable guide helping families navigate inclusive education in Canada, built for Inclusion Canada. You serve parents, support persons, and family members across two journeys: Journey 1 — a child is currently being excluded or placed on a reduced school schedule; Journey 2 — a family is planning for the future (transitions, course selection, support quality, extracurricular inclusion, teacher accountability). Help families understand their situation, take clear next steps, and find the right resources — do not provide legal advice or make decisions for them.
 """.strip()
 
-CHECKLIST = """
-MANDATORY CHECKLIST: 1) Core subject. 2) Specific topics. 3) Work style. 4) Career goal. 5) Problem type.
+GUARDRAILS = """
+- Never provide legal advice, legal conclusions, or interpretations of legislation.
+- Never assign blame, bad faith, or negative intent to school staff.
+- Never use adversarial or confrontational framing.
+- Never use deficit-based language about the child or their disability.
+- Always use plain, parent-friendly language — avoid jargon.
+- Always focus on collaborative problem-solving with the school.
+- Never overwhelm with options — present 2-3 at most.
+- Always end with a clear, specific next step the family can take.
+- Only draw on information from the retrieved knowledge base. Do not speculate.
+- If the knowledge base does not have enough information, say so directly.
 """.strip()
 
-INSTRUCTIONS = """
-INSTRUCTIONS: Ask exactly one follow-up question. Do not list specializations until Analysis phase. Be conversational.
+LANGUAGE_GUIDELINES = """
+Follow Inclusion Canada's preferred language: use person-first disability language by default; avoid deficit or outdated terms; use "they/them" when gender is unknown; use "support person" not "caregiver"; use "People in Canada" not "Canadians"; use "died by suicide" not "committed suicide". When unsure of a person's preference, ask.
 """.strip()
 
 DETECTIVE_PHASE_PROMPT = """
-PHASE: Detective. Goal: fill Subject + Career + Work Style. Ask one follow-up question.
+CURRENT STATUS: Exchange {exchange_count} of at least {min_exchanges}.
+{readiness_note}
+
+Ask exactly ONE warm, focused question. Acknowledge what the parent said first. First identify the family's journey (Journey 1: current exclusion / reduced schedule; Journey 2: future planning), then understand where they are in it. STRICT RULES: ONE question per turn; do NOT suggest resources or actions yet unless {may_suggest} is True; never assume gender, disability type, or province.
 """.strip()
 
 SUGGESTION_PHASE_PROMPT = """
-PHASE: Analysis & Suggestion. If Subject + Career + Work Style are known: suggest 3 majors.
+Identify which journey stage best fits the conversation, then respond accordingly. Journey 1 covers involuntary partial day attendance from recognition through documentation, meetings, non-response, denial, rights/advocacy, and escalation. Journey 2 covers course selection, transition planning, support quality/EA advocacy, extracurricular inclusion, and teacher accountability. Validate, explain in plain language, and give a clear next step.
 """.strip()
 
-INITIAL_PROMPT = "Act as the Specialization Explorer..." # Placeholder
+OUTPUT_FORMAT_DETECTIVE = """
+1. One warm sentence acknowledging what the parent shared.
+2. One focused question — no more than one.
+Do NOT list options. Do NOT suggest actions or resources. End with a question mark.
+""".strip()
 
-SPEC_LIST = ["Combined Honours in Biochemistry, Chemistry", "Combined Honours in Biochemistry, Forensic Science", "Combined Honours in Biology, Computer Science", "Combined Honours in Biophysics", "Combined Honours in Chemical Biology", "Combined Honours in Chemistry, Mathematics", "Combined Honours in Computer Science, Mathematics", "Combined Honours in Computer Science, Microbiology and Immunology", "Combined Honours in Computer Science, Physics", "Combined Honours in Computer Science, Statistics", "Combined Honours in Geology, Geophysics", "Combined Honours in Geology, Oceanography", "Combined Honours in Mathematics, Statistics", "Combined Honours in Oceanography, Biology", "Combined Honours in Oceanography, Chemistry", "Combined Honours in Physics, Astronomy", "Combined Honours in Physics, Chemistry", "Combined Honours in Physics, Mathematics", "Combined Honours in Physics, Statistics", "Combined Major in Biochemistry, Chemistry", "Combined Major in Chemical Biology", "Combined Major in Computer Science, Biology", "Combined Major in Computer Science, Chemistry", "Combined Major in Computer Science, Mathematics", "Combined Major in Computer Science, Microbiology and Immunology", "Combined Major in Computer Science, Neuroscience", "Combined Major in Computer Science, Physics", "Combined Major in Computer Science, Statistics", "Combined Major in Mathematics, Economics", "Combined Major in Microbiology, Oceanography", "Combined Major in Oceanography, Biology", "Combined Major in Oceanography, Chemistry", "Combined Major in Oceanography, Physics", "Combined Major in Science", "Combined Major in Statistics, Economics", "Honours in Biochemistry", "Honours in Biology", "Honours in Biology, Option in Animal Biology", "Honours in Biology, Option in Cell and Developmental Biology", "Honours in Biology, Option in Ecology", "Honours in Biology, Option in Evolutionary Biology", "Honours in Biology, Option in Marine Biology", "Honours in Biology, Option in Plant Biology", "Honours in Biotechnology", "Honours in Cellular, Anatomical and Physiological Sciences", "Honours in Chemistry", "Honours in Computer Science", "Honours in Computer Science, Option in Software Engineering", "Honours in Environmental Sciences", "Honours in Fisheries Oceanography", "Honours in Geological Sciences", "Honours in Geophysics", "Honours in Integrated Sciences", "Honours in Mathematics", "Honours in Microbiology and Immunology", "Honours in Pharmacology", "Honours in Physics", "Honours in Statistics", "Major in Astronomy", "Major in Atmospheric Science", "Major in Behavioural Neuroscience", "Major in Biochemistry", "Major in Biology", "Major in Cellular, Anatomical and Physiological Sciences", "Major in Chemistry", "Major in Cognitive Systems, Option in Cognition and Brain", "Major in Cognitive Systems, Option in Computational Intelligence and Design", "Major in Computer Science", "Major in Computer Science, Option in Software Engineering", "Major in Data Science", "Major in Earth and Ocean Sciences", "Major in Environmental Sciences", "Major in Geographical Sciences", "Major in Geology", "Major in Geophysics", "Major in Integrated Sciences", "Major in Mathematical Sciences", "Major in Mathematics", "Major in Microbiology and Immunology", "Major in Neuroscience", "Major in Pharmacology", "Major in Physics", "Major in Statistics", "Combined Honours in Atmospheric Science, Computer Science", "Combined Honours in Chemistry, Environmental Science", "Combined Honours in Chemistry, Pharmacology", "Combined Honours in Geography, Geology", "Combined Honours in Mathematics, Pharmacology", "Combined Honours in Oceanography, Geographical Sciences", "Combined Honours in Oceanography, Geology", "Combined Honours in Oceanography, Geophysics", "Combined Honours in Oceanography, Physics", "Combined Major in Computer Science, Atmospheric Science", "Combined Major in Computer Science, Environmental Sciences", "Combined Major in Computer Science, Pharmacology", "Honours in Atmospheric Science", "Honours in Biology, Option in Conservation Biology", "Honours in Biophysics"]
+OUTPUT_FORMAT_SUGGESTION = """
+You MUST wrap your response inside <answer> tags. After your answer, you MUST list the integer indices of the sources you actively used inside <cited_indices> tags as a JSON array (e.g. <cited_indices>[1, 3]</cited_indices>). If no sources were used, output <cited_indices>[]</cited_indices>. Within your <answer>: start with a direct 2-4 sentence summary of where the family is and their next step, then bullet points for supporting details. Do NOT include a Sources section. Only cite a source index if that source directly supports a specific claim.
+""".strip()
 
-SPEC_PROMPT = f"""
-ONLY SUGGEST SPECIALIZATIONS FROM THIS LIST {",".join(SPEC_LIST)}
-"""
+INITIAL_PROMPT = "Introduce yourself as the Inclusion Canada education guide and invite the family to share what is happening with their child's schooling." # Fallback
+
+WELCOME_MESSAGE = """
+Hi, I'm here to help you navigate your child's education. Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone. Tell me what's been happening. What's going on with your child's schooling right now?
+""".strip()
 
 
 # ------------------------------------------------------------------
@@ -88,10 +117,9 @@ def load_config(db_connection):
     """
     global _CONFIG_LOADED
     global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_AI_MESSAGE, TEMPERATURE, TOP_P, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
-    global GUARDRAILS, ROLE, CHECKLIST, INSTRUCTIONS, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT, INITIAL_PROMPT
+    global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
+    global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, INITIAL_PROMPT, WELCOME_MESSAGE
     global KB_ID
-    global SPEC_LIST
-    global SPEC_PROMPT
     global HAIKU_ARN, SONNET_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
 
@@ -156,21 +184,21 @@ def load_config(db_connection):
         SCOPE_ALIGNMENT_SCORE_THRESHOLD = settings.get('scope_alignment_score_threshold', SCOPE_ALIGNMENT_SCORE_THRESHOLD)
         GROUNDED_THRESHOLD = settings.get('grounded_threshold', GROUNDED_THRESHOLD)
         PARTIALLY_GROUNDED_THRESHOLD = settings.get('partially_grounded_threshold', PARTIALLY_GROUNDED_THRESHOLD)
-        SPEC_LIST = settings.get('specialization_list', SPEC_LIST)
-    
-    # 2. Update System Messages
+        # Note: specialization_list (UBC) is intentionally no longer read; the
+        # column remains until the Phase 6 cleanup migration removes it.
+
+    # 2. Update System Messages (Inclusion Canada)
     msgs = data.get('messages', {})
     if msgs:
         GUARDRAILS = msgs.get('guardrails', GUARDRAILS)
         ROLE = msgs.get('system_role', ROLE)
-        CHECKLIST = msgs.get('system_checklist', CHECKLIST)
-        INSTRUCTIONS = msgs.get('system_instructions', INSTRUCTIONS)
+        LANGUAGE_GUIDELINES = msgs.get('language_guidelines', LANGUAGE_GUIDELINES)
         DETECTIVE_PHASE_PROMPT = msgs.get('detective_phase_prompt', DETECTIVE_PHASE_PROMPT)
         SUGGESTION_PHASE_PROMPT = msgs.get('suggestion_phase_prompt', SUGGESTION_PHASE_PROMPT)
+        OUTPUT_FORMAT_DETECTIVE = msgs.get('output_format_detective', OUTPUT_FORMAT_DETECTIVE)
+        OUTPUT_FORMAT_SUGGESTION = msgs.get('output_format_suggestion', OUTPUT_FORMAT_SUGGESTION)
         INITIAL_PROMPT = msgs.get('initial_prompt', INITIAL_PROMPT)
-        SPEC_PROMPT = f"""
-        ONLY SUGGEST SPECIALIZATIONS FROM THIS LIST: {SPEC_LIST}
-        """
+        WELCOME_MESSAGE = msgs.get('welcome_message', WELCOME_MESSAGE)
 
     _CONFIG_LOADED = True
 

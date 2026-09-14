@@ -18,9 +18,14 @@ logger.setLevel(logging.INFO)
 
 # Environment variables
 DB_SECRET_NAME = os.environ["SM_DB_CREDENTIALS"]
-KB_SECRET_NAME = os.environ["KB_SECRET_NAME"]
+# KB_SECRET_NAME is only required for the Bedrock ingestion backend. Under the
+# pgvector backend it is unused (and absent once Bedrock KB is retired).
+KB_SECRET_NAME = os.environ.get("KB_SECRET_NAME")
 REGION = os.environ["REGION"]
 RDS_PROXY_ENDPOINT = os.environ["RDS_PROXY_ENDPOINT"]
+
+# "bedrock" (default) or "pgvector". Selects the ingestion backend for /sync.
+INGESTION_BACKEND = os.environ.get("INGESTION_BACKEND", "bedrock").strip().lower()
 
 # Cached resources
 connection = None
@@ -162,12 +167,14 @@ def handler(event, context=None):
         ):
             return stage_data_sources_batch(event=event, body=body, connection=connection)
 
-        # Everything below this point needs KB ID
-        try:
-            kb_id = _get_secret(KB_SECRET_NAME, expect_json=False)
-        except Exception as e:
-            logger.error(f"Error getting knowledge base ID: {e}")
-            return _response(event, 500, {"error": "Error getting knowledge base ID"})
+        # The Bedrock backend needs the KB ID; the pgvector backend does not.
+        kb_id = None
+        if INGESTION_BACKEND != "pgvector":
+            try:
+                kb_id = _get_secret(KB_SECRET_NAME, expect_json=False)
+            except Exception as e:
+                logger.error(f"Error getting knowledge base ID: {e}")
+                return _response(event, 500, {"error": "Error getting knowledge base ID"})
 
         # Route: POST /admin/data_sources/sync
         if method == "POST" and (

@@ -1,20 +1,10 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useNavigate, useLocation, Link } from "react-router";
 import { confirmSignIn } from "aws-amplify/auth";
-import { Eye, EyeOff } from "lucide-react";
 import { AuthService } from "@/functions/authService";
-import Footer from "@/components/Footer";
 import { useUser } from "@/providers/user";
+import BrandMark from "@/components/BrandMark";
+import { isDemoMode } from "@/lib/demo";
 
 export default function AdminLogin() {
   const { userId } = useUser();
@@ -25,31 +15,33 @@ export default function AdminLogin() {
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
   const [requiresNewPassword, setRequiresNewPassword] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as any)?.from?.pathname || "/admin/dashboard";
 
   useEffect(() => {
+    if (isDemoMode) return;
+
     const checkAuthStatus = async () => {
       try {
         const session = await AuthService.getAuthSession(true);
         if (session?.tokens?.accessToken) {
-          // User is already authenticated, redirect to dashboard
           navigate(from, { replace: true });
         }
-      } catch (error) {
-        // User is not authenticated, stay on login page
+      } catch {
         console.log("Not authenticated");
       }
     };
 
     checkAuthStatus();
-  }, [navigate]);
+  }, [navigate, from]);
 
-  const updateAdminUser = async (email: string) => {
+  const updateAdminUser = async (adminEmail: string) => {
     if (!userId) throw new Error("Missing userId");
 
     const session = await AuthService.getAuthSession(true);
@@ -63,7 +55,7 @@ export default function AdminLogin() {
       },
       body: JSON.stringify({
         user_id: userId,
-        email,
+        email: adminEmail,
         role: "admin",
       }),
     });
@@ -79,7 +71,28 @@ export default function AdminLogin() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSignedIn(false);
+
+    if (!email.trim() || !password) {
+      setError("Enter both your email and password to continue.");
+      return;
+    }
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
+      setError("That email address doesn't look complete — check for a typo.");
+      return;
+    }
+
     setIsLoading(true);
+
+    if (isDemoMode) {
+      setSignedIn(true);
+      window.setTimeout(() => {
+        navigate(from, { replace: true });
+        setIsLoading(false);
+      }, 600);
+      return;
+    }
 
     try {
       const result = await AuthService.signIn(email, password);
@@ -91,6 +104,7 @@ export default function AdminLogin() {
 
       if (result.isSignedIn) {
         await updateAdminUser(email);
+        setSignedIn(true);
         navigate(from, { replace: true });
       } else if (
         result.nextStep?.signInStep ===
@@ -127,8 +141,8 @@ export default function AdminLogin() {
       });
 
       if (user.isSignedIn) {
-        // Clear cache to ensure fresh session
         AuthService.clearAuthCache();
+        setSignedIn(true);
         navigate(from, { replace: true });
       }
     } catch (err: any) {
@@ -138,74 +152,119 @@ export default function AdminLogin() {
     }
   };
 
+  const ready = Boolean(email.trim() && password && !isLoading);
+  const newPasswordReady = Boolean(
+    newPassword && confirmPassword && !isLoading
+  );
+
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
-      <div className="flex-1 flex items-center justify-center px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="space-y-1 text-center">
-            <CardTitle className="text-2xl font-bold">
-              {requiresNewPassword ? "Set New Password" : "Admin Login"}
-            </CardTitle>
-            <CardDescription>
+    <div className="flex min-h-screen flex-col bg-muted">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-foreground/10 bg-white px-[34px] py-[18px]">
+        <BrandMark />
+        <div className="text-[12.5px] font-semibold tracking-[0.02em] text-foreground/75">
+          Administrator access
+        </div>
+      </header>
+
+      <main className="flex flex-1 items-center justify-center px-6 py-12">
+        <div className="w-full max-w-[440px]">
+          <div className="rounded-[14px] border border-foreground/12 bg-white px-[34px] pb-[30px] pt-[34px] shadow-md">
+            <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
+              {requiresNewPassword ? "Set a new password" : "Sign in"}
+            </h1>
+            <p className="mt-2 text-[15px] leading-relaxed text-foreground/80">
               {requiresNewPassword
-                ? "Please set a new password for your account"
-                : "Enter your credentials to access the admin dashboard"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+                ? "Please set a new password for your account."
+                : isDemoMode
+                  ? "Local demo — any complete email and password will open the console."
+                  : "Manage the knowledge base, conversation prompts, and detective settings."}
+            </p>
+
+            {error ? (
+              <div className="mt-5 rounded-[9px] border border-[oklch(0.82_0.08_25)] bg-[oklch(0.96_0.03_25)] px-3.5 py-3 text-sm leading-relaxed text-[oklch(0.38_0.13_25)]">
+                {error}
+              </div>
+            ) : null}
+
+            {signedIn ? (
+              <div className="mt-5 rounded-[9px] border border-[oklch(0.80_0.07_160)] bg-[oklch(0.96_0.03_160)] px-3.5 py-3 text-sm leading-relaxed text-[oklch(0.35_0.09_160)]">
+                Signed in. Opening the admin dashboard…
+              </div>
+            ) : null}
+
             {!requiresNewPassword ? (
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
+              <form onSubmit={handleSubmit} className="mt-[22px]">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="kc-email" className="text-[13px] font-bold tracking-[0.01em]">
+                    Email
+                  </label>
+                  <input
+                    id="kc-email"
                     type="email"
-                    placeholder="admin@example.com"
+                    autoComplete="username"
+                    placeholder="name@inclusioncanada.ca"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     disabled={isLoading}
+                    className="min-h-[46px] rounded-[9px] border-[1.5px] border-foreground/20 bg-white px-3.5 text-[15.5px] text-foreground outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
+
+                <div className="mt-4 flex flex-col gap-1.5">
+                  <label htmlFor="kc-pw" className="text-[13px] font-bold tracking-[0.01em]">
+                    Password
+                  </label>
+                  <div className="relative flex">
+                    <input
+                      id="kc-pw"
                       type={showPassword ? "text" : "password"}
+                      autoComplete="current-password"
+                      placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
                       disabled={isLoading}
+                      className="min-h-[46px] min-w-0 flex-1 rounded-[9px] border-[1.5px] border-foreground/20 bg-white py-0 pr-[92px] pl-3.5 text-[15.5px] text-foreground outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute top-0 right-0 h-full min-h-11 px-3.5 text-[13px] font-semibold text-primary"
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-500" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-500" />
-                      )}
+                      {showPassword ? "Hide" : "Show"}
                     </button>
                   </div>
                 </div>
-                {error && (
-                  <div className="text-sm text-red-600 bg-red-50 p-3 rounded">
-                    {error}
-                  </div>
-                )}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Logging in..." : "Login"}
-                </Button>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3.5">
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-foreground/85">
+                    <input
+                      type="checkbox"
+                      checked={remember}
+                      onChange={(e) => setRemember(e.target.checked)}
+                      className="size-[17px] accent-primary"
+                    />
+                    Keep me signed in
+                  </label>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={!ready}
+                  className="mt-5 min-h-12 w-full rounded-[9px] text-[15.5px] font-semibold transition-colors disabled:bg-foreground/14 disabled:text-foreground/75 enabled:bg-primary enabled:text-white"
+                >
+                  {isLoading ? "Signing in…" : "Sign in"}
+                </button>
               </form>
             ) : (
-              <form onSubmit={handleNewPasswordSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="newPassword">New Password</Label>
-                  <div className="relative">
-                    <Input
+              <form onSubmit={handleNewPasswordSubmit} className="mt-[22px]">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="newPassword" className="text-[13px] font-bold tracking-[0.01em]">
+                    New Password
+                  </label>
+                  <div className="relative flex">
+                    <input
                       id="newPassword"
                       type={showNewPassword ? "text" : "password"}
                       value={newPassword}
@@ -213,24 +272,24 @@ export default function AdminLogin() {
                       required
                       disabled={isLoading}
                       placeholder="Enter new password"
+                      className="min-h-[46px] min-w-0 flex-1 rounded-[9px] border-[1.5px] border-foreground/20 bg-white py-0 pr-[92px] pl-3.5 text-[15.5px] outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowNewPassword(!showNewPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2"
+                      onClick={() => setShowNewPassword((v) => !v)}
+                      className="absolute top-0 right-0 h-full min-h-11 px-3.5 text-[13px] font-semibold text-primary"
                     >
-                      {showNewPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-500" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-500" />
-                      )}
+                      {showNewPassword ? "Hide" : "Show"}
                     </button>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                  <div className="relative">
-                    <Input
+
+                <div className="mt-4 flex flex-col gap-1.5">
+                  <label htmlFor="confirmPassword" className="text-[13px] font-bold tracking-[0.01em]">
+                    Confirm New Password
+                  </label>
+                  <div className="relative flex">
+                    <input
                       id="confirmPassword"
                       type={showConfirmPassword ? "text" : "password"}
                       value={confirmPassword}
@@ -238,36 +297,38 @@ export default function AdminLogin() {
                       required
                       disabled={isLoading}
                       placeholder="Confirm new password"
+                      className="min-h-[46px] min-w-0 flex-1 rounded-[9px] border-[1.5px] border-foreground/20 bg-white py-0 pr-[92px] pl-3.5 text-[15.5px] outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary"
                     />
                     <button
                       type="button"
-                      onClick={() =>
-                        setShowConfirmPassword(!showConfirmPassword)
-                      }
-                      className="absolute right-3 top-1/2 -translate-y-1/2"
+                      onClick={() => setShowConfirmPassword((v) => !v)}
+                      className="absolute top-0 right-0 h-full min-h-11 px-3.5 text-[13px] font-semibold text-primary"
                     >
-                      {showConfirmPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-500" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-500" />
-                      )}
+                      {showConfirmPassword ? "Hide" : "Show"}
                     </button>
                   </div>
                 </div>
-                {error && (
-                  <div className="text-sm text-red-600 bg-red-50 p-3 rounded">
-                    {error}
-                  </div>
-                )}
-                <Button type="submit" className="w-full" disabled={isLoading}>
+
+                <button
+                  type="submit"
+                  disabled={!newPasswordReady}
+                  className="mt-5 min-h-12 w-full rounded-[9px] text-[15.5px] font-semibold disabled:bg-foreground/14 disabled:text-foreground/75 enabled:bg-primary enabled:text-white"
+                >
                   {isLoading ? "Setting Password..." : "Set New Password"}
-                </Button>
+                </button>
               </form>
             )}
-          </CardContent>
-        </Card>
-      </div>
-      <Footer />
+          </div>
+
+          <p className="mt-[18px] ml-1 text-[12.5px] leading-relaxed text-foreground/80">
+            This area is for Inclusion Canada staff. Families don't need an account — the assistant is open to everyone at{" "}
+            <Link to="/" className="font-semibold text-primary underline underline-offset-2">
+              knowledgecompass.ca
+            </Link>
+            .
+          </p>
+        </div>
+      </main>
     </div>
   );
 }

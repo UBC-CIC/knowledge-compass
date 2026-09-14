@@ -1,5 +1,11 @@
 # Video Transcription Pipeline
 
+> **Security note:** This script is configured entirely through environment
+> variables (see [Configuration](#configuration-secret-free)) and stores no
+> credentials in source. An earlier committed version contained a hard-coded
+> RDS credential; that credential is in git history and **must be rotated in
+> AWS**. Removing it from the current source does not remove it from history.
+
 ## What It Does
 
 `transcrbe.py` is a transcript ingestor that:
@@ -31,14 +37,28 @@ Key field used: `results.audio_segments` — an array of sentence-level segments
 
 ---
 
+## Configuration (secret-free)
+
+Configuration is read from the environment via the shared helper
+`../common/db_config.py` — no credentials or endpoints in source. Copy
+`../.env.example` to `.env` and fill in real values, or export them directly.
+See the crawler README's configuration table for the full variable list; the
+transcriber uses the same variables.
+
 ## CLI Usage
 
 ```bash
 # Install
-pip install psycopg2-binary boto3
-curl -o AmazonRootCA1.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+pip install -r requirements.txt
 
-# Preview only — outputs vtt_output.json, no DB write
+# (verify-full TLS) download the RDS CA bundle once and point env at it
+curl -o global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+export DB_SSL_ROOT_CERT=$(pwd)/global-bundle.pem
+
+# Configure DB access (IAM auth = no stored secret)
+export DB_HOST=your-endpoint.rds.amazonaws.com DB_NAME=KC DB_USER=app_rw AWS_REGION=ca-central-1
+
+# Preview only — outputs vtt_output.json, no DB write (no credentials needed)
 python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title"
 
 # Fixed-size chunking + write to DB

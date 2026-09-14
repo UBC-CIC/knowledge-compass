@@ -1,5 +1,11 @@
 # Web Crawler Pipeline
 
+> **Security note:** This script is configured entirely through environment
+> variables (see [Configuration](#configuration-secret-free)) and stores no
+> credentials in source. An earlier committed version contained a hard-coded
+> RDS credential; that credential is in git history and **must be rotated in
+> AWS**. Removing it from the current source does not remove it from history.
+
 ## What It Does
 
 `crawler.py` is a BFS web crawler that:
@@ -13,15 +19,42 @@ Change detection: each chunk stores a `content_hash` (sha256[:16] of body text).
 
 ---
 
+## Configuration (secret-free)
+
+This script has **no credentials or endpoints in source**. All configuration is
+read from the environment via the shared helper `../common/db_config.py`.
+Copy `../.env.example` to `.env` and fill in real values, or export them directly.
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `DB_HOST` | yes | — | RDS / RDS Proxy endpoint |
+| `DB_NAME` | yes | — | Database name |
+| `DB_USER` | yes | — | DB user (IAM-auth role for `iam` mode) |
+| `AWS_REGION` | no | `us-east-1` | AWS region |
+| `DB_AUTH` | no | `iam` | `iam` \| `secret` \| `password` |
+| `DB_SECRET_NAME` | if `secret` | — | Secrets Manager secret id |
+| `DB_PASSWORD` | if `password` | — | Local dev only |
+| `DB_PORT` | no | `5432` | |
+| `DB_SSLMODE` | no | `verify-full` | |
+| `DB_SSL_ROOT_CERT` | no | system trust | Path to RDS CA bundle |
+| `EMBED_MODEL_ID` | no | `cohere.embed-english-v3` | |
+| `EMBED_BATCH_SIZE` | no | `96` | Cohere per-call limit |
+
 ## CLI Usage
 
 ```bash
 # Install
 pip install -r requirements.txt
 playwright install chromium
-curl -o AmazonRootCA1.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
-# Crawl only — outputs crawl_output.json
+# (verify-full TLS) download the RDS CA bundle once and point env at it
+curl -o global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+export DB_SSL_ROOT_CERT=$(pwd)/global-bundle.pem
+
+# Configure DB access (IAM auth = no stored secret)
+export DB_HOST=your-endpoint.rds.amazonaws.com DB_NAME=KC DB_USER=app_rw AWS_REGION=ca-central-1
+
+# Crawl only — outputs crawl_output.json (no DB, no credentials needed)
 python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100
 
 # Crawl + fixed-size chunking + write to DB
@@ -74,18 +107,18 @@ Admin triggers crawl (frontend button)
          ▼
 Lambda (proxy function)
   - Validates request
-  - INSERT INTO crawl_runs (source_id, status='queued') → returns job_id to frontend
-  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES
+  - INSERT INTO ingestion_runs (source_id, status='queued') → returns job_id to frontend
+  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES, WRITE_DB
          │
          ▼
 ECS Fargate Task (Docker container with Playwright + crawler.py)
   - Reads JOB_ID, SEED_URL from env
   - Runs crawler.py
-  - On completion: UPDATE crawl_runs SET status='completed' WHERE id=JOB_ID
-  - On failure:    UPDATE crawl_runs SET status='failed', error_message=... WHERE id=JOB_ID
+  - On completion: UPDATE ingestion_runs SET status='completed' WHERE id=JOB_ID
+  - On failure:    UPDATE ingestion_runs SET status='failed', error_message=... WHERE id=JOB_ID
          │
          ▼
-Admin dashboard polls crawl_runs by job_id → shows live status
+Admin dashboard polls ingestion_runs by job_id → shows live status
 ```
 
 **Automation (scheduled re-crawl):**
@@ -104,5 +137,7 @@ The ECS Fargate container needs:
 - Python 3.11+
 - `crawlee[playwright]`, `trafilatura`, `lxml`, `beautifulsoup4`, `psycopg2-binary`, `boto3`
 - Playwright chromium (`playwright install chromium`)
-- `AmazonRootCA1.pem` for RDS SSL
-- IAM role with: `bedrock:InvokeModel` (Cohere embed), `rds-db:connect` (IAM auth to RDS)
+- The RDS CA bundle fetched at build/runtime (`global-bundle.pem`), with
+  `DB_SSL_ROOT_CERT` pointing at it — not a committed cert
+- Config via environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_AUTH=iam`, ...)
+- IAM task role with: `bedrock:InvokeModel` (Cohere embed), `rds-db:connect` (IAM auth to RDS)

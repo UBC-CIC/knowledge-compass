@@ -10,7 +10,6 @@ import {
   Loader2,
   AlertTriangle,
   MessageCircleMore,
-  Play,
   Archive,
 } from "lucide-react";
 import { AuthService } from "@/functions/authService";
@@ -37,6 +36,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import MetricCard from "./MetricCard.tsx";
+import {
+  DEMO_ADMIN_EMAIL,
+  DEMO_DATA_SOURCES,
+  DEMO_INGESTION_RUNS,
+  DEMO_OVERVIEW_TOTALS,
+  isDemoMode,
+} from "@/lib/demo";
 
 type AnalyticsTotals = {
   users: number;
@@ -118,17 +124,17 @@ function typeLabel(t: DataSourceType) {
 function statusBadge(status: IngestionRunStatus | "no_runs") {
   switch (status) {
     case "pending":
-      return <Badge className="bg-gray-100 text-gray-700">Pending</Badge>;
+      return <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">Pending</Badge>;
     case "queued":
-      return <Badge className="bg-amber-100 text-amber-700">Queued</Badge>;
+      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.05_85)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.10_75)]">Queued</Badge>;
     case "completed":
-      return <Badge className="bg-green-100 text-green-700">Completed</Badge>;
+      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.04_160)] px-2.5 py-1 text-xs font-bold text-[oklch(0.32_0.09_160)]">Completed</Badge>;
     case "failed":
-      return <Badge className="bg-red-100 text-red-700">Failed</Badge>;
+      return <Badge className="rounded-full border-0 bg-[oklch(0.96_0.03_25)] px-2.5 py-1 text-xs font-bold text-[oklch(0.38_0.13_25)]">Failed</Badge>;
     case "running":
-      return <Badge className="bg-blue-100 text-blue-700">Running</Badge>;
+      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">Running</Badge>;
     default:
-      return <Badge className="bg-gray-100 text-gray-700">No runs</Badge>;
+      return <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">Not synced</Badge>;
   }
 }
 
@@ -243,12 +249,21 @@ export default function DataSourceManagement() {
   const [page, setPage] = useState(1);
 
   const fetchAdminCredentials = async () => {
+    if (isDemoMode) {
+      setAdminEmail(DEMO_ADMIN_EMAIL);
+      return;
+    }
     const user = await getCurrentUser();
     const email = user?.signInDetails?.loginId ?? null;
     setAdminEmail(email);
   };
 
   const fetchAnalyticsTotals = async () => {
+    if (isDemoMode) {
+      setTotals(DEMO_OVERVIEW_TOTALS);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -283,6 +298,12 @@ export default function DataSourceManagement() {
   };
 
   const fetchAdminDataSources = async () => {
+    if (isDemoMode) {
+      setDataSources(DEMO_DATA_SOURCES);
+      setIngestionRuns(DEMO_INGESTION_RUNS);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -916,11 +937,13 @@ export default function DataSourceManagement() {
   const pagedDataSources = filteredDataSources.slice(startIdx, startIdx + PAGE_SIZE);
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in duration-500">
+    <div className="mx-auto max-w-[1080px] space-y-[26px]">
       <div>
-        <h2 className="text-3xl font-bold text-gray-900">Admin Dashboard</h2>
-        <p className="text-gray-500 mt-1">
-          Manage your data sources and platform overview.
+        <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
+          Overview
+        </h1>
+        <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+          How families are using the assistant, and what the knowledge base is drawing on.
         </p>
       </div>
 
@@ -935,26 +958,26 @@ export default function DataSourceManagement() {
       {/* Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <MetricCard
-          title="Total Users"
+          title="Families reached"
           value={loading ? "..." : totals.users.toLocaleString()}
           icon={<Users className="h-5 w-5 text-primary" />}
-          trend="Unique users"
+          trend="Distinct people who started at least one conversation"
           tooltip="Calculated by counting distinct users with chat sessions."
         />
 
         <MetricCard
-          title="Total Chat sessions"
+          title="Conversations"
           value={loading ? "..." : totals.chat_sessions.toLocaleString()}
           icon={<MessageCircleMore className="h-5 w-5 text-primary" />}
-          trend="Total Chat sessions"
+          trend="All time, across every family"
           tooltip="Total chat sessions across all users."
         />
 
         <MetricCard
-          title="Total Messages"
+          title="Messages exchanged"
           value={loading ? "..." : totals.messages.toLocaleString()}
-          icon={<HelpCircle className="h-5 w-5 text-[#3d7a9a]" />}
-          trend="Total Messages Exchanged"
+          icon={<HelpCircle className="h-5 w-5 text-primary" />}
+          trend="Family and assistant messages combined"
           tooltip="Total chat messages exchanged across all sessions."
         />
       </div>
@@ -963,32 +986,34 @@ export default function DataSourceManagement() {
       <div className="space-y-4">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <h3 className="text-xl font-semibold text-gray-900">
-              Data Sources
+          <div className="flex flex-col gap-1">
+            <h3 className="text-[18.5px] font-bold tracking-[-0.01em] text-foreground">
+              Data sources
             </h3>
+            <p className="max-w-2xl text-[13.5px] leading-normal text-foreground/80">
+              Everything the assistant is allowed to answer from. Staged items only go live after a sync.
+            </p>
+          </div>
             <div className="flex flex-wrap gap-2">
               <Button
-                className="bg-primary text-white"
+                className="min-h-[42px] rounded-[9px] bg-primary px-4 text-sm font-semibold text-white"
                 onClick={handleStartSync}
                 disabled={syncing || !hasPendingLikeItems}
               >
-                {syncing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Syncing...
-                  </>
-                ) : (
-                  <>
-                    <Play className="mr-2 h-4 w-4" />
-                    Sync
-                  </>
-                )}
+                  {syncing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Syncing…
+                    </>
+                  ) : (
+                    "Sync now"
+                  )}
               </Button>
 
               <Dialog open={isUrlDialogOpen} onOpenChange={setIsUrlDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="bg-primary text-white">
-                    Add Web URL
+                  <Button variant="outline" className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground">
+                    Add web URL
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-md">
@@ -1079,9 +1104,9 @@ export default function DataSourceManagement() {
 
               <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="bg-primary text-white">
+                  <Button variant="outline" className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground">
                     <Upload className="mr-2 h-4 w-4" />
-                    Add Data (CSV or Markdown)
+                    Upload files or video
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-2xl">
@@ -1422,12 +1447,12 @@ export default function DataSourceManagement() {
           )}
         </div>
 
-        <Card className="border-gray-200 shadow-sm">
+        <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
           <CardHeader className="pb-3">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
               <Input
-                placeholder="Search your Sources"
+                placeholder="Search by name or type"
                 className="pl-9 max-w-md bg-gray-50 border-gray-200"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}

@@ -1,17 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Save,
-  Bot,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Trash2,
-  Edit2,
-  X,
-  List,
   Sparkles,
   Eye,
-  Route,
 } from "lucide-react";
 import {
   Card,
@@ -26,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { AuthService } from "@/functions/authService";
 import { getCurrentUser } from "aws-amplify/auth";
 import SystemMessageEditor from "@/components/Admin/SystemMessageEditor";
+import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 import type {
   SystemMessageType,
   SystemMessageVersion,
@@ -43,7 +35,6 @@ type SystemSettingsDTO = {
   scope_alignment_score_threshold: number;
   grounded_threshold: number;
   partially_grounded_threshold: number;
-  specialization_list?: string[];
   updated_at?: string;
   updated_by_email?: string | null;
 };
@@ -61,7 +52,6 @@ const DEFAULT_SETTINGS: SystemSettingsDTO = {
   scope_alignment_score_threshold: 0.25,
   grounded_threshold: 0.75,
   partially_grounded_threshold: 0.5,
-  specialization_list: [],
 };
 
 // Default seeded messages (v1, active, created_by NULL)
@@ -343,16 +333,6 @@ const PROMPT_STACK_ORDER: Array<{
     getPreview: (_, messages) => getActiveVersion(messages.system_instructions)?.content ?? "",
   },
   {
-    key: "allowed_specializations",
-    title: "Allowed Specializations",
-    getPreview: (_, __, settings) => {
-      const specCount = settings.specialization_list?.length ?? 0;
-      return specCount > 0
-        ? `${specCount} specialization${specCount === 1 ? "" : "s"} available`
-        : "No specializations configured";
-    },
-  },
-  {
     key: "guardrails",
     title: "Guardrails",
     getPreview: (_, messages) => getActiveVersion(messages.guardrails)?.content ?? "",
@@ -406,15 +386,13 @@ function PromptAssemblyCard({
   );
 
   return (
-    <Card className="border-gray-200 shadow-sm">
+    <Card className="rounded-[13px] border-foreground/12 shadow-sm">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Route className="h-5 w-5 text-primary" />
-          How the Prompt Is Built
+        <CardTitle className="text-[18.5px] font-bold tracking-[-0.01em]">
+          How a reply is assembled
         </CardTitle>
         <CardDescription>
-          The assistant’s final prompt is assembled from active message blocks in a fixed order.
-          The phase section changes depending on how far the conversation has progressed.
+          Blocks are stacked in this fixed order. Only the phase block changes as a conversation progresses.
         </CardDescription>
       </CardHeader>
 
@@ -480,10 +458,6 @@ export default function SystemSettings() {
   const [settings, setSettings] = useState<SystemSettingsDTO>(DEFAULT_SETTINGS);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
 
-  const [specsExpanded, setSpecsExpanded] = useState(false);
-  const [newSpecName, setNewSpecName] = useState("");
-  const [editingSpecIdx, setEditingSpecIdx] = useState<number | null>(null);
-  const [editingSpecName, setEditingSpecName] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -512,12 +486,21 @@ export default function SystemSettings() {
   );
 
   const fetchAdminCredentials = async () => {
+    if (isDemoMode) {
+      setAdminEmail(DEMO_ADMIN_EMAIL);
+      return;
+    }
     const user = await getCurrentUser();
     const email = user?.signInDetails?.loginId ?? null;
     setAdminEmail(email);
   };
 
   const fetchSystemSettings = async () => {
+    if (isDemoMode) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -553,7 +536,6 @@ export default function SystemSettings() {
         scope_alignment_score_threshold: data.scope_alignment_score_threshold ?? DEFAULT_SETTINGS.scope_alignment_score_threshold,
         grounded_threshold: data.grounded_threshold ?? DEFAULT_SETTINGS.grounded_threshold,
         partially_grounded_threshold: data.partially_grounded_threshold ?? DEFAULT_SETTINGS.partially_grounded_threshold,
-        specialization_list: data.specialization_list ?? DEFAULT_SETTINGS.specialization_list,
         updated_at: data.updated_at,
         updated_by_email: data.updated_by_email ?? null,
       });
@@ -566,6 +548,9 @@ export default function SystemSettings() {
   };
 
   const fetchSystemMessages = async () => {
+    if (isDemoMode) {
+      return;
+    }
     try {
       const session = await AuthService.getAuthSession(true);
       const token = session.tokens.idToken;
@@ -611,7 +596,6 @@ export default function SystemSettings() {
         scope_alignment_score_threshold: settings.scope_alignment_score_threshold,
         grounded_threshold: settings.grounded_threshold,
         partially_grounded_threshold: settings.partially_grounded_threshold,
-        specialization_list: settings.specialization_list,
         updated_by_email: adminEmail,
       };
 
@@ -772,23 +756,24 @@ export default function SystemSettings() {
   }, []);
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in duration-500">
+    <div className="mx-auto max-w-[1000px] space-y-6">
       <div>
-        <h2 className="text-3xl font-bold text-gray-900">System Settings</h2>
-        <p className="text-gray-500 mt-1">
-          Configure global platform settings including limits and AI behavior.
+        <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
+          Assistant settings
+        </h1>
+        <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+          Limits, tone of the detective questions, and the wording families see.
         </p>
       </div>
 
       {/* System settings */}
-      <Card className="border-gray-200 shadow-sm">
+      <Card className="rounded-[13px] border-foreground/12 shadow-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary" />
-            System Settings
+          <CardTitle className="text-[18.5px] font-bold tracking-[-0.01em]">
+            Conversation limits
           </CardTitle>
           <CardDescription>
-            Configure global limits and model sampling behavior (stored in system_settings).
+            Changes apply to new conversations right away.
           </CardDescription>
         </CardHeader>
 
@@ -916,155 +901,6 @@ export default function SystemSettings() {
                   <p className="text-xs text-gray-500">How strictly the assistant sticks to the most likely words when writing responses. Typical range: 0.8–0.95</p>
                 </div>
 
-                {/* Specializations List (Inner Dropdown) */}
-                <div className="md:col-span-2 border border-gray-200 rounded-lg mt-8">
-                  <div
-                    className={`cursor-pointer hover:bg-gray-50 transition-colors flex flex-row items-center justify-between p-6 ${specsExpanded ? 'border-b border-gray-100 rounded-t-lg' : 'rounded-lg'}`}
-                    onClick={() => setSpecsExpanded(!specsExpanded)}
-                  >
-                    <div className="flex flex-col space-y-1.5">
-                      <h3 className="font-semibold leading-none tracking-tight flex items-center gap-2">
-                        <List className="h-5 w-5 text-primary" />
-                        Specializations
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Manage the list of available specializations
-                      </p>
-                    </div>
-                    {specsExpanded ? (
-                      <ChevronUp className="h-5 w-5 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5 text-gray-400" />
-                    )}
-                  </div>
-
-                  {specsExpanded && (
-                    <div className="space-y-4 p-6 pt-4 bg-gray-50/50 rounded-b-lg">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Input
-                          placeholder="New specialization name..."
-                          value={newSpecName}
-                          onChange={(e) => setNewSpecName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && newSpecName.trim()) {
-                              setSettings((s) => ({
-                                ...s,
-                                specialization_list: [...(s.specialization_list || []), newSpecName.trim()],
-                              }));
-                              setNewSpecName("");
-                            }
-                          }}
-                          className="bg-white"
-                        />
-                        <Button
-                          variant="outline"
-                          className="shrink-0 bg-white"
-                          onClick={() => {
-                            if (newSpecName.trim()) {
-                              setSettings((s) => ({
-                                ...s,
-                                specialization_list: [...(s.specialization_list || []), newSpecName.trim()],
-                              }));
-                              setNewSpecName("");
-                            }
-                          }}
-                        >
-                          <Plus className="mr-2 h-4 w-4" /> Add
-                        </Button>
-                      </div>
-
-                      <div className="border rounded-md divide-y bg-white max-h-[400px] overflow-y-auto">
-                        {(settings.specialization_list || []).map((spec, idx) => (
-                          <div key={idx} className="flex items-center justify-between p-3 hover:bg-gray-50 group">
-                            {editingSpecIdx === idx ? (
-                              <div className="flex items-center gap-2 flex-1 mr-4">
-                                <Input
-                                  value={editingSpecName}
-                                  onChange={(e) => setEditingSpecName(e.target.value)}
-                                  className="h-8"
-                                  autoFocus
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" && editingSpecName.trim()) {
-                                      setSettings((s) => {
-                                        const newList = [...(s.specialization_list || [])];
-                                        newList[idx] = editingSpecName.trim();
-                                        return { ...s, specialization_list: newList };
-                                      });
-                                      setEditingSpecIdx(null);
-                                    } else if (e.key === "Escape") {
-                                      setEditingSpecIdx(null);
-                                    }
-                                  }}
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 w-8 p-0"
-                                  onClick={() => {
-                                    if (editingSpecName.trim()) {
-                                      setSettings((s) => {
-                                        const newList = [...(s.specialization_list || [])];
-                                        newList[idx] = editingSpecName.trim();
-                                        return { ...s, specialization_list: newList };
-                                      });
-                                      setEditingSpecIdx(null);
-                                    }
-                                  }}
-                                >
-                                  <Save className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 w-8 p-0"
-                                  onClick={() => setEditingSpecIdx(null)}
-                                >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            ) : (
-                              <>
-                                <span className="text-sm font-medium">{spec}</span>
-                                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-8 w-8 p-0"
-                                    onClick={() => {
-                                      setEditingSpecIdx(idx);
-                                      setEditingSpecName(spec);
-                                    }}
-                                  >
-                                    <Edit2 className="h-4 w-4 text-gray-500 hover:text-blue-500" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                    onClick={() => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        specialization_list: (s.specialization_list || []).filter((_, i) => i !== idx),
-                                      }));
-                                    }}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        ))}
-                        {(!settings.specialization_list || settings.specialization_list.length === 0) && (
-                          <div className="p-4 text-center text-sm text-gray-500">
-                            No specializations found.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
                 <div className="md:col-span-2 pt-2">
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4">
                     <div className="font-semibold text-amber-900">Hallucination Checks</div>
@@ -1160,7 +996,7 @@ export default function SystemSettings() {
                   className="bg-primary hover:bg-primary/90"
                 >
                   <Save className="mr-2 h-4 w-4" />
-                  {saving ? "Saving..." : "Save Changes"}
+                  {saving ? "Saving…" : "Save changes"}
                 </Button>
               </div>
 
@@ -1180,9 +1016,11 @@ export default function SystemSettings() {
       {/* System Messages */}
       <div className="space-y-4">
         <div>
-          <h3 className="text-2xl font-bold text-gray-900">System Messages</h3>
-          <p className="text-gray-500 mt-1">
-            View and edit different messages shown throughout the application. Version history is preserved so rollback remains possible.
+          <h3 className="text-[18.5px] font-bold tracking-[-0.01em] text-foreground">
+            Wording library
+          </h3>
+          <p className="mt-1 text-[13.5px] leading-normal text-foreground/80">
+            Every edit creates a new version. The active version is what families get.
           </p>
         </div>
 

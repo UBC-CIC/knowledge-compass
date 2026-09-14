@@ -8,6 +8,7 @@ from helpers.crud import (
 )
 from helpers.logic import get_current_prompt
 from helpers.bedrock import retrieve_documents, format_context_for_prompt
+from helpers.retrieval import retrieve_from_pgvector
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import check_limit, record_message_sent
@@ -38,9 +39,9 @@ def _rewrite_query_for_retrieval(
 
     rewrite_system_prompt = """
 <instructions>
-You are a search query optimizer for a university specialization database.
+You are a search query optimizer for an inclusive-education knowledge base for families in Canada.
 Given the conversation history and the user's latest message, generate a short, keyword-rich search query to find relevant documents.
-Focus on academic subjects, degree requirements, career goals, and specific interests mentioned.
+Focus on the family's situation and needs — for example: involuntary partial day attendance, reduced school schedule, exclusion from activities, requesting decisions in writing, support/accommodation plans, school meetings, transitions, EA support, rights and advocacy, and escalation.
 Output ONLY the search query. Do not include explanations, preambles, or quotes.
 </instructions>
 """
@@ -132,33 +133,37 @@ def _prepare_conversation(
     )
 
     # 6. RAG Retrieval (using rewritten query)
-    sources = retrieve_documents(
-        search_query,
-        knowledge_base_id,
-        region,
-        num_retrieval_results,
-        search_type=search_type
-    )
+    # Retrieval backend is feature-flagged during the pgvector migration. Both
+    # retrievers return the same source dict shape, so the rest of this function
+    # (context building, prompt assembly) is unchanged.
+    if config.USE_PGVECTOR_RETRIEVAL:
+        sources = retrieve_from_pgvector(
+            search_query,
+            db_connection,
+            region,
+            num_results=num_retrieval_results,
+        )
+    else:
+        sources = retrieve_documents(
+            search_query,
+            knowledge_base_id,
+            region,
+            num_retrieval_results,
+            search_type=search_type
+        )
     
     # 7. Build Context
     context_block = format_context_for_prompt(sources)
     
-    # 8. Construct Final System Prompt
+    # 8. Construct Final System Prompt.
+    # The phase block (from logic.get_current_prompt) already carries the
+    # phase-appropriate <output_format> — including the <answer>/<cited_indices>
+    # contract for the suggestion phase — so chat.py only appends retrieved context.
     dynamic_prompt = f"""{phase_instructions}
 
 <retrieved_context>
 {context_block}
 </retrieved_context>
-
-<response_instructions>
-1. Answer the user's question using the retrieved_context if relevant.
-2. If the user is just chatting (e.g. "hello", "thanks"), respond naturally.
-3. If the retrieved context does not clearly support the answer, say you do not have enough grounded information and ask a clarifying question.
-4. Do NOT invent course names, requirements, or specialization details that are not supported by the retrieved context.
-
-You MUST wrap your conversational response to the user in <answer> tags.
-After your answer, you MUST list the integer indices of the sources you actively used inside <cited_indices> tags as a JSON array (e.g., <cited_indices>[1, 3]</cited_indices>). If none, use <cited_indices>[]</cited_indices>.
-</response_instructions>
 """
 
     # 9. Build Messages

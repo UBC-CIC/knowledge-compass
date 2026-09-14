@@ -1,9 +1,6 @@
 import { useState, useEffect } from "react";
-import { Outlet, useNavigate } from "react-router";
 import { ViewProvider } from "@/providers/ViewContext";
-import { SidebarProvider } from "@/providers/SidebarContext";
 import SideBar from "@/components/ChatInterface/SideBar";
-// import Footer from "@/components/Footer";
 import type { ChatSession } from "@/providers/view";
 import { useUser } from "@/providers/user";
 import { Button } from "@/components/ui/button";
@@ -15,10 +12,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Menu, X } from "lucide-react";
+import { useSidebar } from "@/providers/sidebar";
+import AIChatPage from "@/pages/ChatInterface/ChatInterface";
+import {
+  DEMO_USER_ID,
+  deleteDemoSessionState,
+  isDemoMode,
+  seedDemoHistory,
+  setDemoSessionState,
+} from "@/lib/demo";
 
 const DEFAULT_WELCOME_MESSAGE =
-  "Together we will try to find the right program for you. Click below to start a new conversation:";
-const DEFAULT_DISCLAIMER = "AI can make mistakes. Check important info.";
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_DISCLAIMER =
+  "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 
 type UserProfile = {
   id: string;
@@ -50,24 +58,26 @@ type UpdateUserEmailResult =
 
 export default function HomePage() {
   const { userId, isLoading: isLoadingUser } = useUser();
-  const navigate = useNavigate();
+  const { mobileOpen, toggleMobile } = useSidebar();
 
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(
+    isDemoMode ? seedDemoHistory() : []
+  );
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(
     null
   );
   const [currentMessages, setCurrentMessages] = useState<any[]>([]);
   const [activeChatName, setActiveChatName] = useState<string | null>(null);
-  const [isLoadingChatSessions, setIsLoadingChatSessions] = useState(true);
+  const [isLoadingChatSessions, setIsLoadingChatSessions] = useState(!isDemoMode);
   const [welcomeMessage, setWelcomeMessage] = useState<string>(
     DEFAULT_WELCOME_MESSAGE
   );
-  const [isLoadingWelcome, setIsLoadingWelcome] = useState(true);
+  const [isLoadingWelcome, setIsLoadingWelcome] = useState(!isDemoMode);
   const [disclaimer, setDisclaimer] = useState<string>(DEFAULT_DISCLAIMER);
-  const [isLoadingDisclaimer, setIsLoadingDisclaimer] = useState(true);
+  const [isLoadingDisclaimer, setIsLoadingDisclaimer] = useState(!isDemoMode);
 
   // Email / anonymity modal state
-  const [isCheckingUserProfile, setIsCheckingUserProfile] = useState(true);
+  const [isCheckingUserProfile, setIsCheckingUserProfile] = useState(!isDemoMode);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailChoiceStep, setEmailChoiceStep] = useState<"choice" | "email">(
     "choice"
@@ -75,6 +85,9 @@ export default function HomePage() {
   const [emailInput, setEmailInput] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [conversationFacts, setConversationFacts] = useState<
+    Record<string, string>
+  >({});
 
   const getAnonymousChoiceKey = (id: string) => `specEx_anonymous_choice_${id}`;
 
@@ -285,6 +298,12 @@ const normalizeChatSession = (session: any): ChatSession => ({
 
   // Fetch chat sessions for the user
   const fetchChatSessions = async () => {
+    if (isDemoMode) {
+      setChatSessions(seedDemoHistory());
+      setIsLoadingChatSessions(false);
+      return;
+    }
+
     if (!userId) {
       setIsLoadingChatSessions(false);
       return;
@@ -320,6 +339,16 @@ const normalizeChatSession = (session: any): ChatSession => ({
   useEffect(() => {
     if (isLoadingUser) return;
 
+    if (isDemoMode) {
+      setChatSessions(seedDemoHistory());
+      setIsLoadingChatSessions(false);
+      setIsCheckingUserProfile(false);
+      setShowEmailModal(false);
+      setIsLoadingWelcome(false);
+      setIsLoadingDisclaimer(false);
+      return;
+    }
+
     setIsLoadingWelcome(true);
     setIsLoadingDisclaimer(true);
 
@@ -343,6 +372,25 @@ const normalizeChatSession = (session: any): ChatSession => ({
 
   // Create a new chat session
   const createNewChatSession = async (): Promise<ChatSession | null> => {
+    if (isDemoMode) {
+      const newSession: ChatSession = {
+        id: `demo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: "",
+        user_id: userId || DEMO_USER_ID,
+        created_at: new Date().toISOString(),
+      };
+      setDemoSessionState(newSession.id, {
+        messages: [],
+        facts: {},
+        asked: 0,
+        showGuidance: false,
+      });
+      setChatSessions((prev) => [newSession, ...prev]);
+      setActiveChatSessionId(newSession.id);
+      setConversationFacts({});
+      return newSession;
+    }
+
     if (!userId) return null;
 
     try {
@@ -393,6 +441,9 @@ const normalizeChatSession = (session: any): ChatSession => ({
   };
 
   const removeChatSession = (sessionId: string) => {
+    if (isDemoMode) {
+      deleteDemoSessionState(sessionId);
+    }
     setChatSessions((prev) => prev.filter((session) => session.id !== sessionId));
     setActiveChatSessionId((current) => (current === sessionId ? null : current));
   };
@@ -401,10 +452,22 @@ const normalizeChatSession = (session: any): ChatSession => ({
     sessionId: string,
     name: string
   ): Promise<ChatSession | null> => {
-    if (!userId) return null;
-
     const trimmedName = name.trim();
     if (!trimmedName) return null;
+
+    if (isDemoMode) {
+      let updated: ChatSession | null = null;
+      setChatSessions((prev) =>
+        prev.map((session) => {
+          if (session.id !== sessionId) return session;
+          updated = { ...session, name: trimmedName };
+          return updated;
+        })
+      );
+      return updated;
+    }
+
+    if (!userId) return null;
 
     try {
       const { token } = await getPublicToken();
@@ -436,14 +499,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     } catch (err) {
       console.error("Error renaming chat session:", err);
       return null;
-    }
-  };
-
-  // Welcome CTA action
-  const handleStartNewConversation = async () => {
-    const session = await createNewChatSession();
-    if (session) {
-      navigate("/chat");
     }
   };
 
@@ -522,15 +577,24 @@ const normalizeChatSession = (session: any): ChatSession => ({
     setIsSavingEmail(false);
   };
 
-  // Show loading screen while fetching initial data
+  const userTurns = currentMessages.filter(
+    (m) => m.sender === "user" && typeof m.text === "string" && m.text.trim()
+  ).length;
+  const conversationProgress = !activeChatSessionId
+    ? 0
+    : Math.min(100, (userTurns / 4) * 100);
+  const progressLabel = !activeChatSessionId
+    ? "4 short questions"
+    : userTurns >= 4
+      ? "Guidance ready"
+      : `Question ${Math.min(Math.max(userTurns, 1), 4)} of 4`;
+
   if (isLoadingUser || isLoadingChatSessions || isCheckingUserProfile) {
     return (
-      <div className="flex flex-col min-h-screen bg-background">
-        <div className="pt-[70px] flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading...</p>
-          </div>
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Loading...</p>
         </div>
       </div>
     );
@@ -554,55 +618,58 @@ const normalizeChatSession = (session: any): ChatSession => ({
         setCurrentMessages,
         activeChatName,
         setActiveChatName,
+        conversationFacts,
+        setConversationFacts,
       }}
     >
-      <SidebarProvider>
-        <div className="flex flex-col h-full bg-background overflow-hidden">
+        <div className="flex h-full overflow-hidden bg-white">
           <SideBar />
-          <div className="md:ml-64 flex flex-col flex-1 min-h-0">
-            <main
-              className={`flex-1 flex flex-col items-center max-w-screen px-4 min-h-0 ${
-                activeChatSessionId ? "justify-start overflow-hidden" : "justify-center"
-              }`}
-            >
-              {!activeChatSessionId ? (
-                <div className="w-full max-w-2xl text-center">
-                  <h1 className="text-3xl md:text-4xl font-bold mb-4 leading-tight">
-                    Welcome to Specialization Explorer!
-                  </h1>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10 px-4 py-4 md:px-[34px]">
+              <button
+                type="button"
+                onClick={toggleMobile}
+                aria-label="Toggle menu"
+                aria-expanded={mobileOpen}
+                className="flex size-11 items-center justify-center rounded-[9px] border border-foreground/16 bg-white md:hidden"
+              >
+                {mobileOpen ? (
+                  <X className="h-5 w-5" />
+                ) : (
+                  <Menu className="h-5 w-5" />
+                )}
+              </button>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-foreground/12">
+                <div
+                  className="h-full rounded-[3px] bg-primary transition-[width] duration-500 ease-[cubic-bezier(0.2,0.7,0.3,1)]"
+                  style={{ width: `${conversationProgress}%` }}
+                />
+              </div>
+              <div className="shrink-0 text-[12.5px] font-semibold text-foreground/80">
+                {progressLabel}
+              </div>
+            </div>
 
-                  <p className="text-base md:text-lg text-muted-foreground mb-8 whitespace-pre-line">
-                    {isLoadingWelcome ? "Loading..." : welcomeMessage}
-                  </p>
-
-                  <Button
-                    size="lg"
-                    onClick={handleStartNewConversation}
-                    className="px-8"
-                    disabled={isLoadingWelcome}
-                  >
-                    Start a new conversation
-                  </Button>
-
-                  <p className="mt-4 text-xs text-muted-foreground">
-                    {isLoadingDisclaimer ? "" : disclaimer}
-                  </p>
-                </div>
-              ) : (
-                <Outlet />
-              )}
+            <main className="flex min-h-0 flex-1 flex-col">
+              <AIChatPage
+                welcomeMessage={welcomeMessage}
+                disclaimer={disclaimer}
+                isLoadingWelcome={isLoadingWelcome || isLoadingDisclaimer}
+              />
             </main>
-            {/* <Footer /> */}
           </div>
 
           <Dialog open={showEmailModal}>
             <DialogContent
               className="sm:max-w-md"
+              showCloseButton={false}
               onEscapeKeyDown={(e) => e.preventDefault()}
               onInteractOutside={(e) => e.preventDefault()}
             >
               <DialogHeader>
-                <DialogTitle>Would you like to stay anonymous?</DialogTitle>
+                <DialogTitle className="font-serif text-[26px] font-semibold">
+                  Would you like to stay anonymous?
+                </DialogTitle>
                 <DialogDescription>
                   You can continue anonymously, or provide your email so we can
                   associate it with your account.
@@ -652,7 +719,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
             </DialogContent>
           </Dialog>
         </div>
-      </SidebarProvider>
     </ViewProvider>
   );
 }

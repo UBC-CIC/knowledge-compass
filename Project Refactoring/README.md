@@ -81,11 +81,15 @@ A Jupyter notebook that demonstrates the full conversation flow: detective phase
 
 Migrations live in `cdk/lambda/db_setup/migrations/`. The three relevant migrations:
 
-| Migration | Tables Added | Purpose |
+> Note: the original handoff proposed separate `001_crawler_embeddings.js` /
+> `002_video_chunks.js` / `003_unified_chunks.js` migrations. The implementation
+> consolidated these into a single migration (see below), so those intermediate
+> migrations were never created.
+
+| Migration | Tables Added / Changed | Purpose |
 |---|---|---|
-| `001_crawler_embeddings.js` | `crawl_sources`, `crawl_runs`, `crawl_pages`, `page_chunks` | Original web crawl schema (superseded by 003) |
-| `002_video_chunks.js` | `video_sources`, `video_chunks` | Original video schema (superseded by 003) |
-| `003_unified_chunks.js` | `sources`, `chunks`, `crawl_runs` | Unified schema — everything goes here |
+| `000_initial_schema.js` | users, chat_*, system_*, data_sources, ingestion_runs | Base app schema (+ `vector` extension) |
+| `001_unified_chunks.js` | `sources`, `chunks`; extends `ingestion_runs` | Unified pgvector retrieval corpus + unified ingestion-run model |
 
 **`sources` table:** one row per ingested source (web page or video).
 - `source_type`: `'web'` or `'video'`

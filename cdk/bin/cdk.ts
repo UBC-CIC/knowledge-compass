@@ -7,6 +7,7 @@ import { DBFlowStack } from "../lib/dbFlow-stack";
 import { AmplifyStack } from "../lib/amplify-stack";
 import { CICDStack } from "../lib/cicd-stack";
 import { KnowledgeBaseStack } from "../lib/knowledge-base-stack";
+import { IngestionStack } from "../lib/ingestion-stack";
 
 const app = new cdk.App();
 
@@ -49,9 +50,26 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
       functionName: `${StackPrefix}-KnowledgeBase-VectorIndexManagerFn-v2`,
       sourceDir: "cdk/lambda/vectorIndexManagerSigV4",
     },
+    // pgvector ingestion container images (R2). These are ECS task images, not
+    // Lambdas, so functionName is unused by the ECS consumer; the CICD build step
+    // that runs `lambda update-function-code` no-ops when the function is absent.
+    // Build context is "Project Refactoring" so the shared common/ package is present.
+    {
+      name: "crawler",
+      functionName: `${StackPrefix}-Ingestion-Crawler`,
+      sourceDir: "Project Refactoring/crawler",
+    },
+    {
+      name: "transcriber",
+      functionName: `${StackPrefix}-Ingestion-Transcriber`,
+      sourceDir: "Project Refactoring/transcriber",
+    },
   ],
   pathFilters: [
     "cdk/lambda/vectorIndexManagerSigV4/**",
+    "Project Refactoring/crawler/**",
+    "Project Refactoring/transcriber/**",
+    "Project Refactoring/common/**",
   ],
 });
 
@@ -65,6 +83,23 @@ const kbStack = new KnowledgeBaseStack(app, `${StackPrefix}-KnowledgeBase`, {
 });
 kbStack.addDependency(cicdStack);
 kbStack.addDependency(vpcStack);
+
+// pgvector ingestion infrastructure (R2). SYNTH-PENDING: see ingestion-stack.ts.
+const ingestionStack = new IngestionStack(
+  app,
+  `${StackPrefix}-Ingestion`,
+  vpcStack,
+  dbStack,
+  {
+    env,
+    stackPrefix: StackPrefix,
+    crawlerRepository: cicdStack.ecrRepositories["crawler"],
+    transcriberRepository: cicdStack.ecrRepositories["transcriber"],
+  }
+);
+ingestionStack.addDependency(cicdStack);
+ingestionStack.addDependency(vpcStack);
+ingestionStack.addDependency(dbStack);
 
 const apiStack = new ApiGatewayStack(
   app,
@@ -80,6 +115,17 @@ const apiStack = new ApiGatewayStack(
 );
 apiStack.addDependency(kbStack);
 apiStack.addDependency(cicdStack);
+
+// SYNTH-PENDING integration (R2): to activate the pgvector ingestion path, the
+// ApiGatewayStack must accept the IngestionStack and, on lambdaKnowledgeBase:
+//   1. add env: ingestionStack.ingestionEnv()  (sets INGESTION_BACKEND=pgvector +
+//      ECS_CLUSTER_ARN / TASK_DEF_ARNs / SUBNET_IDS / SECURITY_GROUP_IDS / container names)
+//   2. grant run access: ingestionStack.grantRunTasks(lambdaKnowledgeBase)
+// This is intentionally NOT wired here to avoid coupling api-stack to the
+// ingestion stack before a dev-stack `cdk synth` review. Also note: the CICD
+// buildspec builds with context = sourceDir, but the crawler/transcriber
+// Dockerfiles expect context = "Project Refactoring/" (for the shared common/
+// package) — the buildspec (cicd-stack.ts) must be adjusted for these two images.
 
 const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
   env,
@@ -104,6 +150,7 @@ const stacks = [
   dbFlowStack,
   cicdStack,
   kbStack,
+  ingestionStack,
   apiStack,
   amplifyStack,
 ];

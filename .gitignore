@@ -3,6 +3,9 @@
 !lambda/*/*.js
 !lambda/*/*/*.js
 !jest.config.js
+# CDK Lambda source lives under cdk/lambda; keep it tracked (patterns above are
+# not anchored to the cdk/ subdir, so add cdk-anchored negations here).
+!cdk/lambda/**/*.js
 *.d.ts
 node_modules
 
@@ -13,7 +16,23 @@ cdk.out
 # CDK context file contains sensitive account information
 cdk.context.json
 
-# testing stuff 
-.claude 
-test
-CLAUDE.md 
+
+.kiro
+
+# ── Ingestion prototype (Project Refactoring) ──────────────────────────────
+# Local crawl/transcribe outputs — never commit scraped content dumps
+crawl_output.json
+vtt_output.json
+Project Refactoring/**/crawl_output.json
+Project Refactoring/**/vtt_output.json
+
+# RDS CA bundle is fetched at runtime; do not commit downloaded copies
+global-bundle.pem
+Project Refactoring/**/global-bundle.pem
+
+# Local environment files (may hold DB endpoints / credentials)
+.env
+.env.*
+!.env.example
+
+new frontend

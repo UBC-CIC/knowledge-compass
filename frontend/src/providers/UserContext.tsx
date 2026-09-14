@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UserContext } from "./user";
+import { DEMO_USER_ID, isDemoMode } from "@/lib/demo";
 
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(isDemoMode ? DEMO_USER_ID : null);
+  const [isLoading, setIsLoading] = useState(!isDemoMode);
   const [error, setError] = useState<Error | null>(null);
   const LOCAL_KEY = "specEx_user_session";
 
   useEffect(() => {
+    if (isDemoMode) {
+      return;
+    }
     const validateUser = async (stored: {
       userId: string;
       createdAt?: string;

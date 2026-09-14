@@ -2,10 +2,16 @@
 """
 Prototype web crawler + chunker + embeddings writer for the Inclusion Canada RAG pipeline.
 
+Configuration is secret-free and environment-driven. See
+`Project Refactoring/common/db_config.py` for the full list of environment
+variables and supported credential modes (RDS IAM auth, Secrets Manager, or a
+local DB_PASSWORD fallback).
+
 Usage (crawl only — outputs crawl_output.json):
     python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 50
 
 Usage (crawl + fixed-size chunking + write to DB):
+    export DB_HOST=... DB_NAME=... DB_USER=...   # DB_AUTH=iam by default
     python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 50 --write-db
 
 Usage (crawl + semantic chunking + write to DB):
@@ -14,52 +20,60 @@ Usage (crawl + semantic chunking + write to DB):
 Requirements:
     pip install -r requirements.txt
     playwright install chromium
-    curl -o AmazonRootCA1.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+    # For verify-full TLS to RDS, download the CA bundle and set DB_SSL_ROOT_CERT:
+    curl -o global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+    export DB_SSL_ROOT_CERT=$(pwd)/global-bundle.pem
 """
 
 import argparse
 import asyncio
 import hashlib
+import importlib.util
 import json
+import os
 import re
 import sys
 from xml.etree import ElementTree as ET
 
 import boto3
-import psycopg2
 import trafilatura
 from bs4 import BeautifulSoup
 from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Shared secret-free config ─────────────────────────────────────────────────
+# Prefer the package import; fall back to loading the sibling common/db_config.py
+# by path so this script also works when copied standalone (e.g. onto SageMaker).
+try:
+    from common import db_config  # type: ignore
+except ImportError:
+    _common_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "db_config.py",
+    )
+    if not os.path.exists(_common_path):
+        _common_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_config.py")
+    _spec = importlib.util.spec_from_file_location("db_config", _common_path)
+    db_config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(db_config)  # type: ignore
 
-REGION = "ca-central-1"
 
-DB_HOST = "kc-database-kcdatabasedatabase02579448-iw9mhy8sqo4a.crecym6ketcm.ca-central-1.rds.amazonaws.com"
-DB_NAME = "KC"
-DB_USER = "app_rw"
-DB_PORT = 5432
-SSL_CERT = "AmazonRootCA1.pem"
+# ── Config (environment-driven) ───────────────────────────────────────────────
 
-EMBED_MODEL_ID = "cohere.embed-english-v3"
-EMBED_BATCH_SIZE = 96  # Cohere API limit per call
+REGION = db_config.get_region()
+EMBED_MODEL_ID = db_config.get_embed_model_id()
+EMBED_BATCH_SIZE = db_config.get_embed_batch_size()  # Cohere API limit is 96 per call
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def get_db_connection():
-    """IAM auth connection to RDS — token is valid for 15 minutes."""
-    token = "abf4ccf3c559d547d051f2056ef86e5f"
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
-        user=DB_USER,
-        password=token,
-        sslmode="verify-full",
-        sslrootcert=SSL_CERT,
-    )
+    """
+    Open a connection using the shared secret-free config. Credentials come from
+    the environment (RDS IAM auth by default). No secrets are stored in source.
+    """
+    return db_config.get_db_connection()
 
 
 def upsert_source(conn, url: str, name: str, source_type: str = "web") -> str:
@@ -79,26 +93,59 @@ def upsert_source(conn, url: str, name: str, source_type: str = "web") -> str:
         return str(cur.fetchone()[0])
 
 
-def start_crawl_run(conn, source_id: str) -> str:
+def start_crawl_run(conn, source_id: str, job_id: str = None) -> str:
+    """
+    Begin (or adopt) an ingestion run in the unified `ingestion_runs` table.
+
+    If `job_id` is provided (e.g. a run row pre-created by the proxy Lambda when
+    an admin/EventBridge triggers a crawl), mark that existing row 'running'.
+    Otherwise (standalone CLI use) insert a fresh run row. Returns the run id.
+
+    Note: `ingestion_runs.status` is the `ingestion_status` enum
+    (pending|queued|running|failed|completed) from migration 000.
+    """
     with conn.cursor() as cur:
+        if job_id:
+            cur.execute(
+                """
+                UPDATE ingestion_runs
+                   SET status     = 'running',
+                       source_id  = %s,
+                       started_at = now()
+                 WHERE id = %s
+                RETURNING id
+                """,
+                (source_id, job_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row[0])
+            # Fall through to insert if the supplied job_id was not found.
         cur.execute(
-            "INSERT INTO crawl_runs (source_id, status, started_at) VALUES (%s, 'running', now()) RETURNING id",
+            """
+            INSERT INTO ingestion_runs (source_id, status, started_at)
+            VALUES (%s, 'running', now())
+            RETURNING id
+            """,
             (source_id,),
         )
         return str(cur.fetchone()[0])
 
 
-def finish_crawl_run(conn, run_id: str, status: str, stats: dict) -> None:
+def finish_crawl_run(conn, run_id: str, status: str, stats: dict, error_message: str = None) -> None:
+    """Finalize an ingestion run in the unified `ingestion_runs` table."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE crawl_runs SET
+            UPDATE ingestion_runs SET
               status          = %s,
               pages_crawled   = %s,
               pages_skipped   = %s,
               chunks_upserted = %s,
               chunks_deleted  = %s,
-              finished_at     = now()
+              error_message   = %s,
+              finished_at     = now(),
+              completed_at    = now()
             WHERE id = %s
             """,
             (
@@ -107,6 +154,7 @@ def finish_crawl_run(conn, run_id: str, status: str, stats: dict) -> None:
                 stats.get("pages_skipped", 0),
                 stats.get("chunks_upserted", 0),
                 stats.get("chunks_deleted", 0),
+                error_message,
                 run_id,
             ),
         )
@@ -320,11 +368,13 @@ def _chunk_semantic(
 
 # ── DB Writer ─────────────────────────────────────────────────────────────────
 
-def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int) -> None:
+def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_id: str = None) -> None:
     """
     For each crawled page, upsert a row in sources then upsert chunks.
     Change detection: only call Bedrock for chunks whose content_hash changed.
     Commits per page so a crash mid-crawl doesn't lose everything.
+
+    `job_id` optionally adopts a pre-created ingestion_runs row (proxy Lambda flow).
     """
     conn = get_db_connection()
     stats = {"pages_crawled": 0, "pages_skipped": 0, "chunks_upserted": 0, "chunks_deleted": 0}
@@ -335,7 +385,7 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int) -> N
         seed_source_id = upsert_source(conn, seed_url, seed_url, source_type="web")
         conn.commit()
 
-        run_id = start_crawl_run(conn, seed_source_id)
+        run_id = start_crawl_run(conn, seed_source_id, job_id=job_id)
         conn.commit()
 
         for page in pages:
@@ -378,7 +428,7 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int) -> N
         conn.rollback()
         if run_id:
             try:
-                finish_crawl_run(conn, run_id, "failed", stats)
+                finish_crawl_run(conn, run_id, "failed", stats, error_message=str(e)[:1000])
                 conn.commit()
             except Exception:
                 pass
@@ -670,17 +720,32 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # When run as an ECS Fargate task, the proxy Lambda passes work via env vars.
+    # CLI args take precedence; env vars provide defaults so `seed_url` is optional
+    # in the container. JOB_ID adopts a pre-created ingestion_runs row.
+    env_seed = os.environ.get("SEED_URL")
+    env_job_id = os.environ.get("JOB_ID")
+    env_max_pages = os.environ.get("MAX_PAGES")
+    env_write_db = os.environ.get("WRITE_DB", "").strip().lower() in ("1", "true", "yes")
+    env_semantic = os.environ.get("SEMANTIC", "").strip().lower() in ("1", "true", "yes")
+
     parser = argparse.ArgumentParser(description="Crawl + chunk + embed + write to pgvector DB")
-    parser.add_argument("seed_url", help="Starting URL")
-    parser.add_argument("--max-pages", type=int, default=50)
+    parser.add_argument("seed_url", nargs="?", default=env_seed, help="Starting URL (or SEED_URL env)")
+    parser.add_argument("--max-pages", type=int, default=int(env_max_pages) if env_max_pages else 50)
     parser.add_argument("--max-words", type=int, default=650, help="Max words per chunk before splitting")
     parser.add_argument("--output",   default="crawl_output.json")
-    parser.add_argument("--write-db", action="store_true", help="Embed chunks and write to database")
-    parser.add_argument("--semantic", action="store_true",
+    parser.add_argument("--write-db", action="store_true", default=env_write_db,
+                        help="Embed chunks and write to database (or WRITE_DB env)")
+    parser.add_argument("--job-id", default=env_job_id,
+                        help="Adopt an existing ingestion_runs row id (or JOB_ID env)")
+    parser.add_argument("--semantic", action="store_true", default=env_semantic,
                         help="Use semantic chunking (embed sentences to detect topic boundaries)")
     parser.add_argument("--semantic-threshold", type=float, default=0.6,
                         help="Cosine similarity threshold for topic boundary detection (default 0.6)")
     args = parser.parse_args()
+
+    if not args.seed_url:
+        parser.error("seed_url is required (pass as an argument or set SEED_URL env)")
 
     if args.semantic:
         print(f"Semantic chunking enabled (threshold={args.semantic_threshold})", file=sys.stderr)
@@ -737,7 +802,7 @@ def main() -> None:
 
     if args.write_db:
         print("\nWriting embeddings to database...", file=sys.stderr)
-        write_to_db(pages, args.seed_url, args.max_pages, args.max_words)
+        write_to_db(pages, args.seed_url, args.max_pages, args.max_words, job_id=args.job_id)
 
 
 if __name__ == "__main__":

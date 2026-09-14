@@ -4,9 +4,15 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Bot, User, MessageSquare, ChevronDown, ChevronRight, Clock, RefreshCw } from "lucide-react";
+import { MessageSquare, ChevronDown, ChevronRight, Clock, RefreshCw } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { cn } from "@/lib/utils";
+import {
+  DEMO_ADMIN_MESSAGES,
+  DEMO_ADMIN_SESSIONS,
+  DEMO_ADMIN_USERS,
+  isDemoMode,
+} from "@/lib/demo";
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -104,6 +110,11 @@ export default function ChatHistory() {
     };
 
     const fetchUsers = async (forceRefresh = false) => {
+        if (isDemoMode) {
+            setUsers(DEMO_ADMIN_USERS);
+            setLoadingUsers(false);
+            return;
+        }
         if (!forceRefresh) {
             const cached = getCachedItem('admin_chat_users');
             if (cached) {
@@ -134,6 +145,13 @@ export default function ChatHistory() {
     };
 
     const fetchSessionsForUser = async (userId: string, forceRefresh = false) => {
+        if (isDemoMode) {
+            setUserSessions((prev) => ({
+                ...prev,
+                [userId]: DEMO_ADMIN_SESSIONS[userId] ?? [],
+            }));
+            return;
+        }
         const cacheKey = `admin_chat_sessions_${userId}`;
         if (!forceRefresh) {
             const cached = getCachedItem(cacheKey);
@@ -165,6 +183,11 @@ export default function ChatHistory() {
     };
 
     const fetchMessagesForSession = async (sessionId: string, forceRefresh = false) => {
+        if (isDemoMode) {
+            setMessages(DEMO_ADMIN_MESSAGES[sessionId] ?? []);
+            setLoadingMessages(false);
+            return;
+        }
         const cacheKey = `admin_chat_messages_${sessionId}`;
         if (!forceRefresh) {
             const cached = getCachedItem(cacheKey);
@@ -250,12 +273,14 @@ export default function ChatHistory() {
     };
 
     return (
-        <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in duration-500 flex flex-col h-[calc(100vh-8rem)]">
-            <div className="flex-shrink-0 flex items-center justify-between">
+        <div className="mx-auto flex h-[calc(100vh-8rem)] max-w-[1160px] flex-col space-y-[22px] animate-in fade-in duration-500">
+            <div className="flex-shrink-0 flex items-center justify-between gap-4">
                 <div>
-                    <h2 className="text-3xl font-bold text-gray-900">Chat History</h2>
-                    <p className="text-gray-500 mt-1">
-                        Review user conversations and chat sessions across the platform.
+                    <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
+                        Conversation review
+                    </h1>
+                    <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+                        Read transcripts to check the assistant's answers. Access is logged.
                     </p>
                 </div>
                 <button
@@ -270,14 +295,13 @@ export default function ChatHistory() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 min-h-0">
 
                 {/* Left Column: Users & Chat Sessions */}
-                <Card className="md:col-span-1 border-gray-200 shadow-sm flex flex-col overflow-hidden h-full">
-                    <CardHeader className="flex-shrink-0 border-b pb-4">
-                        <CardTitle className="flex items-center gap-2 text-lg">
-                            <User className="h-5 w-5 text-primary" />
-                            Users & Sessions
+                <Card className="md:col-span-1 flex h-full flex-col overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
+                    <CardHeader className="flex-shrink-0 border-b border-foreground/10 pb-4">
+                        <CardTitle className="text-base font-bold">
+                            Families
                         </CardTitle>
-                        <CardDescription className="text-xs">
-                            Select a user to view their chat sessions.
+                        <CardDescription className="text-[12.5px]">
+                            Open a family to see their conversations.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="flex-1 overflow-y-auto p-0">
@@ -349,22 +373,23 @@ export default function ChatHistory() {
                 </Card>
 
                 {/* Right Column: Conversation Viewer */}
-                <Card className="md:col-span-2 border-gray-200 shadow-sm flex flex-col overflow-hidden h-full">
-                    <CardHeader className="flex-shrink-0 border-b pb-4 bg-gray-50/50">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Bot className="h-5 w-5 text-primary" />
+                <Card className="md:col-span-2 flex h-full flex-col overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
+                    <CardHeader className="flex-shrink-0 border-b border-foreground/10 pb-4">
+                        <CardTitle className="text-base font-bold">
                             Conversation
                         </CardTitle>
-                        <CardDescription className="text-xs">
-                            {selectedSessionId ? "Transcript of selected session." : "Select a session to view the transcript."}
+                        <CardDescription className="text-[12.5px]">
+                            {selectedSessionId ? "Transcript of selected session." : "Pick a family on the left, then one of their conversations."}
                         </CardDescription>
                     </CardHeader>
 
                     <CardContent className="flex-1 overflow-y-auto p-6 md:p-8 bg-white relative">
                         {!selectedSessionId ? (
-                            <div className="flex h-full flex-col items-center justify-center text-gray-400 gap-4">
-                                <MessageSquare className="h-12 w-12 text-gray-200" />
-                                <p className="text-lg">Select a chat session from the left to view the conversation here</p>
+                            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                                <div className="text-base font-semibold text-foreground">No conversation selected</div>
+                                <p className="max-w-[340px] text-[13.5px] leading-relaxed text-foreground/80">
+                                    Pick a family on the left, then one of their conversations.
+                                </p>
                             </div>
                         ) : loadingMessages ? (
                             <div className="flex h-full items-center justify-center">
@@ -387,15 +412,15 @@ export default function ChatHistory() {
                                                 "flex items-center gap-2 mb-1 text-xs",
                                                 isUser ? "justify-end text-gray-500" : "text-gray-500"
                                             )}>
-                                                <span className="font-semibold">{isUser ? "User" : "Assistant"}</span>
+                                                <span className="font-semibold">{isUser ? "Family" : "Assistant"}</span>
                                                 <span className="text-xs opacity-75">{formatDate(msg.created_at)}</span>
                                             </div>
 
                                             <div className={cn(
-                                                "p-5 rounded-2xl shadow-sm text-[15px] leading-relaxed",
+                                                "p-5 rounded-[13px] text-[14.5px] leading-relaxed",
                                                 isUser
-                                                    ? "bg-primary text-primary-foreground rounded-tr-sm"
-                                                    : "bg-gray-50 border border-gray-200 text-gray-800 rounded-tl-sm shadow-md"
+                                                    ? "bg-primary text-primary-foreground rounded-tr-[4px]"
+                                                    : "bg-muted border border-foreground/10 text-foreground rounded-tl-[4px]"
                                             )}>
                                                 {isUser ? (
                                                     <span className="whitespace-pre-wrap">{msg.content}</span>

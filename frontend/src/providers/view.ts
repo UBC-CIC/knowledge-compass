@@ -29,6 +29,8 @@ export type ViewContextType = {
   setCurrentMessages: (messages: any[]) => void;
   activeChatName: string | null;
   setActiveChatName: (name: string | null) => void;
+  conversationFacts: Record<string, string>;
+  setConversationFacts: (facts: Record<string, string>) => void;
 };
 
 export const ViewContext = createContext<

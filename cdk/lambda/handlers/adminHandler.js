@@ -975,7 +975,6 @@ exports.handler = async (event) => {
             latest.scope_alignment_score_threshold,
             latest.grounded_threshold,
             latest.partially_grounded_threshold,
-            latest.specialization_list,
             u.email AS updated_by_email,
             latest.updated_at
           FROM latest
@@ -1131,7 +1130,6 @@ exports.handler = async (event) => {
           "scope_alignment_score_threshold",
           "grounded_threshold",
           "partially_grounded_threshold",
-          "specialization_list",
         ];
 
         const patch = {};
@@ -1281,7 +1279,6 @@ exports.handler = async (event) => {
             scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold}, s.scope_alignment_score_threshold),
             grounded_threshold = COALESCE(${patch.grounded_threshold}, s.grounded_threshold),
             partially_grounded_threshold = COALESCE(${patch.partially_grounded_threshold}, s.partially_grounded_threshold),
-            specialization_list = COALESCE(${patch.specialization_list}, s.specialization_list),
             updated_by = ${updatedByUserId},
             updated_at = NOW()
           WHERE s.id = (SELECT id FROM latest)
@@ -1297,7 +1294,6 @@ exports.handler = async (event) => {
             s.scope_alignment_score_threshold,
             s.grounded_threshold,
             s.partially_grounded_threshold,
-            s.specialization_list,
             s.updated_by,
             s.updated_at
         `;

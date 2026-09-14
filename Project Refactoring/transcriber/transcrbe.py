@@ -2,7 +2,8 @@
 """
 AWS Transcribe JSON ingestor for the Inclusion Canada RAG pipeline.
 Reads audio_segments from a Transcribe job output, chunks into overlapping
-segments, embeds with Cohere, and writes to video_sources + video_chunks in RDS.
+segments, embeds with Cohere, and writes to the unified sources + chunks tables
+in RDS (source_type='video'), tracking the run in ingestion_runs.
 
 Usage (parse + preview, no DB):
     python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Video Title"
@@ -16,26 +17,38 @@ Usage (semantic chunking):
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import os
 import re
 import sys
 
 import boto3
-import psycopg2
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Shared secret-free config ─────────────────────────────────────────────────
+# Prefer the package import; fall back to loading the sibling common/db_config.py
+# by path so this script also works when copied standalone (e.g. onto SageMaker).
+try:
+    from common import db_config  # type: ignore
+except ImportError:
+    _common_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "db_config.py",
+    )
+    if not os.path.exists(_common_path):
+        _common_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_config.py")
+    _spec = importlib.util.spec_from_file_location("db_config", _common_path)
+    db_config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(db_config)  # type: ignore
 
-REGION = "ca-central-1"
 
-DB_HOST = "kc-database-kcdatabasedatabase02579448-iw9mhy8sqo4a.crecym6ketcm.ca-central-1.rds.amazonaws.com"
-DB_NAME = "KC"
-DB_USER = "app_rw"
-DB_PORT = 5432
-SSL_CERT = "AmazonRootCA1.pem"
+# ── Config (environment-driven) ───────────────────────────────────────────────
 
-EMBED_MODEL_ID   = "cohere.embed-english-v3"
-EMBED_BATCH_SIZE = 96
+REGION = db_config.get_region()
+EMBED_MODEL_ID = db_config.get_embed_model_id()
+EMBED_BATCH_SIZE = db_config.get_embed_batch_size()
 
 MAX_WORDS_PER_CHUNK    = 400   # ~1600 chars, well within Cohere 2048 char limit
 OVERLAP_SEGMENTS       = 2     # segments carried into next chunk (fixed-size mode)
@@ -279,12 +292,11 @@ def embed_texts(texts: list, input_type: str = "search_document") -> list:
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def get_db_connection():
-    token = "abf4ccf3c559d547d051f2056ef86e5f"
-    return psycopg2.connect(
-        host=DB_HOST, port=DB_PORT, database=DB_NAME,
-        user=DB_USER, password=token,
-        sslmode="verify-full", sslrootcert=SSL_CERT,
-    )
+    """
+    Open a connection using the shared secret-free config. Credentials come from
+    the environment (RDS IAM auth by default). No secrets are stored in source.
+    """
+    return db_config.get_db_connection()
 
 
 def upsert_source(conn, video_url: str, name: str) -> str:
@@ -348,12 +360,74 @@ def delete_stale_chunks(conn, source_id: str, current_indices: list) -> int:
         return cur.rowcount
 
 
+# ── Ingestion run tracking (unified ingestion_runs) ───────────────────────────
+
+def start_ingestion_run(conn, source_id: str, job_id: str = None) -> str:
+    """
+    Begin (or adopt) an ingestion run in the unified `ingestion_runs` table.
+    If `job_id` is provided (row pre-created by the ingestion-trigger Lambda),
+    mark it 'running'; otherwise insert a fresh row. Returns the run id.
+    """
+    with conn.cursor() as cur:
+        if job_id:
+            cur.execute(
+                """
+                UPDATE ingestion_runs
+                   SET status = 'running', source_id = %s, started_at = now()
+                 WHERE id = %s
+                RETURNING id
+                """,
+                (source_id, job_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row[0])
+        cur.execute(
+            """
+            INSERT INTO ingestion_runs (source_id, status, started_at)
+            VALUES (%s, 'running', now())
+            RETURNING id
+            """,
+            (source_id,),
+        )
+        return str(cur.fetchone()[0])
+
+
+def finish_ingestion_run(conn, run_id: str, status: str, stats: dict, error_message: str = None) -> None:
+    """Finalize an ingestion run in the unified `ingestion_runs` table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs SET
+              status          = %s,
+              chunks_upserted = %s,
+              chunks_deleted  = %s,
+              error_message   = %s,
+              finished_at     = now(),
+              completed_at    = now()
+            WHERE id = %s
+            """,
+            (
+                status,
+                stats.get("chunks_upserted", 0),
+                stats.get("chunks_deleted", 0),
+                error_message,
+                run_id,
+            ),
+        )
+
+
 # ── DB Writer ─────────────────────────────────────────────────────────────────
 
-def write_to_db(chunks: list, video_url: str, name: str) -> None:
+def write_to_db(chunks: list, video_url: str, name: str, job_id: str = None) -> None:
     conn = get_db_connection()
+    stats = {"chunks_upserted": 0, "chunks_deleted": 0}
+    run_id = None
     try:
         source_id = upsert_source(conn, video_url, name)
+        conn.commit()
+
+        run_id = start_ingestion_run(conn, source_id, job_id=job_id)
         conn.commit()
 
         existing  = get_existing_chunk_hashes(conn, source_id)
@@ -364,13 +438,23 @@ def write_to_db(chunks: list, video_url: str, name: str) -> None:
             embeddings = embed_texts([c["embed_text"] for c in to_embed])
             for chunk, embedding in zip(to_embed, embeddings):
                 upsert_chunk(conn, source_id, chunk, embedding)
+            stats["chunks_upserted"] = len(to_embed)
 
         deleted = delete_stale_chunks(conn, source_id, [c["chunk_index"] for c in chunks])
+        stats["chunks_deleted"] = deleted
+
+        finish_ingestion_run(conn, run_id, "completed", stats)
         conn.commit()
         print(f"\n[db] Done — {len(to_embed)} embedded, {unchanged} unchanged, {deleted} deleted",
               file=sys.stderr)
     except Exception as e:
         conn.rollback()
+        if run_id:
+            try:
+                finish_ingestion_run(conn, run_id, "failed", stats, error_message=str(e)[:1000])
+                conn.commit()
+            except Exception:
+                pass
         raise e
     finally:
         conn.close()
@@ -379,24 +463,41 @@ def write_to_db(chunks: list, video_url: str, name: str) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # When run as an ECS/Lambda task, the ingestion-trigger passes work via env
+    # vars. CLI args take precedence; env vars provide defaults. JOB_ID adopts a
+    # pre-created ingestion_runs row.
+    env_transcript = os.environ.get("TRANSCRIPT_JSON")
+    env_video_url = os.environ.get("VIDEO_URL")
+    env_name = os.environ.get("VIDEO_NAME", "")
+    env_job_id = os.environ.get("JOB_ID")
+    env_write_db = os.environ.get("WRITE_DB", "").strip().lower() in ("1", "true", "yes")
+    env_semantic = os.environ.get("SEMANTIC", "").strip().lower() in ("1", "true", "yes")
+
     parser = argparse.ArgumentParser(
         description="Parse AWS Transcribe JSON → chunk → embed → write to pgvector DB"
     )
-    parser.add_argument("transcript_json", help="Path to Transcribe job output JSON")
-    parser.add_argument("video_url",       help="YouTube URL this transcript belongs to")
-    parser.add_argument("--name",          default="", help="Human-readable video title")
+    parser.add_argument("transcript_json", nargs="?", default=env_transcript,
+                        help="Path to Transcribe job output JSON (or TRANSCRIPT_JSON env)")
+    parser.add_argument("video_url", nargs="?", default=env_video_url,
+                        help="YouTube URL this transcript belongs to (or VIDEO_URL env)")
+    parser.add_argument("--name",          default=env_name, help="Human-readable video title (or VIDEO_NAME env)")
     parser.add_argument("--max-words",     type=int, default=MAX_WORDS_PER_CHUNK,
                         help="Max words per chunk (default 400)")
     parser.add_argument("--overlap",       type=int, default=OVERLAP_SEGMENTS,
                         help="Segments to carry into next chunk for overlap (fixed-size mode only)")
-    parser.add_argument("--semantic",      action="store_true",
+    parser.add_argument("--semantic",      action="store_true", default=env_semantic,
                         help="Use semantic chunking — embed segments to detect topic boundaries")
     parser.add_argument("--semantic-threshold", type=float, default=SEMANTIC_THRESHOLD_VTT,
                         help="Cosine similarity threshold for topic splits (default 0.5)")
     parser.add_argument("--output",        default="vtt_output.json")
-    parser.add_argument("--write-db",      action="store_true",
-                        help="Embed chunks and write to database")
+    parser.add_argument("--write-db",      action="store_true", default=env_write_db,
+                        help="Embed chunks and write to database (or WRITE_DB env)")
+    parser.add_argument("--job-id",        default=env_job_id,
+                        help="Adopt an existing ingestion_runs row id (or JOB_ID env)")
     args = parser.parse_args()
+
+    if not args.transcript_json or not args.video_url:
+        parser.error("transcript_json and video_url are required (pass as args or set TRANSCRIPT_JSON/VIDEO_URL env)")
 
     name = args.name or args.transcript_json
 
@@ -451,7 +552,7 @@ def main() -> None:
 
     if args.write_db:
         print("\nWriting embeddings to database...", file=sys.stderr)
-        write_to_db(chunks, args.video_url, name)
+        write_to_db(chunks, args.video_url, name, job_id=args.job_id)
 
 
 if __name__ == "__main__":

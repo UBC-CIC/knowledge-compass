@@ -1,6 +1,4 @@
 import { useRef, useEffect, useMemo, type KeyboardEvent } from "react";
-import { Button } from "@/components/ui/button";
-import { Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AiChatInputProps {
@@ -217,67 +215,61 @@ export function AiChatInput({
 
   return (
     <div className={cn("relative w-full", className)}>
-      {/* ContentEditable div with direct text highlighting */}
-      <div
-        ref={editableRef}
-        contentEditable={!disabled}
-        onInput={handleInput}
-        onKeyDown={handleKeyDown}
-        onCompositionStart={handleCompositionStart}
-        onCompositionEnd={handleCompositionEnd}
-        spellCheck={false}
-        className={cn(
-          "bg-input border border-[var(--border)] rounded-md min-h-[60px] max-h-[300px] pr-12 resize-none text-sm overflow-auto",
-          "px-3 py-2 whitespace-pre-wrap break-words outline-none",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-          disabled && "cursor-not-allowed opacity-50"
-        )}
-        data-placeholder={placeholder}
-        style={{
-          // Show placeholder when empty
-          ...(value === "" && {
-            position: "relative",
-          }),
-        }}
-        role="textbox"
-        aria-multiline="true"
-        aria-label="Chat message input"
-        aria-placeholder={placeholder}
-      />
+      <div className="flex items-end gap-2.5 rounded-[11px] border-[1.5px] border-foreground/18 bg-white py-2.5 pr-2.5 pl-[15px]">
+        <div className="relative min-w-0 flex-1">
+          <div
+            ref={editableRef}
+            contentEditable={!disabled}
+            onInput={handleInput}
+            onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            spellCheck={false}
+            className={cn(
+              "min-h-[44px] max-h-[120px] overflow-auto py-2 text-base leading-relaxed",
+              "whitespace-pre-wrap break-words outline-none",
+              disabled && "cursor-not-allowed opacity-50"
+            )}
+            data-placeholder={placeholder}
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Chat message input"
+            aria-placeholder={placeholder}
+          />
 
-      {value === "" && (
-        <div className="absolute top-0 left-0 px-3 py-2 text-sm text-muted-foreground pointer-events-none">
-          {placeholder}
+          {value === "" && (
+            <div className="pointer-events-none absolute inset-x-0 top-0 py-2 text-base text-foreground/55">
+              {placeholder}
+            </div>
+          )}
         </div>
-      )}
 
-      <Button
-        onClick={() => {
-          if (!disabled && value.trim()) {
-            onSend?.();
-          }
-        }}
-        size="icon"
-        variant="link"
-        className="cursor-pointer absolute bottom-3 right-3 h-8 w-8 text-muted-foreground hover:text-gray-900 transition-colors"
-        disabled={disabled || !value.trim()}
-      >
-        <Send className="h-4 w-4" />
-      </Button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!disabled && value.trim()) {
+              onSend?.();
+            }
+          }}
+          className="mb-0.5 min-h-11 shrink-0 rounded-lg px-[18px] text-sm font-semibold disabled:bg-foreground/12 disabled:text-foreground/75 enabled:bg-primary enabled:text-white"
+          disabled={disabled || !value.trim()}
+        >
+          Send
+        </button>
+      </div>
 
-      {/* Character counter - only shown when approaching limit */}
+      {value.length >= warningThreshold ? (
       <div
         className={cn(
-          "text-xs mt-1 text-right transition-colors",
+          "mt-1 text-right text-xs transition-colors",
           value.length >= dangerThreshold
-            ? "text-destructive font-medium"
-            : value.length >= warningThreshold
-            ? "text-amber-600 font-medium"
-            : "text-muted-foreground"
+            ? "font-medium text-destructive"
+            : "font-medium text-amber-700"
         )}
       >
         {value.length}/{maxLength}
       </div>
+      ) : null}
     </div>
   );
 }

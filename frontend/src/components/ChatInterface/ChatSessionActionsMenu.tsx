@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useView } from "@/providers/view";
+import { isDemoMode } from "@/lib/demo";
 
 type ChatSessionActionsMenuProps = {
   chatSessionId: string;
@@ -61,7 +62,7 @@ export default function ChatSessionActionsMenu({
 
     const transcript = exportableMessages
       .map((m) => {
-        const speaker = m.sender === "user" ? "[USER]" : "[Specialization Explorer]";
+        const speaker = m.sender === "user" ? "[Family]" : "[Knowledge Compass]";
         return `${speaker}: ${m.text.trim()}`;
       })
       .join("\r\n====================\r\n");
@@ -113,6 +114,11 @@ export default function ChatSessionActionsMenu({
     }
 
     try {
+      if (isDemoMode) {
+        onDeleted();
+        return;
+      }
+
       const tokenResp = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`);
       if (!tokenResp.ok) {
         throw new Error("Failed to acquire public token");

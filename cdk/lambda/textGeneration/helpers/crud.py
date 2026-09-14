@@ -153,8 +153,7 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
                        support_score_threshold,
                        scope_alignment_score_threshold,
                        grounded_threshold,
-                       partially_grounded_threshold,
-                       specialization_list
+                       partially_grounded_threshold
                 FROM system_settings
                 ORDER BY updated_at DESC
                 LIMIT 1
@@ -172,7 +171,6 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
                     'scope_alignment_score_threshold': float(row[7]) if row[7] is not None else 0.25,
                     'grounded_threshold': float(row[8]) if row[8] is not None else 0.75,
                     'partially_grounded_threshold': float(row[9]) if row[9] is not None else 0.50,
-                    'specialization_list': row[10]
                 }
     except Exception as e:
         logger.error(f"fetch_system_config failed: {e}")

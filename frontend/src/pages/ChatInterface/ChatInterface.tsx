@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { detectPII } from "@coffeeandfun/remove-pii";
+import { useNavigate } from "react-router";
 
 import AIChatMessage from "@/components/ChatInterface/AIChatMessage";
 import UserChatMessage from "@/components/ChatInterface/UserChatMessage";
@@ -8,6 +9,15 @@ import { AiChatInput } from "@/components/ChatInterface/userInput";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { Message } from "@/types/Chat";
 import { useUser } from "@/providers/user";
+import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
+import {
+  applyDemoFact,
+  getDemoSessionState,
+  isDemoMode,
+  nextDemoReply,
+  setDemoSessionState,
+  type DemoFacts,
+} from "@/lib/demo";
 
 type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
@@ -23,12 +33,45 @@ const WELCOME_PROMPT = `Hello! Please act as the Specialization Explorer.
    - Do you want to pursue research or enter industry after graduation?
 3. Be friendly and inviting.`;
 
-export default function AIChatPage() {
-  const { setCurrentMessages, setActiveChatName } = useView();
+const WELCOME_STARTERS = [
+  {
+    tag: "Right now",
+    text: "My child keeps getting sent home before lunch",
+    hint: "The school says they can't support my child all day",
+  },
+  {
+    tag: "Right now",
+    text: "My child is being left out of field trips and activities",
+    hint: "Exclusion from parts of the school day",
+  },
+  {
+    tag: "Planning",
+    text: "We're getting ready for the move to high school",
+    hint: "Transitions, courses, and support planning",
+  },
+];
 
+const DEFAULT_WELCOME_MESSAGE =
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_DISCLAIMER =
+  "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
+
+type AIChatPageProps = {
+  welcomeMessage?: string;
+  disclaimer?: string;
+  isLoadingWelcome?: boolean;
+};
+
+export default function AIChatPage({
+  welcomeMessage = DEFAULT_WELCOME_MESSAGE,
+  disclaimer = DEFAULT_DISCLAIMER,
+  isLoadingWelcome = false,
+}: AIChatPageProps) {
+  const { setCurrentMessages, setActiveChatName, setConversationFacts } = useView();
+  const navigate = useNavigate();
 
   // State
-  const hasStartedRef = useRef(false);
+  const skipNextHistoryLoadRef = useRef(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [initialMessageLoadTime, setInitialMessageLoadTime] = useState<
@@ -39,8 +82,9 @@ export default function AIChatPage() {
     activeChatSessionId,
     chatSessions,
     updateChatSessionName,
+    createNewChatSession,
   } = useView();
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
     null
@@ -64,6 +108,8 @@ export default function AIChatPage() {
 
   const { userId } = useUser();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const demoAskedRef = useRef(0);
+  const demoFactsRef = useRef<DemoFacts>({});
 
   const activeChatNameDisplay = useMemo(() => {
     if (!activeChatSessionId) {
@@ -141,10 +187,7 @@ export default function AIChatPage() {
 
   useEffect(() => {
     const apiEndpoint = import.meta.env.VITE_API_ENDPOINT;
-    if (!apiEndpoint) {
-      console.warn(
-        "[WebSocket] API endpoint not configured; skipping token fetch"
-      );
+    if (isDemoMode || !apiEndpoint) {
       return;
     }
 
@@ -357,17 +400,38 @@ export default function AIChatPage() {
   };
 
   useEffect(() => {
+    if (isDemoMode) {
+      return;
+    }
     fetchMaxCharactersPerUserMessage();
   }, []);
 
   useEffect(() => {
     if (!activeChatSessionId) {
+      setMessages([]);
+      setIsLoadingHistory(false);
+      demoAskedRef.current = 0;
+      demoFactsRef.current = {};
+      setConversationFacts({});
       return;
     }
 
-    // Reset the started ref whenever the active session changes
-    // This fixes the bug where AI doesn't start a new conversation after a previous one
-    hasStartedRef.current = false;
+    // Reset when the active session changes
+    if (skipNextHistoryLoadRef.current) {
+      skipNextHistoryLoadRef.current = false;
+      setIsLoadingHistory(false);
+      return;
+    }
+
+    if (isDemoMode) {
+      const stored = getDemoSessionState(activeChatSessionId);
+      setMessages(stored?.messages ?? []);
+      demoAskedRef.current = stored?.asked ?? 0;
+      demoFactsRef.current = stored?.facts ?? {};
+      setConversationFacts(stored?.facts ?? {});
+      setIsLoadingHistory(false);
+      return;
+    }
 
     const loadChatHistory = async () => {
       setIsLoadingHistory(true);
@@ -447,143 +511,81 @@ export default function AIChatPage() {
     loadChatHistory();
   }, [activeChatSessionId, userId]);
 
-  const startConversation = useCallback(async () => {
-    if (hasStartedRef.current) return;
-    if (!activeChatSessionId) return;
-
-    hasStartedRef.current = true;
-
-    // Create bot message placeholder for streaming
-    const botMsg: Message = {
-      id: `${Date.now() + 1}-${Math.random().toString(36).slice(2, 9)}`,
-      sender: "bot",
-      text: "",
-      sources_used: [],
-      time: Date.now() + 1,
-      isTyping: true, // Start with typing indicator
-    };
-
-    // Add ONLY bot message (no user message)
-    setMessages((m) => [...m, botMsg]);
-    setStreamingMessageId(botMsg.id);
-    setIsStreaming(true);
-
-    const promptText = WELCOME_PROMPT;
-
-    // Try WebSocket streaming first, fallback to HTTP if not connected
-    if (isConnected && webSocketUrl) {
-      console.log("[WebSocket] Starting conversation via WebSocket");
-      const success = sendWebSocketMessage({
-        action: "generate_text",
-        query: promptText,
-        chat_session_id: activeChatSessionId,
-        user_id: userId,
-        is_intro_message: true,
-      });
-
-      if (!success) {
-        console.warn("[WebSocket] Start conversation failed. Attempting reconnect...");
-        forceReconnect();
-      }
-    } else {
-      console.log("[WebSocket] Fallback: Starting conversation via HTTP API...");
-
-      try {
-        const tokenResponse = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`);
-        const { token } = await tokenResponse.json();
-
-        const response = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/${activeChatSessionId}/text_generation`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              query: promptText,
-              chat_session_id: activeChatSessionId,
-              user_id: userId,
-              is_intro_message: true,
-            }),
-          }
-        );
-
-        if (!response.ok) {
-          if (response.status === 429) {
-            const errData = await response.json();
-            if (errData.error === 'TOKEN_LIMIT_EXCEEDED') {
-              setIsTokenLimitReached(true);
-              if (errData.token_usage?.reset_at) {
-                setTokenResetTime(formatResetTime(errData.token_usage.reset_at));
-              }
-              throw new Error(errData.message || "Token limit exceeded");
-            }
-          }
-          throw new Error("Failed to generate response");
-        }
-
-        const data = await response.json();
-
-        if (data.token_usage?.remaining === 0) {
-          setIsTokenLimitReached(true);
-          if (data.token_usage.reset_at) {
-            setTokenResetTime(formatResetTime(data.token_usage.reset_at));
-          }
-        }
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === botMsg.id
-              ? {
-                  ...msg,
-                  text: data.response || "Sorry, I couldn't generate a response.",
-                  sources_used: data.sources || [],
-                  warning: data.warning || null,
-                  isTyping: false,
-                }
-              : msg
-          )
-        );
-
-        if (data.session_name && activeChatSessionId) {
-          updateChatSessionName(activeChatSessionId, data.session_name);
-        }
-      } catch (error) {
-        console.error("Error starting conversation:", error);
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === botMsg.id
-              ? {
-                  ...msg,
-                  text: "Sorry, there was an error processing your request.",
-                  isTyping: false,
-                }
-              : msg
-          )
-        );
-      } finally {
-        setIsStreaming(false);
-        setStreamingMessageId(null);
-      }
-    }
-  }, [activeChatSessionId, userId, isConnected, webSocketUrl, sendWebSocketMessage, forceReconnect, updateChatSessionName]);
-
-  // Auto-start conversation if history is empty
-  useEffect(() => {
-    if (!isLoadingHistory && messages.length === 0 && activeChatSessionId && !hasStartedRef.current) {
-      startConversation();
-    }
-  }, [isLoadingHistory, messages.length, activeChatSessionId, startConversation]);
-
-  async function sendMessage() {
+  async function sendMessage(textOverride?: string) {
     if (isStreaming) return;
 
-    let text = message.trim();
+    let text = (textOverride ?? message).trim();
     if (!text) return;
 
-    // Ensure we have an active chat session
-    if (!activeChatSessionId) return;
+    let sessionId = activeChatSessionId;
+    if (!sessionId) {
+      skipNextHistoryLoadRef.current = true;
+      const session = await createNewChatSession();
+      if (!session) {
+        skipNextHistoryLoadRef.current = false;
+        return;
+      }
+      sessionId = session.id;
+      navigate("/chat");
+    }
+
+    if (isDemoMode) {
+      const asked = demoAskedRef.current;
+      const facts = applyDemoFact(demoFactsRef.current, asked, text);
+      const reply = nextDemoReply(asked);
+
+      const userMsg: Message = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        sender: "user",
+        text,
+        time: Date.now(),
+      };
+
+      const botMsg: Message = {
+        id: `${Date.now() + 1}-${Math.random().toString(36).slice(2, 9)}`,
+        sender: "bot",
+        text: "",
+        time: Date.now() + 1,
+        isTyping: true,
+      };
+
+      setMessages((prev) => [...prev, userMsg, botMsg]);
+      setStreamingMessageId(botMsg.id);
+      setIsStreaming(true);
+      setMessage("");
+      demoFactsRef.current = facts;
+      setConversationFacts(facts);
+
+      if (asked === 0 && facts.situation) {
+        updateChatSessionName(sessionId, facts.situation.slice(0, 80));
+      }
+
+      window.setTimeout(() => {
+        const finished: Message = {
+          ...botMsg,
+          text: reply.text,
+          question: reply.question,
+          chips: reply.chips,
+          showGuidance: reply.showGuidance,
+          isTyping: false,
+        };
+
+        setMessages((prev) => {
+          const next = prev.map((msg) => (msg.id === botMsg.id ? finished : msg));
+          demoAskedRef.current = reply.asked;
+          setDemoSessionState(sessionId, {
+            messages: next,
+            facts,
+            asked: reply.asked,
+            showGuidance: reply.showGuidance,
+          });
+          return next;
+        });
+        setIsStreaming(false);
+        setStreamingMessageId(null);
+      }, 750);
+      return;
+    }
 
     // Create user message for AI generation
     const userMsg: Message = {
@@ -618,7 +620,7 @@ export default function AIChatPage() {
       const success = sendWebSocketMessage({
         action: "generate_text",
         query: text,
-        chat_session_id: activeChatSessionId,
+        chat_session_id: sessionId,
         user_id: userId,
       });
 
@@ -655,7 +657,7 @@ export default function AIChatPage() {
       const { token } = await tokenResponse.json();
       const response = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT
-        }/chat_sessions/${activeChatSessionId}/text_generation`,
+        }/chat_sessions/${sessionId}/text_generation`,
         {
           method: "POST",
           headers: {
@@ -664,7 +666,7 @@ export default function AIChatPage() {
           },
           body: JSON.stringify({
             query: text,
-            chat_session_id: activeChatSessionId,
+            chat_session_id: sessionId,
             user_id: userId,
           }),
         }
@@ -709,8 +711,8 @@ export default function AIChatPage() {
       );
 
       // Handle session name update for HTTP fallback
-      if (data.session_name && activeChatSessionId) {
-        updateChatSessionName(activeChatSessionId, data.session_name);
+      if (data.session_name && sessionId) {
+        updateChatSessionName(sessionId, data.session_name);
       }
     } catch (error) {
       console.error("Error generating text:", error);
@@ -748,6 +750,7 @@ export default function AIChatPage() {
       <AIChatMessage
         key={message.id}
         text={message.text}
+        question={message.question}
         sources={message.sources_used}
         warning={message.warning}
         isTyping={message.isTyping}
@@ -756,63 +759,125 @@ export default function AIChatPage() {
     }
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-0 w-full">
-      {messages.length === 0 ? (
-        // Empty state (Centered)
-        <div className="flex-1 flex flex-col items-center justify-center text-center pb-12 w-full max-w-2xl 2xl:max-w-3xl mx-auto px-4">
-          <h1 className="text-4xl font-bold mb-4 leading-tight max-w-full break-words">
-            What can I help with?
-          </h1>
-        </div>
-      ) : (
-        // Scrollable messages area (Full width for edge scrollbar)
-        <div className="flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full">
-          <div className="w-full max-w-2xl 2xl:max-w-3xl mx-auto flex flex-col gap-4 pt-4 pb-2 px-4">
-            {isLoadingHistory ? (
-              <div className="flex items-center justify-center py-8">
-                <p className="text-muted-foreground">Loading chat history...</p>
-              </div>
-            ) : (
-              <>
-                {messages.map((m) => messageFormatter(m))}
-                {/* Keep the ref right at the bottom of the scrollable list */}
-                <div ref={messagesEndRef} className="h-4 shrink-0" />
-              </>
-            )}
-          </div>
-        </div>
-      )}
+  const isWelcome = !activeChatSessionId;
+  const lastBotMessage = [...messages].reverse().find((m) => m.sender === "bot");
+  const demoChips =
+    isDemoMode && !isStreaming && lastBotMessage?.chips?.length
+      ? lastBotMessage.chips
+      : [];
+  const showDemoGuidance =
+    isDemoMode && !isStreaming && Boolean(lastBotMessage?.showGuidance);
 
-      {/* Statically bolted input area at the bottom */}
-      <div className="shrink-0 w-full border-t border-border/100 bg-background pt-6 pb-6 md:pb-5">
-        <div className="w-full px-4">
-          <div className="mb-2 flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="w-full max-w-2xl 2xl:max-w-3xl mx-auto">
-                <AiChatInput
-                  value={message}
-                  onChange={(val: string) => setMessage(val)}
-                  maxLength={maxCharactersPerUserMessage}
-                  placeholder={
-                    isTokenLimitReached
-                      ? `Daily limit reached. Resets at ${tokenResetTime || "soon"}`
-                      : isStreaming
-                      ? "Specialization Explorer is thinking..."
-                      : "Message Specialization Explorer..."
-                  }
-                  onSend={sendMessage}
-                  disabled={isTokenLimitReached || isStreaming}
-                />
+  const handleKeepGoing = () => {
+    setMessages((prev) => {
+      const next = prev.map((msg) =>
+        msg.showGuidance ? { ...msg, showGuidance: false } : msg
+      );
+      if (activeChatSessionId) {
+        setDemoSessionState(activeChatSessionId, {
+          messages: next,
+          facts: demoFactsRef.current,
+          asked: demoAskedRef.current,
+          showGuidance: false,
+        });
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full px-4 md:px-[34px]">
+        <div className="mx-auto w-full max-w-[680px] py-10 pb-6">
+          {isWelcome ? (
+            <div>
+              <h1 className="font-serif text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
+                Hi, I'm here to help you navigate your child's education.
+              </h1>
+              <p className="mt-4 text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
+                {isLoadingWelcome ? "Loading..." : welcomeMessage}
+              </p>
+              <p className="mt-3.5 text-[17.5px] font-semibold leading-relaxed text-pretty">
+                Tell me what's been happening. What's going on with your child's schooling right now?
+              </p>
+
+              <div className="mt-[26px] text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
+                Or start from a situation like yours
+              </div>
+              <div className="mt-3 flex flex-col gap-2">
+                {WELCOME_STARTERS.map((starter) => (
+                  <button
+                    key={starter.text}
+                    type="button"
+                    onClick={() => void sendMessage(starter.text)}
+                    className="flex items-start gap-3.5 rounded-[10px] border border-foreground/14 bg-white px-[17px] py-[15px] text-left hover:border-primary hover:bg-accent"
+                  >
+                    <span className="mt-px shrink-0 rounded-md bg-secondary px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.03em] text-secondary-foreground">
+                      {starter.tag}
+                    </span>
+                    <span>
+                      <span className="block text-[15.5px] font-semibold leading-snug">
+                        {starter.text}
+                      </span>
+                      <span className="mt-0.5 block text-[13.5px] leading-normal text-foreground/80">
+                        {starter.hint}
+                      </span>
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex flex-col gap-5">
+              {isLoadingHistory ? (
+                <p className="py-8 text-[14.5px] text-foreground/70">Loading chat history...</p>
+              ) : (
+                <>
+                  {messages.map((m) => messageFormatter(m))}
+                  {demoChips.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {demoChips.map((chip) => (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => void sendMessage(chip)}
+                          className="min-h-11 rounded-[9px] border border-foreground/20 bg-white px-[15px] text-[14.5px] font-medium hover:border-primary hover:bg-accent"
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {showDemoGuidance ? (
+                    <DemoGuidanceCard onKeepGoing={handleKeepGoing} />
+                  ) : null}
+                  <div ref={messagesEndRef} className="h-1 shrink-0" />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
-          <div className="text-center">
-            <p className="text-xs text-muted-foreground">
-              AI can make mistakes. Check important info.
-            </p>
-          </div>
+      <div className="shrink-0 px-4 pb-[18px] pt-3 md:px-[34px]">
+        <div className="max-w-[680px]">
+          <AiChatInput
+            value={message}
+            onChange={(val: string) => setMessage(val)}
+            maxLength={maxCharactersPerUserMessage}
+            placeholder={
+              isTokenLimitReached
+                ? `Daily limit reached. Resets at ${tokenResetTime || "soon"}`
+                : isStreaming
+                ? "Thinking about what you've told me…"
+                : "Write what's happening in your own words…"
+            }
+            onSend={() => void sendMessage()}
+            disabled={isTokenLimitReached || isStreaming}
+          />
+          <p className="mt-2 text-xs leading-normal text-foreground/75">
+            {disclaimer}
+          </p>
         </div>
       </div>
     </div>

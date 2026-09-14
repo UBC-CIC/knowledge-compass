@@ -17,6 +17,10 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { AuthService } from "@/functions/authService";
+import {
+  DEMO_ANALYTICS_SERIES,
+  isDemoMode,
+} from "@/lib/demo";
 
 type TimeSeriesData = {
   date: string;
@@ -37,14 +41,14 @@ type ChartCardProps = {
 
 function ChartCard({ title, subtitle, children }: ChartCardProps) {
   return (
-    <Card className="border-gray-200 shadow-sm overflow-hidden">
-      <CardHeader className="pb-2 border-b border-gray-50 bg-gray-50/50">
-        <CardTitle className="text-base font-semibold text-gray-900">
+    <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
+      <CardHeader className="border-b border-foreground/10 pb-3">
+        <CardTitle className="text-base font-bold tracking-[-0.005em] text-foreground">
           {title}
         </CardTitle>
-        <CardDescription className="text-xs">{subtitle}</CardDescription>
+        <CardDescription className="text-[13px]">{subtitle}</CardDescription>
       </CardHeader>
-      <CardContent className="p-6 h-[300px]">{children}</CardContent>
+      <CardContent className="h-[300px] p-5">{children}</CardContent>
     </Card>
   );
 }
@@ -86,6 +90,12 @@ export default function Analytics() {
   }, [timeRange]);
 
   const fetchAnalytics = async () => {
+    if (isDemoMode) {
+      setAnalyticsData({ timeSeries: DEMO_ANALYTICS_SERIES });
+      setLoading(false);
+      setError(null);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -115,38 +125,33 @@ export default function Analytics() {
   };
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in duration-500">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div className="mx-auto max-w-[1080px] space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">Analytics</h2>
-          <p className="text-gray-500 mt-1">
-            Deep dive into student engagement and content usage.
+          <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
+            Analytics
+          </h1>
+          <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+            Volume over time. No conversation content is shown here.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-white rounded-lg border border-gray-200 p-1 px-3 shadow-sm gap-2">
-            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
-              Last
-            </span>
-            <Input
-              type="number"
-              min={1}
-              max={365}
-              className="h-8 w-20 text-center"
-              defaultValue={90}
-              onChange={(e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val) && val > 0) {
-                  // Cap at 365, min 1
-                  const days = Math.min(Math.max(1, val), 365);
-                  setTimeRange(`${days}d`);
-                }
-              }}
-            />
-            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
-              Days
-            </span>
-          </div>
+        <div className="flex items-center gap-2 rounded-[10px] border border-foreground/14 bg-white px-3 py-1.5">
+          <span className="text-[13.5px] font-semibold">Last</span>
+          <Input
+            type="number"
+            min={7}
+            max={365}
+            className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
+            defaultValue={90}
+            onChange={(e) => {
+              const val = parseInt(e.target.value);
+              if (!isNaN(val) && val > 0) {
+                const days = Math.min(Math.max(1, val), 365);
+                setTimeRange(`${days}d`);
+              }
+            }}
+          />
+          <span className="text-[13.5px] font-semibold">days</span>
         </div>
       </div>
 
@@ -162,11 +167,11 @@ export default function Analytics() {
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* Total Users Chart */}
           <ChartCard
-            title="Total Users"
-            subtitle="Total active students over time"
+            title="Families reached"
+            subtitle="Distinct people who started a conversation"
           >
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
@@ -194,7 +199,7 @@ export default function Analytics() {
                 <Line
                   type="monotone"
                   dataKey="users"
-                  stroke="rgb(0, 85, 183)"
+                  stroke="oklch(0.42 0.10 268)"
                   strokeWidth={3}
                   dot={false}
                   activeDot={{ r: 6, strokeWidth: 0 }}
@@ -204,7 +209,7 @@ export default function Analytics() {
           </ChartCard>
 
           {/* Total Chat Sessions Chart */}
-          <ChartCard title="Total Chat Sessions" subtitle="Chat sessions created over time">
+          <ChartCard title="Conversations" subtitle="New conversations started">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={analyticsData.timeSeries}
@@ -227,7 +232,7 @@ export default function Analytics() {
                 <Line
                   type="monotone"
                   dataKey="chat_sessions"
-                  stroke="rgb(0, 110, 220)"
+                  stroke="oklch(0.48 0.09 268)"
                   strokeWidth={3}
                   dot={false}
                   activeDot={{ r: 6, strokeWidth: 0 }}
@@ -238,8 +243,8 @@ export default function Analytics() {
 
           {/* Total Questions Chart */}
           <ChartCard
-            title="Total Questions"
-            subtitle="Questions asked to chatbots"
+            title="Messages exchanged"
+            subtitle="Family and assistant messages combined"
           >
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
@@ -267,7 +272,7 @@ export default function Analytics() {
                 <Line
                   type="monotone"
                   dataKey="questions"
-                  stroke="rgb(50, 140, 240)"
+                  stroke="oklch(0.55 0.08 268)"
                   strokeWidth={3}
                   dot={false}
                   activeDot={{ r: 6, strokeWidth: 0 }}

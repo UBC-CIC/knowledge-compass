@@ -13,4 +13,7 @@ export interface Message {
   };
   warning?: string | null;
   hasPII?: boolean;
+  question?: string;
+  chips?: string[];
+  showGuidance?: boolean;
 }

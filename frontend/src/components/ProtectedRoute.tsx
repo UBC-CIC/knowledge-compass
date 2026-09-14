@@ -1,21 +1,26 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router";
 import { AuthService } from "@/functions/authService";
+import { isDemoMode } from "@/lib/demo";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(
+    isDemoMode ? true : null
+  );
   const location = useLocation();
 
   useEffect(() => {
+    if (isDemoMode) return;
+
     const checkAuth = async () => {
       try {
         const session = await AuthService.getAuthSession(true);
         setIsAuthenticated(!!session?.tokens?.accessToken);
-      } catch (error) {
+      } catch {
         setIsAuthenticated(false);
       }
     };
@@ -23,17 +28,17 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     checkAuth();
   }, []);
 
+  if (isDemoMode || isAuthenticated) {
+    return <>{children}</>;
+  }
+
   if (isAuthenticated === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-600">Loading...</div>
+      <div className="flex min-h-screen items-center justify-center bg-muted">
+        <div className="text-sm text-foreground/75">Loading...</div>
       </div>
     );
   }
 
-  if (!isAuthenticated) {
-    return <Navigate to="/admin/login" replace state={{ from: location }} />;
-  }
-
-  return <>{children}</>;
+  return <Navigate to="/admin/login" replace state={{ from: location }} />;
 }

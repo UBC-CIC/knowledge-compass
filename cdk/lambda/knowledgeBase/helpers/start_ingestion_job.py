@@ -6,11 +6,18 @@ from uuid import uuid4
 from helpers.cors import get_cors_headers
 from helpers.process_s3_batch import process_s3_batch
 from helpers.process_website_batch import process_website_batch
+from helpers.process_crawler_batch import process_crawler_batch
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.environ["REGION"]
+
+# Ingestion backend selector (pgvector migration, R3):
+#   "bedrock"  -> existing Bedrock Knowledge Base ingestion (S3 + web crawler)
+#   "pgvector" -> ECS crawler/transcriber tasks writing to the unified sources/chunks
+# Defaults to bedrock so behavior is unchanged until explicitly switched.
+INGESTION_BACKEND = os.environ.get("INGESTION_BACKEND", "bedrock").strip().lower()
 
 
 def _response(event, status_code: int, body: dict):
@@ -115,6 +122,33 @@ def start_ingestion_job(event, body, connection, kb_id):
                 {
                     "error": "No pending data sources found to queue.",
                     "sync_session_id": sync_session_id,
+                },
+            )
+
+        # pgvector backend: launch ECS crawler/transcriber tasks instead of
+        # Bedrock ingestion jobs. Each task self-finalizes its ingestion_runs row.
+        if INGESTION_BACKEND == "pgvector":
+            crawler_started = process_crawler_batch(
+                event=event,
+                connection=connection,
+                sync_session_id=sync_session_id,
+                triggered_by_scheduler=False,
+            )
+            status_code = 200 if crawler_started.get("started") else 409
+            return _response(
+                event,
+                status_code,
+                {
+                    "message": (
+                        "Pending data sources queued and ingestion tasks started."
+                        if crawler_started.get("started")
+                        else "Pending data sources were queued, but no ingestion tasks could be started."
+                    ),
+                    "action": "queued_and_started_pgvector_ingestion",
+                    "backend": "pgvector",
+                    "sync_session_id": sync_session_id,
+                    "queued_count": queued_count,
+                    "details": crawler_started,
                 },
             )
 
