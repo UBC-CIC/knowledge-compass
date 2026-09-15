@@ -29,7 +29,7 @@ KB_SECRET_NAME = os.getenv('KB_SECRET_NAME')
 # When true, retrieval uses the unified pgvector corpus (chunks/sources) instead
 # of the Bedrock Knowledge Base. Defaults to false so the existing KB path stays
 # the default until pgvector retrieval has been validated.
-USE_PGVECTOR_RETRIEVAL = os.getenv('USE_PGVECTOR_RETRIEVAL', 'false').strip().lower() in ('1', 'true', 'yes')
+USE_PGVECTOR_RETRIEVAL = os.getenv('USE_PGVECTOR_RETRIEVAL', 'true').strip().lower() in ('1', 'true', 'yes')
 
 # Chat Configuration
 MAX_MESSAGES_PER_DAY = 45
@@ -127,9 +127,11 @@ def load_config(db_connection):
         return
 
     logger.info("Loading system config from DB and Secrets Manager...")
-    
-    # Load Knowledge Base ID from Secrets Manager
-    if not KB_ID:
+
+    # Knowledge Base ID is only required for the legacy Bedrock retrieval path.
+    if not USE_PGVECTOR_RETRIEVAL and not KB_ID:
+        if not KB_SECRET_NAME:
+            raise RuntimeError("KB_SECRET_NAME is required when USE_PGVECTOR_RETRIEVAL is false")
         try:
             client = boto3.client('secretsmanager')
             response = client.get_secret_value(SecretId=KB_SECRET_NAME)
@@ -138,6 +140,8 @@ def load_config(db_connection):
         except Exception as e:
             logger.error(f"Failed to load KB_ID from Secrets Manager: {e}")
             raise
+    elif USE_PGVECTOR_RETRIEVAL:
+        logger.info("Skipping KB_ID load; using pgvector retrieval.")
 
     if not HAIKU_ARN:
         ssm_param = os.environ.get("HAIKU_ARN")

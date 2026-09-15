@@ -6,7 +6,6 @@ import { ApiGatewayStack } from "../lib/api-stack";
 import { DBFlowStack } from "../lib/dbFlow-stack";
 import { AmplifyStack } from "../lib/amplify-stack";
 import { CICDStack } from "../lib/cicd-stack";
-import { KnowledgeBaseStack } from "../lib/knowledge-base-stack";
 import { IngestionStack } from "../lib/ingestion-stack";
 
 const app = new cdk.App();
@@ -45,6 +44,8 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
   githubBranch: githubBranch,
   environmentName: environment,
   lambdaFunctions: [
+    // Kept until KC-KnowledgeBase is deleted; the leftover stack still imports
+    // this ECR repo export. Remove after the old KB stack is gone.
     {
       name: "vectorIndexManagerSigV4",
       functionName: `${StackPrefix}-KnowledgeBase-VectorIndexManagerFn-v2`,
@@ -58,11 +59,16 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
       name: "crawler",
       functionName: `${StackPrefix}-Ingestion-Crawler`,
       sourceDir: "Project Refactoring/crawler",
+      // Build context is the refactoring root so the shared common/ package is included.
+      buildContext: "Project Refactoring",
+      dockerfile: "Project Refactoring/crawler/Dockerfile",
     },
     {
       name: "transcriber",
       functionName: `${StackPrefix}-Ingestion-Transcriber`,
       sourceDir: "Project Refactoring/transcriber",
+      buildContext: "Project Refactoring",
+      dockerfile: "Project Refactoring/transcriber/Dockerfile",
     },
   ],
   pathFilters: [
@@ -73,18 +79,6 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
   ],
 });
 
-const kbStack = new KnowledgeBaseStack(app, `${StackPrefix}-KnowledgeBase`, {
-  env,
-  stackPrefix: StackPrefix,
-  vectorIndexManagerRepository: cicdStack.ecrRepositories["vectorIndexManagerSigV4"],
-  vectorIndexManagerPipelineName: cicdStack.pipelineName,
-  vpc: vpcStack.vpc,
-  vpcCidr: vpcStack.vpcCidrString,
-});
-kbStack.addDependency(cicdStack);
-kbStack.addDependency(vpcStack);
-
-// pgvector ingestion infrastructure (R2). SYNTH-PENDING: see ingestion-stack.ts.
 const ingestionStack = new IngestionStack(
   app,
   `${StackPrefix}-Ingestion`,
@@ -95,6 +89,8 @@ const ingestionStack = new IngestionStack(
     stackPrefix: StackPrefix,
     crawlerRepository: cicdStack.ecrRepositories["crawler"],
     transcriberRepository: cicdStack.ecrRepositories["transcriber"],
+    vectorIndexManagerRepository: cicdStack.ecrRepositories["vectorIndexManagerSigV4"],
+    imageBuildPipelineName: cicdStack.pipelineName,
   }
 );
 ingestionStack.addDependency(cicdStack);
@@ -109,32 +105,28 @@ const apiStack = new ApiGatewayStack(
   {
     env,
     ecrRepositories: cicdStack.ecrRepositories,
-    knowledgeBaseBucket: kbStack.knowledgeBaseBucket,
-    knowledgeBaseSecret: kbStack.knowledgeBaseSecret,
+    // pgvector ingestion: sets INGESTION_BACKEND=pgvector + ECS env on
+    // lambdaKnowledgeBase and grants ecs:RunTask / iam:PassRole.
+    ingestion: {
+      ingestionEnv: () => ingestionStack.ingestionEnv(),
+      grantRunTasks: (principal) => ingestionStack.grantRunTasks(principal),
+      grantBucketAccess: (principal) =>
+        ingestionStack.ingestBucket.grantReadWrite(principal),
+    },
   }
 );
-apiStack.addDependency(kbStack);
 apiStack.addDependency(cicdStack);
-
-// SYNTH-PENDING integration (R2): to activate the pgvector ingestion path, the
-// ApiGatewayStack must accept the IngestionStack and, on lambdaKnowledgeBase:
-//   1. add env: ingestionStack.ingestionEnv()  (sets INGESTION_BACKEND=pgvector +
-//      ECS_CLUSTER_ARN / TASK_DEF_ARNs / SUBNET_IDS / SECURITY_GROUP_IDS / container names)
-//   2. grant run access: ingestionStack.grantRunTasks(lambdaKnowledgeBase)
-// This is intentionally NOT wired here to avoid coupling api-stack to the
-// ingestion stack before a dev-stack `cdk synth` review. Also note: the CICD
-// buildspec builds with context = sourceDir, but the crawler/transcriber
-// Dockerfiles expect context = "Project Refactoring/" (for the shared common/
-// package) — the buildspec (cicd-stack.ts) must be adjusted for these two images.
+apiStack.addDependency(ingestionStack);
 
 const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
   env,
   githubRepo: githubRepo,
   githubBranch: githubBranch,
-  knowledgeBaseBucketName: kbStack.knowledgeBaseBucket.bucketName,
+  ingestBucketName: ingestionStack.ingestBucket.bucketName,
   allowedOriginsParamName: apiStack.allowedOriginsParamName,
 });
 amplifyStack.addDependency(apiStack);
+amplifyStack.addDependency(ingestionStack);
 
 const resolvedPrefix = StackPrefix || "KC";
 const stackTags = {
@@ -149,7 +141,6 @@ const stacks = [
   dbStack,
   dbFlowStack,
   cicdStack,
-  kbStack,
   ingestionStack,
   apiStack,
   amplifyStack,

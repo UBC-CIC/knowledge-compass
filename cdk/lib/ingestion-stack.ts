@@ -20,7 +20,7 @@
  * wiring, RDS IAM-auth user setup, and image availability before deploying.
  */
 
-import { Stack, StackProps, RemovalPolicy, Duration } from "aws-cdk-lib";
+import { Stack, StackProps, RemovalPolicy, Duration, CustomResource, CfnOutput } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -28,7 +28,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import { VpcStack } from "./vpc-stack";
 import { DatabaseStack } from "./database-stack";
 
@@ -36,6 +36,12 @@ export interface IngestionStackProps extends StackProps {
   stackPrefix: string;
   crawlerRepository: ecr.IRepository;
   transcriberRepository: ecr.IRepository;
+  // Temporary: keep the CICD stack export alive while the leftover
+  // KC-KnowledgeBase stack in AWS still imports it.
+  vectorIndexManagerRepository: ecr.IRepository;
+  // CodePipeline that builds the crawler/transcriber images (from CICDStack).
+  // Used by the ECR image waiter to trigger a build if the image is missing.
+  imageBuildPipelineName: string;
 }
 
 export class IngestionStack extends Stack {
@@ -60,10 +66,20 @@ export class IngestionStack extends Stack {
   ) {
     super(scope, id, props);
 
+    // Keep CICD from dropping these exports while KC-KnowledgeBase still exists.
+    new CfnOutput(this, "LegacyVectorIndexManagerRepoArn", {
+      value: props.vectorIndexManagerRepository.repositoryArn,
+      description: "Temporary import of KC-CICD vectorIndexManager repo ARN; remove after KC-KnowledgeBase is deleted",
+    });
+    new CfnOutput(this, "LegacyVectorIndexManagerRepoName", {
+      value: props.vectorIndexManagerRepository.repositoryName,
+      description: "Temporary import of KC-CICD vectorIndexManager repo name; remove after KC-KnowledgeBase is deleted",
+    });
+
     // ── ECS cluster ──────────────────────────────────────────────────────────
     this.cluster = new ecs.Cluster(this, `${id}-Cluster`, {
       vpc: vpcStack.vpc,
-      containerInsights: true,
+      containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
 
     // Private subnets (with egress) the awsvpc tasks run in. Resolved from the VPC.
@@ -150,6 +166,54 @@ export class IngestionStack extends Stack {
     const crawlerTaskRole = makeTaskRole(`${id}-CrawlerTaskRole`, false);
     const transcriberTaskRole = makeTaskRole(`${id}-TranscriberTaskRole`, true);
 
+    // ── ECR image waiter ───────────────────────────────────────────────────────
+    // The crawler/transcriber images are built by the CICD pipeline, so on a first
+    // deploy they may not exist yet when this stack resolves the task-def images.
+    // Reuse the same waiter Lambda the KB stack uses: it polls ECR for the :latest
+    // image and triggers the pipeline build if missing. One CustomResource per repo.
+    const imageWaiterRole = new iam.Role(this, `${id}-EcrImageWaiterRole`, {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+    });
+    imageWaiterRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:BatchGetImage"],
+      resources: [props.crawlerRepository.repositoryArn, props.transcriberRepository.repositoryArn],
+    }));
+    imageWaiterRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["codepipeline:StartPipelineExecution"],
+      resources: [`arn:aws:codepipeline:${this.region}:${this.account}:${props.imageBuildPipelineName}`],
+    }));
+    imageWaiterRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      resources: ["arn:aws:logs:*:*:*"],
+    }));
+
+    const imageWaiterFn = new lambda.Function(this, `${id}-EcrImageWaiterFn`, {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: "index.handler",
+      role: imageWaiterRole,
+      timeout: Duration.minutes(15),
+      code: lambda.Code.fromAsset("lambda/ecrImageWaiter"),
+    });
+
+    const makeImageWaiter = (label: string, repo: ecr.IRepository): CustomResource =>
+      new CustomResource(this, `${id}-EcrImageWaiter-${label}`, {
+        serviceToken: imageWaiterFn.functionArn,
+        properties: {
+          RepositoryName: repo.repositoryName,
+          ImageTag: "latest",
+          MaxRetries: "28",
+          RetryDelaySeconds: "30",
+          CodePipelineName: props.imageBuildPipelineName,
+          TriggerBuildOnMissing: "true",
+        },
+      });
+
+    const crawlerImageWaiter = makeImageWaiter("Crawler", props.crawlerRepository);
+    const transcriberImageWaiter = makeImageWaiter("Transcriber", props.transcriberRepository);
+
     // ── Crawler task definition ────────────────────────────────────────────────
     // Playwright/Chromium needs more memory; give it a comfortable Fargate size.
     this.crawlerTaskDef = new ecs.FargateTaskDefinition(this, `${id}-CrawlerTaskDef`, {
@@ -172,6 +236,7 @@ export class IngestionStack extends Stack {
         AWS_REGION: region,
       },
     });
+    this.crawlerTaskDef.node.addDependency(crawlerImageWaiter);
 
     // ── Transcriber task definition ────────────────────────────────────────────
     this.transcriberTaskDef = new ecs.FargateTaskDefinition(this, `${id}-TranscriberTaskDef`, {
@@ -194,6 +259,7 @@ export class IngestionStack extends Stack {
         AWS_REGION: region,
       },
     });
+    this.transcriberTaskDef.node.addDependency(transcriberImageWaiter);
   }
 
   /**
@@ -226,6 +292,8 @@ export class IngestionStack extends Stack {
   public ingestionEnv(): { [key: string]: string } {
     return {
       INGESTION_BACKEND: "pgvector",
+      // Keep the legacy env name used by generate_presigned_url*.py
+      KNOWLEDGE_BASE_BUCKET_NAME: this.ingestBucket.bucketName,
       ECS_CLUSTER_ARN: this.cluster.clusterArn,
       CRAWLER_TASK_DEF_ARN: this.crawlerTaskDef.taskDefinitionArn,
       TRANSCRIBER_TASK_DEF_ARN: this.transcriberTaskDef.taskDefinitionArn,

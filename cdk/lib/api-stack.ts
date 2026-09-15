@@ -14,12 +14,10 @@ import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
 import { WebSocketLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { Fn } from "aws-cdk-lib";
 import { Asset } from "aws-cdk-lib/aws-s3-assets";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
-import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
@@ -31,8 +29,14 @@ function computeConfigHash(config: object): string {
 
 interface ApiGatewayStackProps extends cdk.StackProps {
   ecrRepositories: { [key: string]: ecr.Repository };
-  knowledgeBaseBucket: s3.IBucket;
-  knowledgeBaseSecret: secretsmanager.ISecret;
+  // pgvector ingestion wiring (R2/R12). Structural to avoid a hard
+  // import/coupling to IngestionStack. Sets INGESTION_BACKEND=pgvector + ECS
+  // run permissions and grants the admin Lambda access to the ingest bucket.
+  ingestion?: {
+    ingestionEnv: () => { [key: string]: string };
+    grantRunTasks: (principal: iam.IGrantable & { addToRolePolicy?: (s: iam.PolicyStatement) => void }) => void;
+    grantBucketAccess: (principal: iam.IGrantable) => void;
+  };
 }
 
 export class ApiGatewayStack extends cdk.Stack {
@@ -657,15 +661,6 @@ export class ApiGatewayStack extends cdk.Stack {
     db.secretPathUser.grantRead(lambdaRole);
     this.secret.grantRead(lambdaRole);
 
-    // Explicitly grant access to the KnowledgeBase ID secret without using a broad wildcard
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["secretsmanager:GetSecretValue"],
-        resources: [props.knowledgeBaseSecret.secretArn],
-      })
-    );
-
     // Grant access to EC2
     lambdaRole.addToPolicy(
       new iam.PolicyStatement({
@@ -1022,16 +1017,10 @@ export class ApiGatewayStack extends cdk.Stack {
           REGION: this.region,
           LLM_REGION: this.region,
           BEDROCK_MODEL_ID: `us.anthropic.claude-sonnet-4-6`,
-          KB_SECRET_NAME: props.knowledgeBaseSecret.secretName
+          USE_PGVECTOR_RETRIEVAL: "true",
         },
       }
     )
-
-    // Grand Knowledge Base Secret Access 
-    lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["secretsmanager:GetSecretValue"],
-      resources: [props.knowledgeBaseSecret.secretArn]
-    }))
 
     // Grant SSM parameter access for HaikuArn and SonnetArn
       lambdaTextGen.addToRolePolicy(
@@ -1185,7 +1174,6 @@ export class ApiGatewayStack extends cdk.Stack {
         "bedrock:InvokeModelWithResponseStream", // Add streaming permission
         "bedrock:Converse",
         "bedrock:ConverseStream",
-        "bedrock:Retrieve", // Add Retrieve permission for Knowledge Base
       ],
       resources: [
         `arn:aws:bedrock:${this.region}::foundation-model/meta.llama3-70b-instruct-v1:0`,
@@ -1203,8 +1191,6 @@ export class ApiGatewayStack extends cdk.Stack {
         // Claude Haiku 4.5 (Converse currently resolves this model in us-west-2)
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
         `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
-        // Knowledge Base
-        `arn:aws:bedrock:${this.region}:${this.account}:knowledge-base/*`,
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
@@ -1231,8 +1217,6 @@ export class ApiGatewayStack extends cdk.Stack {
         REGION: this.region,
         SCHEDULER_ROLE_ARN: `arn:aws:iam::${this.account}:role/${id}-schedulerInvokeRole`,
         SCHEDULER_TARGET_ARN: `arn:aws:lambda:${this.region}:${this.account}:function:${id}-lambdaKnowledgeBase`,
-        KNOWLEDGE_BASE_BUCKET_NAME: props.knowledgeBaseBucket.bucketName,
-        KB_SECRET_NAME: props.knowledgeBaseSecret.secretName
       },
     });
 
@@ -1242,6 +1226,18 @@ export class ApiGatewayStack extends cdk.Stack {
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
+
+    // pgvector ingestion wiring (R12): when the IngestionStack is provided, set
+    // INGESTION_BACKEND=pgvector + ECS cluster/taskdef/subnet/SG env, and grant
+    // ecs:RunTask + iam:PassRole so process_crawler_batch.py can launch tasks.
+    if (props.ingestion) {
+      const ingestionEnv = props.ingestion.ingestionEnv();
+      for (const [key, value] of Object.entries(ingestionEnv)) {
+        lambdaKnowledgeBase.addEnvironment(key, value);
+      }
+      props.ingestion.grantRunTasks(lambdaKnowledgeBase);
+      props.ingestion.grantBucketAccess(lambdaKnowledgeBase);
+    }
 
 
     const cfnLambdaKnowledgeBase = lambdaKnowledgeBase.node.defaultChild as lambda.CfnFunction;
@@ -1254,31 +1250,6 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     // lambdaRole already has read access to db.secretPathUser through the stack-wide policy
-
-    // Tightly scopes S3 permissions to only the target knowledge base bucket
-    props.knowledgeBaseBucket.grantReadWrite(lambdaKnowledgeBase);
-
-    lambdaKnowledgeBase.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "bedrock:ListDataSources",
-          "bedrock:GetDataSource",
-          "bedrock:CreateDataSource",
-          "bedrock:UpdateDataSource",
-          "bedrock:ListIngestionJobs",
-          "bedrock:GetIngestionJob",
-          "bedrock:StartIngestionJob",
-        ],
-        // Tightly scopes Bedrock APIs specifically to knowledge bases
-        resources: [
-          `arn:aws:bedrock:${this.region}:${this.account}:knowledge-base/*`,
-        ],
-      })
-    );
-
-    // Grant access to read Knowledge Base ID
-    props.knowledgeBaseSecret.grantRead(lambdaKnowledgeBase);
 
     lambdaKnowledgeBase.addToRolePolicy(
       new iam.PolicyStatement({

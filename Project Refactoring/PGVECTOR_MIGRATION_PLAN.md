@@ -34,15 +34,29 @@ Still to do:
 - [ ] R6. Load a representative corpus (web + video + document) (AWS)
 - [ ] R7. Run the Python unit tests in a real Python 3.12 env (AWS/YOU)
 - [ ] R8. Live-validate retrieval with `USE_PGVECTOR_RETRIEVAL=true` (AWS)
-- [ ] R9. Run the comparison harness; set numeric acceptance thresholds (AWS/YOU)
-- [ ] R10. Cutover to pgvector; bake; execute KB/OpenSearch retirement edits (AWS)
+- [~] R9. Comparison harness written (tools/compare_retrieval.py). RUN it on the
+        dev stack + set numeric acceptance thresholds (AWS/YOU)
+- [~] R10. Retirement runbook written (RETIREMENT.md). EXECUTE the cutover + bake +
+        KB/OpenSearch retirement on live AWS (AWS/YOU)
 - [ ] R11. Commit the changes (currently all untracked/modified in the working tree) (YOU)
-- [ ] R12. (from R2) cdk synth review + wire api-stack: lambdaKnowledgeBase env =
-        ingestionStack.ingestionEnv(), ingestionStack.grantRunTasks(lambda); fix CICD
-        buildspec context for the crawler/transcriber images (AWS/CODE)
+- [x] R12. Ingestion wiring — api-stack env + grantRunTasks, CICD build context.
+        CODE done AND `cdk synth` PASSES for the full app (all 8 stacks) with the
+        nav-dev profile. Deploy still required. (AWS)
 
-R2, R3, R4 are complete as statically-validated code. R1 and R5–R12 require live
-AWS or owner action and cannot be executed from this workspace.
+R2, R3, R4 and R12 are complete and `cdk synth`-validated. R1 and R5–R11 (plus the
+actual `cdk deploy` of R12) require live AWS or owner action.
+
+Tooling fixes made to get synth working (committed separately):
+- Bumped the `aws-cdk` CLI devDependency 2.1022.0 -> 2.1115.0 to match the
+  aws-cdk-lib 2.245.0 cloud-assembly schema (was schema 48 vs 53 mismatch).
+- Use the LOCAL CLI (`node_modules/.bin/cdk`), not `npx cdk` (npx resolved a
+  different package literally named "cdk").
+- Remove stale compiled bin/*.js + lib/*.js before synth so `ts-node` runs the
+  .ts source (cdk.json app = ts-node bin/cdk.ts); stale .js shadowed it.
+- Synth command (from cdk/):
+  `node_modules/.bin/cdk.cmd synth --context StackPrefix=KC --context environment=dev
+   --context githubRepo=<repo> --context githubBranch=main --context versionNumber=1`
+  with AWS_PROFILE=nav-dev, CDK_DEFAULT_ACCOUNT=825243640171, CDK_DEFAULT_REGION=ca-central-1.
 
 ---
 
@@ -790,3 +804,95 @@ scaffold that is SYNTH-PENDING (not `cdk synth`/deploy-validated).
 - Migrations 000/001/002/003 node load-check: all OK (up/down present).
 - No Python runtime locally, so Python modules (process_crawler_batch, retrieval,
   config/logic/chat, crawler/transcriber) are static-reviewed only, not executed.
+
+---
+
+## 18. R12 progress log — ingestion wiring (code half)
+
+Status: CODE complete and tsc-validated. The `cdk synth`/deploy half remains and
+must be run on the dev stack with AWS credentials (not possible from this workspace).
+
+Delivered:
+- `api-stack.ts`: `ApiGatewayStackProps` gained an optional `ingestion` hook
+  (structural: `{ ingestionEnv(), grantRunTasks(principal) }` — no hard import of
+  IngestionStack, to avoid coupling). When provided, `lambdaKnowledgeBase` gets the
+  ingestion env applied (INGESTION_BACKEND=pgvector + ECS cluster/taskdef/subnet/SG
+  + container names) and `grantRunTasks` adds ecs:RunTask + iam:PassRole.
+- `cdk.ts`: `apiStack` now receives `ingestion` wired to `ingestionStack`
+  (`ingestionEnv()` / `grantRunTasks`) and declares `apiStack.addDependency(ingestionStack)`.
+- `cicd-stack.ts`: `LambdaConfig` gained optional `buildContext` and `dockerfile`;
+  the `docker build` command now uses them (defaults preserve existing behavior:
+  context = sourceDir, dockerfile = sourceDir/Dockerfile).
+- `cdk.ts`: the crawler/transcriber CICD entries set `buildContext: "Project
+  Refactoring"` and the matching `dockerfile` paths, so the shared `common/` package
+  is in the Docker build context. Confirmed the Dockerfiles' COPY paths
+  (crawler/requirements.txt, common/, transcriber/transcrbe.py) match that context.
+
+Verified: `cdk> npm run build` (tsc) PASS.
+
+Remaining for R12 (AWS, owner):
+- `cd cdk && cdk synth` — first real validation of the full stack graph incl.
+  IngestionStack + api-stack wiring. Expect to iterate on synth-time errors.
+- Deploy incrementally; confirm the crawler/transcriber images build in CodePipeline
+  with the new build context; confirm lambdaKnowledgeBase receives the ingestion env.
+- Only then proceed to R5–R10 (apply migrations, load corpus, validate, cutover).
+
+---
+
+## 19. Post-synth cleanups (ECR waiter + stale PEM)
+
+Status: Done and `cdk synth`-validated (full app, nav-dev).
+
+- Removed the unused committed `Project Refactoring/AmazonRootCA1.pem`. Nothing
+  references it; the containers/runtime fetch the RDS CA bundle at build/run time
+  via `DB_SSL_ROOT_CERT` (grep for AmazonRootCA1 = 0 matches).
+- Added an ECR image waiter to `IngestionStack` (mirrors the KB stack pattern):
+  a Node waiter Lambda (`lambda/ecrImageWaiter`) + IAM role (ecr:DescribeImages /
+  BatchGetImage on both repos, codepipeline:StartPipelineExecution on the build
+  pipeline, logs) + one `CustomResource` per repo (crawler, transcriber) with
+  `TriggerBuildOnMissing=true`. The crawler/transcriber task definitions now
+  `addDependency` on their waiter, so a first deploy waits for (or triggers) the
+  image build instead of failing on a missing `:latest` image.
+- New prop `imageBuildPipelineName` on `IngestionStackProps`, wired in cdk.ts from
+  `cicdStack.pipelineName`.
+- Verified: `cdk synth KC-Ingestion` and full-app synth both PASS; waiter resources
+  confirmed present in cdk.out/KC-Ingestion.template.json.
+
+This removes the most likely first-deploy failure (ECR image ordering) that was
+flagged in section 17/18.
+
+---
+
+## 20. R9 & R10 progress log — comparison harness + retirement runbook (prepare-only)
+
+Status: Both CODE/DOC artifacts written. Neither is executed here — R9 needs the
+live stack + corpus; R10 is destructive and gated for manual operator execution.
+
+### R9 — comparison harness (done, run on dev stack)
+- `Project Refactoring/tools/compare_retrieval.py`: runs a fixed query set through
+  BOTH backends, reusing the production helpers (`helpers.bedrock.retrieve_documents`,
+  `helpers.retrieval.retrieve_from_pgvector`, `helpers.intervention.assess_response`,
+  `format_context_for_prompt`) and the shared `common/db_config.py`. Per query it
+  records retrieve/generate latency, source count, top-k URLs, cross-backend URL
+  Jaccard overlap, and the assessed score+label; prints an aggregate summary and
+  writes JSON. Verified all helper call signatures match the real code.
+- `tools/comparison_queries.json`: 12 in-scope queries mapped to Inclusion Canada
+  user-story stages (Journeys 1 & 2) + 2 out-of-scope probes.
+- `tools/README.md`: prereqs, run commands, and how to read results into thresholds.
+- To run (from an env with AWS creds + DB access):
+  `python compare_retrieval.py --backends both --top-k 7 --min-score 0.40`
+  (needs `KB_ID`, `REGION`, and DB env). Then record accepted thresholds in §8 item 5.
+
+### R10 — retirement runbook (done, execute manually)
+- `Project Refactoring/RETIREMENT.md`: a gated, DESTRUCTIVE, ordered runbook that
+  makes §6.4 concrete. Sections: §0 preconditions; §1 reversible flag flip (the real
+  cutover, no infra deletion); §2 exact code edits (cdk.ts / api-stack / delete
+  knowledge-base-stack / remove Bedrock-only lambdas & KB config, KEEP
+  `format_context_for_prompt`); §3 deploy order (Api before destroy); §4
+  `cdk destroy KC-KnowledgeBase` + OpenSearch/S3/ECR cleanup; §5 rollback (instant
+  before §4, slow/lossy after); §6 verification. Marked DO-NOT-AUTO-RUN.
+
+### What remains (live AWS / owner)
+- R1 credential rotation; bootstrap + incremental deploy; R5–R8 (apply migrations,
+  load corpus, live-validate behind the flag); R9 run + thresholds; R10 execute.
+- All code/design/docs achievable in this workspace are now complete.

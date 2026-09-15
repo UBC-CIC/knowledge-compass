@@ -12,7 +12,7 @@ import { ApiGatewayStack } from "./api-stack";
 interface AmplifyStackProps extends cdk.StackProps {
   githubRepo: string;
   githubBranch?: string;
-  knowledgeBaseBucketName: string;
+  ingestBucketName: string;
   allowedOriginsParamName: string;
 }
 
@@ -127,7 +127,7 @@ export class AmplifyStack extends cdk.Stack {
         service: "S3",
         action: "putBucketCors",
         parameters: {
-          Bucket: props.knowledgeBaseBucketName,
+          Bucket: props.ingestBucketName,
           CORSConfiguration: {
             CORSRules: [
               {
@@ -142,7 +142,7 @@ export class AmplifyStack extends cdk.Stack {
         physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("UpdateS3BucketCors"),
       },
       policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: [`arn:aws:s3:::${props.knowledgeBaseBucketName}`],
+        resources: [`arn:aws:s3:::${props.ingestBucketName}`],
       }),
     });
   }

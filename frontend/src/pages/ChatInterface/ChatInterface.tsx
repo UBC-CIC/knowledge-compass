@@ -860,7 +860,7 @@ export default function AIChatPage({
       </div>
 
       <div className="shrink-0 px-4 pb-[18px] pt-3 md:px-[34px]">
-        <div className="max-w-[680px]">
+        <div className="mx-auto w-full max-w-[680px]">
           <AiChatInput
             value={message}
             onChange={(val: string) => setMessage(val)}

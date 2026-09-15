@@ -12,7 +12,13 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 interface LambdaConfig {
   name: string; // Module name (e.g., "textGeneration")
   functionName: string; // Lambda function name
-  sourceDir: string; // Source directory for Docker build
+  sourceDir: string; // Path used for path-filter change detection AND default Dockerfile location
+  // Optional Docker build context (relative to repo root). Defaults to sourceDir.
+  // Use this when the Dockerfile needs files outside sourceDir (e.g. the shared
+  // "Project Refactoring/common" package for the crawler/transcriber images).
+  buildContext?: string;
+  // Optional Dockerfile path (relative to repo root). Defaults to sourceDir/Dockerfile.
+  dockerfile?: string;
 }
 
 interface CICDStackProps extends cdk.StackProps {
@@ -224,7 +230,7 @@ export class CICDStack extends cdk.Stack {
               build: {
                 commands: [
                   'echo "Building Docker image..."',
-                  `docker build -t $REPOSITORY_URI:$IMAGE_TAG $CODEBUILD_SRC_DIR/${lambda.sourceDir} -f $CODEBUILD_SRC_DIR/${lambda.sourceDir}/Dockerfile`,
+                  `docker build -t $REPOSITORY_URI:$IMAGE_TAG "$CODEBUILD_SRC_DIR/${lambda.buildContext ?? lambda.sourceDir}" -f "$CODEBUILD_SRC_DIR/${lambda.dockerfile ?? `${lambda.sourceDir}/Dockerfile`}"`,
                 ],
               },
               post_build: {
