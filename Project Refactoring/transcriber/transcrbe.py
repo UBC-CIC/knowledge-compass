@@ -65,6 +65,22 @@ def _seconds_to_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 
+def resolve_transcript_path(transcript_json: str) -> str:
+    """Download an s3:// Transcribe JSON to /tmp so the parser can read it."""
+    if not transcript_json.startswith("s3://"):
+        return transcript_json
+
+    without = transcript_json[len("s3://"):]
+    bucket, _, key = without.partition("/")
+    if not bucket or not key:
+        raise ValueError(f"Invalid S3 URI: {transcript_json}")
+
+    local_path = "/tmp/transcript.json"
+    print(f"Downloading {transcript_json} -> {local_path}", file=sys.stderr)
+    boto3.client("s3", region_name=REGION).download_file(bucket, key, local_path)
+    return local_path
+
+
 def parse_transcribe_json(filepath: str) -> list:
     """
     Parse a Transcribe job output JSON file into a list of segments.
@@ -502,7 +518,8 @@ def main() -> None:
     name = args.name or args.transcript_json
 
     print(f"Parsing {args.transcript_json}...", file=sys.stderr)
-    segments = parse_transcribe_json(args.transcript_json)
+    transcript_path = resolve_transcript_path(args.transcript_json)
+    segments = parse_transcribe_json(transcript_path)
 
     if args.semantic:
         print(f"Semantic chunking enabled (threshold={args.semantic_threshold})",

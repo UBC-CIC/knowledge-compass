@@ -21,6 +21,8 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
 
 function computeConfigHash(config: object): string {
@@ -1253,6 +1255,18 @@ export class ApiGatewayStack extends cdk.Stack {
       }
       props.ingestion.grantRunTasks(lambdaKnowledgeBase);
       props.ingestion.grantBucketAccess(lambdaKnowledgeBase);
+
+      new events.Rule(this, `${id}-TranscribeComplete`, {
+        description: "Launch pgvector transcriber when Amazon Transcribe finishes a video job",
+        eventPattern: {
+          source: ["aws.transcribe"],
+          detailType: ["Transcribe Job State Change"],
+          detail: {
+            TranscriptionJobStatus: ["COMPLETED", "FAILED"],
+          },
+        },
+        targets: [new targets.LambdaFunction(lambdaKnowledgeBase)],
+      });
     }
 
 

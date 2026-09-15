@@ -4,6 +4,7 @@ import logging
 import boto3
 
 from helpers.cors import get_cors_headers
+from helpers.video_transcription import is_http_url, start_transcription_job
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -201,8 +202,8 @@ def stage_data_sources(event, body, connection):
     source_type = body.get("type")
     created_by = body.get("created_by")
 
-    if source_type not in {"website", "csv", "markdown"}:
-        return _response(event, 400, {"error": "type must be one of: website, csv, markdown"})
+    if source_type not in {"website", "csv", "markdown", "video"}:
+        return _response(event, 400, {"error": "type must be one of: website, csv, markdown, video"})
 
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})
@@ -275,6 +276,102 @@ def stage_data_sources(event, body, connection):
                     "created_by": created_by,
                     "staged_data_source_ids": [data_source_id],
                     "pending_ingestion_run_ids": [ingestion_run_id],
+                },
+            )
+
+        if source_type == "video":
+            file_name = body.get("video_file_name")
+            s3_bucket = body.get("video_s3_bucket")
+            s3_key = body.get("video_s3_key")
+            video_url = (body.get("video_url") or "").strip()
+            display_name = (body.get("name") or file_name or "").strip()
+
+            if not file_name or not s3_bucket or not s3_key:
+                return _response(event, 400, {"error": "Missing video file details"})
+            if not video_url or not is_http_url(video_url):
+                return _response(
+                    event,
+                    400,
+                    {"error": "video_url must be a public http(s) URL used for citations and deep-links"},
+                )
+
+            try:
+                _assert_s3_object_exists(s3_bucket, s3_key)
+            except Exception as e:
+                logger.error("Uploaded video not found in S3: %s", e, exc_info=True)
+                return _response(event, 400, {"error": "Uploaded video does not exist in S3"})
+
+            existing_id = _existing_file_row_id(connection, s3_bucket=s3_bucket, s3_key=s3_key)
+            if existing_id:
+                return _response(
+                    event,
+                    409,
+                    {
+                        "error": "Video file already exists in data_sources",
+                        "existing_data_source_id": existing_id,
+                        "file_name": file_name,
+                    },
+                )
+
+            try:
+                transcribe_info = start_transcription_job(
+                    bucket=s3_bucket,
+                    key=s3_key,
+                    file_name=file_name,
+                )
+            except Exception as e:
+                logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
+                return _response(
+                    event,
+                    500,
+                    {"error": "Failed to start transcription. Check the file format and try again."},
+                )
+
+            data_source_metadata = {
+                "source": "staged_video",
+                "action": "transcribing",
+                "s3_bucket": s3_bucket,
+                "s3_key": s3_key,
+                "video_url": video_url,
+                "video_file_name": file_name,
+                "transcribe_job_name": transcribe_info["transcribe_job_name"],
+                "transcribe_status": "IN_PROGRESS",
+                "transcribe_output_s3_uri": transcribe_info["transcript_s3_uri"],
+                "media_format": transcribe_info["media_format"],
+            }
+
+            data_source_id = _insert_data_source_row(
+                connection,
+                name=display_name,
+                data_source_type="video",
+                created_by_user_id=created_by_user_id,
+                metadata=data_source_metadata,
+            )
+
+            ingestion_run_id = _insert_ingestion_run_row(
+                connection,
+                data_source_row_id=data_source_id,
+                status="pending",
+                metadata={
+                    "source": "staged_video",
+                    "action": "awaiting_transcription",
+                    "transcribe_job_name": transcribe_info["transcribe_job_name"],
+                },
+            )
+
+            connection.commit()
+
+            return _response(
+                event,
+                200,
+                {
+                    "message": "Video uploaded. Transcription has started; embedding will run automatically when it finishes.",
+                    "action": "staged_video_transcription",
+                    "type": "video",
+                    "created_by": created_by,
+                    "staged_data_source_ids": [data_source_id],
+                    "pending_ingestion_run_ids": [ingestion_run_id],
+                    "transcribe_job_name": transcribe_info["transcribe_job_name"],
                 },
             )
 

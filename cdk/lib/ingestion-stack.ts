@@ -50,6 +50,7 @@ export class IngestionStack extends Stack {
   public readonly transcriberTaskDef: ecs.FargateTaskDefinition;
   public readonly ingestSecurityGroup: ec2.SecurityGroup;
   public readonly ingestBucket: s3.Bucket;
+  public readonly transcribeDataAccessRole: iam.Role;
 
   // Container names must match what process_crawler_batch.py overrides.
   public readonly crawlerContainerName = "crawler";
@@ -166,6 +167,12 @@ export class IngestionStack extends Stack {
     const crawlerTaskRole = makeTaskRole(`${id}-CrawlerTaskRole`, false);
     const transcriberTaskRole = makeTaskRole(`${id}-TranscriberTaskRole`, true);
 
+    this.transcribeDataAccessRole = new iam.Role(this, `${id}-TranscribeAccessRole`, {
+      assumedBy: new iam.ServicePrincipal("transcribe.amazonaws.com"),
+      description: "Lets Amazon Transcribe read uploaded videos and write transcript JSON",
+    });
+    this.ingestBucket.grantReadWrite(this.transcribeDataAccessRole);
+
     // ── ECR image waiter ───────────────────────────────────────────────────────
     // The crawler/transcriber images are built by the CICD pipeline, so on a first
     // deploy they may not exist yet when this stack resolves the task-def images.
@@ -279,12 +286,33 @@ export class IngestionStack extends Stack {
         this.crawlerTaskDef.taskRole.roleArn,
         this.transcriberTaskDef.taskRole.roleArn,
         this.crawlerTaskDef.executionRole!.roleArn,
+        this.transcriberTaskDef.executionRole!.roleArn,
       ],
       conditions: { StringEquals: { "iam:PassedToService": "ecs-tasks.amazonaws.com" } },
     });
     if (principal.addToRolePolicy) {
       principal.addToRolePolicy(runTaskStatement);
       principal.addToRolePolicy(passRoleStatement);
+      principal.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "transcribe:StartTranscriptionJob",
+            "transcribe:GetTranscriptionJob",
+          ],
+          resources: ["*"],
+        })
+      );
+      principal.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ["iam:PassRole"],
+          resources: [this.transcribeDataAccessRole.roleArn],
+          conditions: {
+            StringEquals: { "iam:PassedToService": "transcribe.amazonaws.com" },
+          },
+        })
+      );
     }
   }
 
@@ -301,6 +329,8 @@ export class IngestionStack extends Stack {
       INGESTION_SECURITY_GROUP_IDS: this.ingestSecurityGroup.securityGroupId,
       CRAWLER_CONTAINER_NAME: this.crawlerContainerName,
       TRANSCRIBER_CONTAINER_NAME: this.transcriberContainerName,
+      TRANSCRIBE_DATA_ACCESS_ROLE_ARN: this.transcribeDataAccessRole.roleArn,
+      TRANSCRIBE_OUTPUT_PREFIX: "transcripts",
     };
   }
 }

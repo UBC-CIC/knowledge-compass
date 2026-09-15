@@ -18,7 +18,29 @@ ALLOWED_CONTENT_TYPES = {
     "application/json",
     "text/json",
     "application/octet-stream",
+    "video/mp4",
+    "video/webm",
+    "video/x-m4v",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/flac",
+    "audio/ogg",
+    "audio/amr",
 }
+
+VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".m4v",
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".amr",
+    ".webm",
+    ".m4a",
+)
 
 s3 = boto3.client(
     "s3",
@@ -47,6 +69,11 @@ def _is_markdown_file(file_name: str) -> bool:
     lower_name = file_name.lower()
     return lower_name.endswith(".md") or lower_name.endswith(".markdown")
 
+def _is_video_file(file_name: str) -> bool:
+    lower_name = file_name.lower()
+    return lower_name.endswith(VIDEO_EXTENSIONS)
+
+
 def _infer_upload_prefix(file_name: str, content_type: str) -> str:
     lower_name = file_name.lower()
 
@@ -58,6 +85,9 @@ def _infer_upload_prefix(file_name: str, content_type: str) -> str:
 
     if lower_name.endswith(".json") or content_type in {"application/json", "text/json"}:
         return "uploads/json"
+
+    if _is_video_file(file_name) or content_type.startswith("video/") or content_type.startswith("audio/"):
+        return "uploads/video"
 
     return "uploads/files"
 
@@ -95,9 +125,13 @@ def generate_presigned_url(event):
     if lower_name.endswith(".json") and content_type not in {"application/json", "text/json", "application/octet-stream"}:
         return _response(event, 400, {"error": "JSON files must use content_type application/json, text/json, or application/octet-stream"})
 
+    if _is_video_file(file_name) and content_type not in ALLOWED_CONTENT_TYPES:
+        return _response(event, 400, {"error": "Unsupported video/audio content type"})
+
     prefix = _infer_upload_prefix(file_name, content_type)
     timestamp = int(time.time())
     key = f"{prefix}/{timestamp}_{file_name}"
+    expires_in = 3600 if prefix == "uploads/video" else 300
 
     try:
         presigned_url = s3.generate_presigned_url(
@@ -107,7 +141,7 @@ def generate_presigned_url(event):
                 "Key": key,
                 "ContentType": content_type,
             },
-            ExpiresIn=300,
+            ExpiresIn=expires_in,
             HttpMethod="PUT",
         )
 

@@ -11,6 +11,7 @@ from helpers.start_ingestion_job import start_ingestion_job
 from helpers.generate_presigned_url import generate_presigned_url
 from helpers.generate_presigned_urls_batch import generate_presigned_urls_batch
 from helpers.update_status import update_status
+from helpers.video_transcription import handle_transcribe_complete
 
 # Set up logging
 logger = logging.getLogger()
@@ -108,6 +109,14 @@ def handler(event, context=None):
     logger.info("Event: %s (body omitted)", json.dumps(safe_event))
     
     try:
+        if event.get("source") == "aws.transcribe":
+            try:
+                connection = _connect_to_db()
+            except Exception as e:
+                logger.error(f"Error connecting to database: {e}")
+                return _response(event, 500, {"error": "Error connecting to database"})
+            return handle_transcribe_complete(event, connection)
+
         # Scheduler polling path
         if event.get("task") == "poll_ingestion_run":
             try:

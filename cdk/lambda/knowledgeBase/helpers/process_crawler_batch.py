@@ -161,6 +161,53 @@ def _run_crawler_task(run: dict) -> str:
     return resp["tasks"][0]["taskArn"]
 
 
+def launch_transcriber_for_run(connection, *, ingestion_run_id: str, sync_session_id: str) -> dict:
+    """Queue-to-running helper used when Amazon Transcribe finishes a video job."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                ir.id,
+                ir.data_source_id,
+                ds.name,
+                ds.type,
+                ds.include_patterns,
+                ds.exclude_patterns,
+                ds.metadata
+            FROM ingestion_runs ir
+            JOIN data_sources ds ON ds.id = ir.data_source_id
+            WHERE ir.id = %s::uuid
+            """,
+            (ingestion_run_id,),
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        raise RuntimeError(f"ingestion run not found: {ingestion_run_id}")
+
+    run = {
+        "ingestion_run_id": str(row[0]),
+        "data_source_id": str(row[1]),
+        "name": row[2],
+        "type": row[3],
+        "include_patterns": row[4] or [],
+        "exclude_patterns": row[5] or [],
+        "data_source_metadata": row[6] or {},
+    }
+    if not run["data_source_metadata"].get("transcript_s3_uri"):
+        raise RuntimeError("transcript_s3_uri is missing; Transcribe may not have finished")
+
+    task_arn = _run_transcriber_task(run)
+    _mark_run_running(
+        connection,
+        ingestion_run_id=run["ingestion_run_id"],
+        ecs_task_arn=task_arn,
+        sync_session_id=sync_session_id,
+    )
+    connection.commit()
+    return {"ingestion_run_id": run["ingestion_run_id"], "ecs_task_arn": task_arn}
+
+
 def _run_transcriber_task(run: dict) -> str:
     """
     Launch the transcriber ECS task for a video source. Returns the ECS task ARN.
@@ -217,6 +264,13 @@ def process_crawler_batch(event, connection, sync_session_id: str, triggered_by_
             elif run["type"] == "video":
                 if not TRANSCRIBER_TASK_DEF_ARN:
                     raise RuntimeError("TRANSCRIBER_TASK_DEF_ARN not set")
+                meta = run.get("data_source_metadata") or {}
+                if meta.get("transcribe_status") != "COMPLETED" or not meta.get("transcript_s3_uri"):
+                    logger.info(
+                        "Skipping video run %s; Transcribe has not produced a transcript yet",
+                        run["ingestion_run_id"],
+                    )
+                    continue
                 task_arn = _run_transcriber_task(run)
             else:
                 continue

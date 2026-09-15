@@ -73,9 +73,14 @@ def _promote_pending_to_queued(connection, *, sync_session_id: str) -> int:
                 status = 'queued'::ingestion_status,
                 metadata = COALESCE(ir.metadata, '{}'::jsonb) || %s::jsonb
             FROM latest_runs lr
+            JOIN data_sources ds ON ds.id = lr.data_source_id
             WHERE ir.id = lr.id
               AND lr.rn = 1
               AND ir.status = 'pending'::ingestion_status
+              AND NOT (
+                ds.type = 'video'::data_source_type
+                AND COALESCE(ds.metadata->>'transcribe_status', '') <> 'COMPLETED'
+              )
             """,
             (json.dumps({"sync_session_id": sync_session_id}),),
         )

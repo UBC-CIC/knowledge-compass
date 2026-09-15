@@ -13,6 +13,7 @@ import {
   Archive,
   Copy,
   Download,
+  Film,
 } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { getCurrentUser } from "aws-amplify/auth";
@@ -53,7 +54,7 @@ type AnalyticsTotals = {
   questions?: number;
 };
 
-type DataSourceType = "csv" | "markdown" | "json" | "website";
+type DataSourceType = "csv" | "markdown" | "json" | "website" | "video";
 
 type DataSourceRow = {
   id: string;
@@ -70,7 +71,8 @@ type IngestionRunStatus =
   | "queued"
   | "running"
   | "failed"
-  | "completed";
+  | "completed"
+  | "transcribing";
 
 type IngestionRunRow = {
   id: string;
@@ -120,6 +122,7 @@ function typeLabel(t: DataSourceType) {
   if (t === "csv") return "CSV";
   if (t === "markdown") return "Markdown";
   if (t === "json") return "JSON";
+  if (t === "video") return "Video";
   return t;
 }
 
@@ -135,6 +138,8 @@ function statusBadge(status: IngestionRunStatus | "no_runs") {
       return <Badge className="rounded-full border-0 bg-[oklch(0.96_0.03_25)] px-2.5 py-1 text-xs font-bold text-[oklch(0.38_0.13_25)]">Failed</Badge>;
     case "running":
       return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">Running</Badge>;
+    case "transcribing":
+      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">Transcribing</Badge>;
     default:
       return <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">Not synced</Badge>;
   }
@@ -159,6 +164,59 @@ function isMarkdownFile(file: File) {
 
 function isCsvFile(file: File) {
   return file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+}
+
+function isVideoFile(file: File) {
+  const lower = file.name.toLowerCase();
+  return (
+    lower.endsWith(".mp4") ||
+    lower.endsWith(".webm") ||
+    lower.endsWith(".mp3") ||
+    lower.endsWith(".wav") ||
+    lower.endsWith(".flac") ||
+    lower.endsWith(".ogg") ||
+    lower.endsWith(".m4a") ||
+    lower.endsWith(".m4v") ||
+    lower.endsWith(".amr")
+  );
+}
+
+function validateVideoFile(file: File): string | null {
+  if (!isVideoFile(file)) {
+    return "Use mp4, webm, mp3, wav, flac, ogg, m4a, or amr. MOV files are not supported.";
+  }
+  if (file.size > 1024 * 1024 * 1024) {
+    return "Video must be smaller than 1 GB.";
+  }
+  return null;
+}
+
+function videoContentType(file: File): string {
+  if (file.type && file.type !== "application/octet-stream") return file.type;
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
+  if (lower.endsWith(".webm")) return "video/webm";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".ogg")) return "audio/ogg";
+  if (lower.endsWith(".amr")) return "audio/amr";
+  return "video/mp4";
+}
+
+function displayedStatus(
+  ds: DataSourceRow,
+  run?: IngestionRunRow | null
+): IngestionRunStatus | "no_runs" {
+  if (
+    run?.status === "pending" &&
+    ds.type === "video" &&
+    ds.metadata?.transcribe_status === "IN_PROGRESS"
+  ) {
+    return "transcribing";
+  }
+  return run?.status ?? "no_runs";
 }
 
 function validatePrimaryFile(file: File): string | null {
@@ -233,7 +291,10 @@ export default function DataSourceManagement() {
   }>({ type: null, message: "" });
 
   // Upload tab: "single" | "zip"
-  const [uploadTab, setUploadTab] = useState<"single" | "zip">("single");
+  const [uploadTab, setUploadTab] = useState<"single" | "zip" | "video">("single");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState("");
+  const [videoTitle, setVideoTitle] = useState("");
 
   // Zip upload state
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -558,19 +619,23 @@ export default function DataSourceManagement() {
   const getPresignedUpload = async (
     token: string,
     file: File,
-    uploadType: "csv" | "markdown" | "json"
+    uploadType: "csv" | "markdown" | "json" | "video"
   ): Promise<PresignedUploadResponse> => {
     const fallbackContentType =
       uploadType === "csv"
         ? "text/csv"
         : uploadType === "markdown"
         ? "text/markdown"
+        : uploadType === "video"
+        ? "video/mp4"
         : "application/json";
 
     const res = await fetch(
       `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
         file.name
-      )}&content_type=${encodeURIComponent(file.type || fallbackContentType)}`,
+      )}&content_type=${encodeURIComponent(
+        uploadType === "video" ? videoContentType(file) : file.type || fallbackContentType
+      )}`,
       {
         headers: {
           Authorization: token,
@@ -612,6 +677,9 @@ export default function DataSourceManagement() {
     setZipFile(null);
     setZipPairs([]);
     setZipStatus({ type: null, message: "" });
+    setVideoFile(null);
+    setVideoUrl("");
+    setVideoTitle("");
   };
 
   const handleZipSelect = async (file: File) => {
@@ -935,6 +1003,102 @@ export default function DataSourceManagement() {
     }
   };
 
+  const handleVideoFileSelect = (selectedFile: File) => {
+    setUploadStatus({ type: null, message: "" });
+    const validationError = validateVideoFile(selectedFile);
+    if (validationError) {
+      setUploadStatus({ type: "error", message: validationError });
+      return;
+    }
+    setVideoFile(selectedFile);
+    if (!videoTitle.trim()) {
+      setVideoTitle(selectedFile.name.replace(/\.[^.]+$/, ""));
+    }
+  };
+
+  const handleVideoUpload = async () => {
+    if (isDemoMode) {
+      setUploadStatus({
+        type: "success",
+        message: "Demo: the video would be transcribed and embedded automatically.",
+      });
+      return;
+    }
+    if (!videoFile) {
+      setUploadStatus({ type: "error", message: "Choose a video or audio file." });
+      return;
+    }
+    if (!videoUrl.trim() || !/^https?:\/\//i.test(videoUrl.trim())) {
+      setUploadStatus({
+        type: "error",
+        message: "Enter the public http(s) URL for this video (YouTube or similar).",
+      });
+      return;
+    }
+    if (!adminEmail) {
+      setUploadStatus({
+        type: "error",
+        message: "Unable to determine the current admin email.",
+      });
+      return;
+    }
+
+    try {
+      setUploading(true);
+      setUploadStatus({ type: null, message: "" });
+
+      const token = await AuthService.getAdminIdToken();
+      const upload = await getPresignedUpload(token, videoFile, "video");
+      await uploadFileToS3(upload.presignedUrl, videoFile, videoContentType(videoFile));
+
+      const stageResponse = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "video",
+            video_file_name: videoFile.name,
+            video_s3_bucket: upload.bucket,
+            video_s3_key: upload.key,
+            video_url: videoUrl.trim(),
+            name: videoTitle.trim() || videoFile.name,
+            created_by: adminEmail,
+          }),
+        }
+      );
+
+      const responseJson = await stageResponse.json().catch(() => ({}));
+      if (!stageResponse.ok) {
+        throw new Error(
+          responseJson?.error ||
+            responseJson?.message ||
+            "Video uploaded but transcription could not be started."
+        );
+      }
+
+      setUploadStatus({
+        type: "success",
+        message:
+          responseJson?.message ||
+          "Video staged. Transcription has started and embedding will run when it finishes.",
+      });
+      await fetchAdminDataSources();
+      setTimeout(() => resetUploadDialog(), 1500);
+    } catch (err) {
+      console.error("Video upload error:", err);
+      setUploadStatus({
+        type: "error",
+        message: err instanceof Error ? err.message : "Video upload failed",
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const latestRunBySourceId = (() => {
     const map = new Map<string, IngestionRunRow>();
     for (const r of ingestionRuns) {
@@ -969,9 +1133,12 @@ export default function DataSourceManagement() {
       );
     });
 
-  const hasPendingLikeItems = ingestionRuns.some(
-    (r) => r.status === "pending" || r.status === "queued"
-  );
+  const hasPendingLikeItems = ingestionRuns.some((r) => {
+    if (r.status === "queued") return true;
+    if (r.status !== "pending") return false;
+    const ds = dataSources.find((d) => d.id === r.data_source_id);
+    return !(ds?.type === "video" && ds.metadata?.transcribe_status === "IN_PROGRESS");
+  });
 
   const totalPages = Math.max(1, Math.ceil(filteredDataSources.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -1155,7 +1322,7 @@ export default function DataSourceManagement() {
                   <DialogHeader>
                     <DialogTitle>Upload guidance files</DialogTitle>
                     <DialogDescription>
-                      Add CSV or Markdown resources to the Knowledge Compass knowledge base. Each file needs a matching metadata JSON sidecar.
+                      Add CSV, Markdown, or video resources to the Knowledge Compass knowledge base.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -1184,6 +1351,18 @@ export default function DataSourceManagement() {
                     >
                       <Archive className="inline h-3.5 w-3.5 mr-1.5" />
                       Zip Upload
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUploadTab("video")}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        uploadTab === "video"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <Film className="inline h-3.5 w-3.5 mr-1.5" />
+                      Video
                     </button>
                   </div>
 
@@ -1461,6 +1640,100 @@ export default function DataSourceManagement() {
                   </div>
                   )}
 
+                  {uploadTab === "video" && (
+                  <div className="grid gap-4 py-4">
+                    <div className="text-sm text-gray-600">
+                      Upload a video or audio file. Amazon Transcribe processes it automatically; when that finishes, Knowledge Compass embeds the transcript. Provide the public URL families should be sent to (usually YouTube).
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-gray-900">Video or audio file</div>
+                      {!videoFile ? (
+                        <div
+                          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const droppedFile = e.dataTransfer.files?.[0];
+                            if (droppedFile) handleVideoFileSelect(droppedFile);
+                          }}
+                          onClick={() => document.getElementById("video-upload")?.click()}
+                        >
+                          <div className="flex flex-col items-center gap-2">
+                            <Film className="h-8 w-8 text-gray-400" />
+                            <span className="text-sm font-medium text-gray-600">
+                              Drag and drop mp4, webm, mp3, wav, or m4a
+                            </span>
+                            <span className="text-xs text-gray-400">or click to browse (max 1 GB)</span>
+                          </div>
+                          <Input
+                            id="video-upload"
+                            type="file"
+                            className="hidden"
+                            accept=".mp4,.webm,.mp3,.wav,.flac,.ogg,.m4a,.m4v,.amr,video/mp4,video/webm,audio/*"
+                            onChange={(e) => {
+                              const selectedFile = e.target.files?.[0];
+                              if (selectedFile) handleVideoFileSelect(selectedFile);
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="border rounded-lg p-4 bg-gray-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <Film className="h-5 w-5 text-primary flex-shrink-0" />
+                              <span className="text-sm font-medium truncate">{videoFile.name}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                              onClick={() => setVideoFile(null)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <div className="text-xs text-gray-500">{formatSizeMb(videoFile)}</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-900" htmlFor="video-title">
+                        Title
+                      </label>
+                      <Input
+                        id="video-title"
+                        value={videoTitle}
+                        onChange={(e) => setVideoTitle(e.target.value)}
+                        placeholder="Family rights webinar"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-900" htmlFor="video-url">
+                        Public video URL
+                      </label>
+                      <Input
+                        id="video-url"
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                      />
+                      <p className="text-xs text-gray-500">
+                        Used in citations and timestamp deep-links. Transcription starts as soon as you upload.
+                      </p>
+                    </div>
+                    {uploadStatus.message && uploadTab === "video" ? (
+                      <div
+                        className={`text-sm p-2 rounded ${
+                          uploadStatus.type === "success"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {uploadStatus.message}
+                      </div>
+                    ) : null}
+                  </div>
+                  )}
+
                   <DialogFooter>
                     <Button variant="outline" onClick={resetUploadDialog} disabled={uploading || zipUploading}>
                       Cancel
@@ -1478,6 +1751,21 @@ export default function DataSourceManagement() {
                           </>
                         ) : (
                           "Upload & Stage"
+                        )}
+                      </Button>
+                    ) : uploadTab === "video" ? (
+                      <Button
+                        className="bg-primary hover:bg-primary/90"
+                        onClick={handleVideoUpload}
+                        disabled={!videoFile || !videoUrl.trim() || uploading}
+                      >
+                        {uploading ? (
+                          <>
+                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          "Upload & transcribe"
                         )}
                       </Button>
                     ) : (
@@ -1557,9 +1845,10 @@ export default function DataSourceManagement() {
                 ) : (
                   pagedDataSources.map((ds) => {
                     const run = latestRunBySourceId.get(ds.id);
-                    const status = run?.status ?? "no_runs";
+                    const status = displayedStatus(ds, run);
                     const isExpandable =
                       ds.type === "website" ||
+                      ds.type === "video" ||
                       ((ds.type === "csv" || ds.type === "markdown") && !!jsonByCsvName.get(ds.name));
                     const isOpen = !!expanded[ds.id];
 
@@ -1651,6 +1940,28 @@ export default function DataSourceManagement() {
                                     <div className="text-xs text-gray-500">No exclude patterns.</div>
                                   )}
 
+                                  {run?.error_message ? (
+                                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
+                                      {run.error_message}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : ds.type === "video" ? (
+                                <div className="space-y-3 text-sm">
+                                  <div>
+                                    <div className="text-xs font-semibold text-gray-600 mb-1">Public URL</div>
+                                    <a
+                                      href={String(ds.metadata?.video_url || "")}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-primary break-all underline underline-offset-2"
+                                    >
+                                      {String(ds.metadata?.video_url || "—")}
+                                    </a>
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    Transcription: {String(ds.metadata?.transcribe_status || "not started")}
+                                  </div>
                                   {run?.error_message ? (
                                     <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
                                       {run.error_message}
