@@ -296,6 +296,7 @@ export default function AIChatPage({
                       ...msg,
                       sources_used: message.sources || [],
                       warning: message.warning || null,
+                      phase: message.phase || null,
                       isTyping: false,
                     }
                   : msg
@@ -493,6 +494,7 @@ export default function AIChatPage({
             text: m.content,
             sources_used: parsedSources,
             warning: (m as any).warning ?? null,
+            phase: parsedSources.length > 0 ? "SUGGESTION" : "DETECTIVE",
             time: new Date(m.created_at).getTime(),
           };
         });
@@ -567,6 +569,7 @@ export default function AIChatPage({
           question: reply.question,
           chips: reply.chips,
           showGuidance: reply.showGuidance,
+          phase: reply.phase,
           isTyping: false,
         };
 
@@ -704,6 +707,7 @@ export default function AIChatPage({
                 text: data.response || "Sorry, I couldn't generate a response.",
                 sources_used: data.sources || [],
                 warning: data.warning || null,
+                phase: data.phase || null,
                 isTyping: false,
               }
             : msg
@@ -754,6 +758,7 @@ export default function AIChatPage({
         sources={message.sources_used}
         warning={message.warning}
         isTyping={message.isTyping}
+        phase={message.phase}
       />
     );
     }

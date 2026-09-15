@@ -5,6 +5,8 @@ interface WebSocketMessage {
   content?: string;
   message?: string;
   sources?: string[];
+  warning?: string | null;
+  phase?: "DETECTIVE" | "SUGGESTION" | null;
 }
 
 interface UseWebSocketOptions {

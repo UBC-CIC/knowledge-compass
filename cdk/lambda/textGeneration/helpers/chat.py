@@ -240,7 +240,8 @@ def get_response(
                     "message_limit_exceeded": True,
                     "message_usage": usage_info,
                     "warning": None,
-                    "intervention": None
+                    "intervention": None,
+                    "phase": None,
                 }
 
         if not is_intro_message:
@@ -253,6 +254,7 @@ def get_response(
                     "sources_used": [],
                     "warning": None,
                     "intervention": None,
+                    "phase": None,
                 }
 
             if guardrail_result['action'] == ACTION_BLOCKED:
@@ -276,6 +278,7 @@ def get_response(
                     "message_usage": {},
                     "warning": None,
                     "intervention": None,
+                    "phase": None,
                 }
 
             if guardrail_result['action'] == ACTION_ANONYMIZED:
@@ -300,7 +303,8 @@ def get_response(
             "response": str(e),
             "sources_used": [],
             "warning": None,
-            "intervention": None
+            "intervention": None,
+            "phase": None,
         }
     except Exception as e:
         logger.error(f"Prepare conversation failed: {e}")
@@ -309,6 +313,7 @@ def get_response(
             "sources_used": [],
             "warning": None,
             "intervention": None,
+            "phase": None,
         }
 
     # Structure the system array with the cache point
@@ -452,5 +457,6 @@ def get_response(
         "is_first_message": False,
         "message_usage": usage_info,
         "warning": warning_text,
-        "intervention": intervention_result
+        "intervention": intervention_result,
+        "phase": phase_name,
     }

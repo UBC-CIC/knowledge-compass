@@ -3,15 +3,6 @@ import { ViewProvider } from "@/providers/ViewContext";
 import SideBar from "@/components/ChatInterface/SideBar";
 import type { ChatSession } from "@/providers/view";
 import { useUser } from "@/providers/user";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Menu, X } from "lucide-react";
 import { useSidebar } from "@/providers/sidebar";
 import AIChatPage from "@/pages/ChatInterface/ChatInterface";
@@ -27,34 +18,6 @@ const DEFAULT_WELCOME_MESSAGE =
   "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
-
-type UserProfile = {
-  id: string;
-  email: string | null;
-  display_name?: string | null;
-  role?: string;
-  created_at?: string;
-  last_seen_at?: string;
-  messages_sent?: number;
-  messages_window_started_at?: string | null;
-  metadata?: Record<string, unknown> | null;
-};
-
-type UpdateUserEmailResult =
-  | { ok: true; data: unknown }
-  | {
-      ok: false;
-      errorType:
-        | "invalid_email"
-        | "email_in_use"
-        | "user_not_found"
-        | "bad_request"
-        | "unauthorized"
-        | "server_error"
-        | "network_error"
-        | "unknown_error";
-      message: string;
-    };
 
 export default function HomePage() {
   const { userId, isLoading: isLoadingUser } = useUser();
@@ -75,21 +38,9 @@ export default function HomePage() {
   const [isLoadingWelcome, setIsLoadingWelcome] = useState(!isDemoMode);
   const [disclaimer, setDisclaimer] = useState<string>(DEFAULT_DISCLAIMER);
   const [isLoadingDisclaimer, setIsLoadingDisclaimer] = useState(!isDemoMode);
-
-  // Email / anonymity modal state
-  const [isCheckingUserProfile, setIsCheckingUserProfile] = useState(!isDemoMode);
-  const [showEmailModal, setShowEmailModal] = useState(false);
-  const [emailChoiceStep, setEmailChoiceStep] = useState<"choice" | "email">(
-    "choice"
-  );
-  const [emailInput, setEmailInput] = useState("");
-  const [isSavingEmail, setIsSavingEmail] = useState(false);
-  const [emailError, setEmailError] = useState<string | null>(null);
   const [conversationFacts, setConversationFacts] = useState<
     Record<string, string>
   >({});
-
-  const getAnonymousChoiceKey = (id: string) => `specEx_anonymous_choice_${id}`;
 
   const getPublicToken = async () => {
     const tokenResponse = await fetch(
@@ -141,161 +92,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     }
   };
 
-  const fetchUserProfile = async (id: string): Promise<UserProfile | null> => {
-    try {
-      const { token } = await getPublicToken();
-
-      const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/${id}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch user profile");
-      }
-
-      return (await response.json()) as UserProfile;
-    } catch (err) {
-      console.error("Error fetching user profile:", err);
-      return null;
-    }
-  };
-
-  const updateUserEmail = async (
-    id: string,
-    email: string
-  ): Promise<UpdateUserEmailResult> => {
-    try {
-      const { token } = await getPublicToken();
-
-      const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/${id}`,
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ email }),
-        }
-      );
-
-      let responseBody: any = null;
-
-      try {
-        responseBody = await response.json();
-      } catch {
-        responseBody = null;
-      }
-
-      if (response.ok) {
-        return {
-          ok: true,
-          data: responseBody,
-        };
-      }
-
-      const backendMessage =
-        responseBody?.error || responseBody?.message || "Something went wrong.";
-
-      switch (response.status) {
-        case 400: {
-          const normalizedMessage = String(backendMessage).toLowerCase();
-
-          if (
-            normalizedMessage.includes("invalid email") ||
-            normalizedMessage.includes("email format")
-          ) {
-            return {
-              ok: false,
-              errorType: "invalid_email",
-              message: "Please enter a valid email address.",
-            };
-          }
-
-          return {
-            ok: false,
-            errorType: "bad_request",
-            message: backendMessage,
-          };
-        }
-
-        case 401:
-          return {
-            ok: false,
-            errorType: "unauthorized",
-            message: "You are not authorized. Please refresh and try again.",
-          };
-
-        case 404:
-          return {
-            ok: false,
-            errorType: "user_not_found",
-            message: "We could not find your user account. Please refresh and try again.",
-          };
-
-        case 409:
-          return {
-            ok: false,
-            errorType: "email_in_use",
-            message: "That email is already in use.",
-          };
-
-        case 500:
-          return {
-            ok: false,
-            errorType: "server_error",
-            message: "A server error occurred. Please try again.",
-          };
-
-        default:
-          return {
-            ok: false,
-            errorType: "unknown_error",
-            message: backendMessage,
-          };
-      }
-    } catch (err) {
-      console.error("Error updating user email:", err);
-      return {
-        ok: false,
-        errorType: "network_error",
-        message: "Unable to reach the server. Check your connection and try again.",
-      };
-    }
-  };
-
-  const checkWhetherToPromptForEmail = async (id: string) => {
-    setIsCheckingUserProfile(true);
-
-    try {
-      const profile = await fetchUserProfile(id);
-
-      if (!profile) {
-        setShowEmailModal(false);
-        return;
-      }
-
-      const hasEmail = Boolean(profile.email?.trim());
-      const anonymousChoice = localStorage.getItem(getAnonymousChoiceKey(id));
-
-      if (!hasEmail && anonymousChoice !== "true") {
-        setShowEmailModal(true);
-        setEmailChoiceStep("choice");
-      } else {
-        setShowEmailModal(false);
-      }
-    } finally {
-      setIsCheckingUserProfile(false);
-    }
-  };
-
   // Fetch chat sessions for the user
   const fetchChatSessions = async () => {
     if (isDemoMode) {
@@ -342,8 +138,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     if (isDemoMode) {
       setChatSessions(seedDemoHistory());
       setIsLoadingChatSessions(false);
-      setIsCheckingUserProfile(false);
-      setShowEmailModal(false);
       setIsLoadingWelcome(false);
       setIsLoadingDisclaimer(false);
       return;
@@ -361,12 +155,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     });
 
     fetchChatSessions();
-
-    if (userId) {
-      checkWhetherToPromptForEmail(userId);
-    } else {
-      setIsCheckingUserProfile(false);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, isLoadingUser]);
 
@@ -502,81 +290,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     }
   };
 
-  const handleStayAnonymous = () => {
-    if (!userId) return;
-    localStorage.setItem(getAnonymousChoiceKey(userId), "true");
-    setShowEmailModal(false);
-  };
-
-  const handleUseEmail = () => {
-    setEmailChoiceStep("email");
-    setEmailError(null);
-  };
-
-  const handleSaveEmail = async () => {
-    if (!userId) return;
-
-    const normalizedEmail = emailInput.trim().toLowerCase();
-
-    if (!normalizedEmail) {
-      setEmailError("Please enter an email address.");
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(normalizedEmail)) {
-      setEmailError("Please enter a valid email address.");
-      return;
-    }
-
-    setIsSavingEmail(true);
-    setEmailError(null);
-
-    const result = await updateUserEmail(userId, normalizedEmail);
-
-    if (result.ok) {
-      localStorage.removeItem(getAnonymousChoiceKey(userId));
-      setShowEmailModal(false);
-      setEmailInput("");
-      setIsSavingEmail(false);
-      return;
-    }
-
-    switch (result.errorType) {
-      case "invalid_email":
-        setEmailError("Please enter a valid email address.");
-        break;
-
-      case "email_in_use":
-        setEmailError("That email is already associated with another account.");
-        break;
-
-      case "user_not_found":
-        setEmailError("Your session could not be found. Please refresh the page.");
-        break;
-
-      case "unauthorized":
-        setEmailError("Your session expired. Please refresh and try again.");
-        break;
-
-      case "network_error":
-        setEmailError("Could not connect to the server. Please check your connection.");
-        break;
-
-      case "server_error":
-        setEmailError("Something went wrong on our side. Please try again.");
-        break;
-
-      case "bad_request":
-      case "unknown_error":
-      default:
-        setEmailError(result.message || "We couldn't save your email.");
-        break;
-    }
-
-    setIsSavingEmail(false);
-  };
-
   const userTurns = currentMessages.filter(
     (m) => m.sender === "user" && typeof m.text === "string" && m.text.trim()
   ).length;
@@ -589,7 +302,7 @@ const normalizeChatSession = (session: any): ChatSession => ({
       ? "Guidance ready"
       : `Question ${Math.min(Math.max(userTurns, 1), 4)} of 4`;
 
-  if (isLoadingUser || isLoadingChatSessions || isCheckingUserProfile) {
+  if (isLoadingUser || isLoadingChatSessions) {
     return (
       <div className="flex h-full items-center justify-center bg-background">
         <div className="text-center">
@@ -658,66 +371,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
               />
             </main>
           </div>
-
-          <Dialog open={showEmailModal}>
-            <DialogContent
-              className="sm:max-w-md"
-              showCloseButton={false}
-              onEscapeKeyDown={(e) => e.preventDefault()}
-              onInteractOutside={(e) => e.preventDefault()}
-            >
-              <DialogHeader>
-                <DialogTitle className="font-serif text-[26px] font-semibold">
-                  Would you like to stay anonymous?
-                </DialogTitle>
-                <DialogDescription>
-                  You can continue anonymously, or provide your email so we can
-                  associate it with your account.
-                </DialogDescription>
-              </DialogHeader>
-
-              {emailChoiceStep === "choice" ? (
-                <div className="flex flex-col gap-3 pt-2">
-                  <Button onClick={handleStayAnonymous}>
-                    Yes, stay anonymous
-                  </Button>
-                  <Button variant="outline" onClick={handleUseEmail}>
-                    No, I want to enter my email
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3 pt-2">
-                  <Input
-                    type="email"
-                    placeholder="Enter your email"
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    disabled={isSavingEmail}
-                  />
-
-                  {emailError ? (
-                    <p className="text-sm text-destructive">{emailError}</p>
-                  ) : null}
-
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setEmailChoiceStep("choice");
-                        setEmailError(null);
-                      }}
-                      disabled={isSavingEmail}
-                    >
-                      Back
-                    </Button>
-                    <Button onClick={handleSaveEmail} disabled={isSavingEmail}>
-                      {isSavingEmail ? "Saving..." : "Save email"}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </DialogContent>
-          </Dialog>
         </div>
     </ViewProvider>
   );

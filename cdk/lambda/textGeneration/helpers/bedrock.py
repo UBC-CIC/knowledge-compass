@@ -62,7 +62,16 @@ def retrieve_documents(
 def format_context_for_prompt(sources: List[Dict[str, Any]]) -> str:
     if not sources:
         return "No specific documents found."
-    context_str = ""
+    parts = []
     for i, source in enumerate(sources, 1):
-        context_str += f"<source_{i}>\n{source['content']}\n</source_{i}>\n\n"
-    return context_str
+        title = source.get("title") or source.get("url") or source.get("uri") or "Untitled"
+        url = source.get("url") or source.get("uri") or ""
+        source_type = source.get("source_type") or source.get("type") or ""
+        content = source.get("content") or ""
+        header = f"[{i}] {title}"
+        if url:
+            header += f"\n    URL: {url}"
+        if source_type:
+            header += f"\n    Type: {source_type}"
+        parts.append(f"<source_{i}>\n{header}\n    Content: {content}\n</source_{i}>")
+    return "\n\n".join(parts)

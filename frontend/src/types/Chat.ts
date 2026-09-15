@@ -16,4 +16,5 @@ export interface Message {
   question?: string;
   chips?: string[];
   showGuidance?: boolean;
+  phase?: "DETECTIVE" | "SUGGESTION" | null;
 }

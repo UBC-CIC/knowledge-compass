@@ -104,6 +104,7 @@ export function nextDemoReply(asked: number): {
   chips: string[];
   asked: number;
   showGuidance: boolean;
+  phase: "DETECTIVE" | "SUGGESTION";
 } {
   const step = DETECTIVE_SCRIPT[asked];
   if (step) {
@@ -113,6 +114,7 @@ export function nextDemoReply(asked: number): {
       chips: step.chips,
       asked: asked + 1,
       showGuidance: false,
+      phase: "DETECTIVE" as const,
     };
   }
   return {
@@ -121,6 +123,7 @@ export function nextDemoReply(asked: number): {
     chips: [],
     asked: asked + 1,
     showGuidance: true,
+    phase: "SUGGESTION" as const,
   };
 }
 
