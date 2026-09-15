@@ -34,6 +34,12 @@ export class AuthService {
   static getCurrentUser(): Promise<UserResult>;
   static getAuthToken(useCache?: boolean): Promise<TokenResult>;
   static getAuthSession(useCache?: boolean): Promise<any>;
+  static getTokenString(token: unknown): string | null;
+  static getAdminIdToken(useCache?: boolean): Promise<string>;
+  static getAdminAuthHeaders(useCache?: boolean): Promise<{
+    Authorization: string;
+    "Content-Type": string;
+  }>;
   static clearAuthCache(): void;
   static isTokenExpiringSoon(token: any): boolean;
 }

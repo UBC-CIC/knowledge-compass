@@ -780,6 +780,20 @@ export class ApiGatewayStack extends cdk.Stack {
       })
     );
 
+    coglambdaRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "cognito-idp:AdminAddUserToGroup",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminListGroupsForUser",
+        ],
+        resources: [
+          `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${this.userPool.userPoolId}`,
+        ],
+      })
+    );
+
     // Redundant secrets manager access block removed
 
     coglambdaRole.addToPolicy(
@@ -1177,6 +1191,8 @@ export class ApiGatewayStack extends cdk.Stack {
       ],
       resources: [
         `arn:aws:bedrock:${this.region}::foundation-model/meta.llama3-70b-instruct-v1:0`,
+        `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-english-v3`,
+        `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-v4:0`,
         // Mistral Large
         `arn:aws:bedrock:${this.region}::foundation-model/mistral.mistral-large-2402-v1:0`,

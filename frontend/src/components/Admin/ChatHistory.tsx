@@ -101,13 +101,7 @@ export default function ChatHistory() {
         fetchUsers();
     }, []);
 
-    const getAuthHeaders = async () => {
-        const session = await AuthService.getAuthSession(true);
-        return {
-            Authorization: session.tokens.idToken,
-            "Content-Type": "application/json",
-        };
-    };
+    const getAuthHeaders = async () => AuthService.getAdminAuthHeaders();
 
     const fetchUsers = async (forceRefresh = false) => {
         if (isDemoMode) {

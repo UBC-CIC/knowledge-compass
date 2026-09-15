@@ -1,9 +1,10 @@
 const { initializeConnection } = require("./initializeConnection.js");
 const {
   CognitoIdentityProviderClient,
-  AdminGetUserCommand,
+  AdminAddUserToGroupCommand,
 } = require("@aws-sdk/client-cognito-identity-provider");
 
+const cognito = new CognitoIdentityProviderClient({});
 const { SM_DB_CREDENTIALS, RDS_PROXY_ENDPOINT } = process.env;
 let sqlConnection = global.sqlConnection;
 
@@ -41,6 +42,19 @@ exports.handler = async (event) => {
     `;
 
     console.log("Admin user created/updated:", result[0]);
+
+    try {
+      await cognito.send(
+        new AdminAddUserToGroupCommand({
+          GroupName: "admin",
+          UserPoolId: event.userPoolId,
+          Username: userName,
+        })
+      );
+      console.log("Added user to Cognito admin group:", userName);
+    } catch (groupErr) {
+      console.error("Failed to add user to Cognito admin group:", groupErr);
+    }
 
     // IMPORTANT: For Cognito triggers, you must return the event object
     return event;

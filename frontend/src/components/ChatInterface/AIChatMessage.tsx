@@ -1,6 +1,4 @@
-import { useState } from "react";
-import { ChevronDown, ChevronUp, BookOpen, ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ExternalLink } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -103,12 +101,22 @@ function sourceLabel(source: SourceItem | string) {
   return { title, url, type };
 }
 
-function isRenderableSource(source: SourceItem | string) {
-  if (typeof source === "string") {
-    return !source.includes("https://s3") && !source.includes("s3://");
-  }
-  const url = source.url || source.uri || "";
-  return !url.includes("https://s3") && !url.includes("s3://");
+function isHttpSource(source: SourceItem | string) {
+  const { url } = sourceLabel(source);
+  return isSafeUrl(url);
+}
+
+function withResourceLinks(text: string, sources: (SourceItem | string)[]) {
+  const links = sources.map(sourceLabel).filter((item) => isSafeUrl(item.url));
+  if (links.length === 0) return text;
+
+  const missing = links.filter((item) => !text.includes(item.url));
+  if (missing.length === 0) return text;
+
+  const block = missing
+    .map((item) => `- [${item.title}](${item.url})`)
+    .join("\n");
+  return `${text}\n\n**More resources**\n${block}`;
 }
 
 export default function AIChatMessage({
@@ -119,74 +127,49 @@ export default function AIChatMessage({
   isTyping = false,
   phase = null,
 }: AIChatMessageProps) {
-  const [showSources, setShowSources] = useState(false);
   const body = displayGuideText(text);
   const suggestion = isSuggestionPhase(phase, sources, body);
-  const renderableSources = sources.filter(isRenderableSource);
+  const resourceSources = sources.filter(isHttpSource);
+  const displayBody =
+    !isTyping && resourceSources.length > 0
+      ? withResourceLinks(body, resourceSources)
+      : body;
 
   const sourcesBlock =
-    !isTyping && renderableSources.length > 0 ? (
-      <div className={suggestion ? "mt-5" : "mt-5"}>
+    !isTyping && resourceSources.length > 0 ? (
+      <div className="mt-5">
         <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
-          Where this comes from
+          More resources
         </div>
         <div className="mt-2.5 flex flex-col gap-2">
-          {showSources
-            ? renderableSources.map((source, index) => {
-                const { title, url, type } = sourceLabel(source);
-                return (
-                  <div
-                    key={`${title}-${index}`}
-                    className="rounded-[10px] border border-foreground/14 px-4 py-3"
-                  >
-                    <div className="flex items-start gap-2.5">
-                      <span className="mt-0.5 shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-bold text-foreground/80">
-                        {index + 1}
-                      </span>
-                      <div className="min-w-0">
-                        {type ? (
-                          <div className="text-[11px] font-bold uppercase tracking-[0.06em] text-foreground/70">
-                            {type}
-                          </div>
-                        ) : null}
-                        {url && isSafeUrl(url) ? (
-                          <a
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-0.5 flex items-start gap-1.5 text-[14.5px] font-semibold leading-snug text-primary hover:underline"
-                          >
-                            <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <span className="break-words">{title}</span>
-                          </a>
-                        ) : (
-                          <div className="mt-0.5 flex items-start gap-1.5 text-[14.5px] font-semibold leading-snug">
-                            <BookOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/70" />
-                            <span className="break-words">{title}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            : null}
+          {resourceSources.map((source, index) => {
+            const { title, url, type } = sourceLabel(source);
+            return (
+              <a
+                key={`${url}-${index}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-start gap-2.5 rounded-[10px] border border-foreground/14 px-4 py-3 hover:border-primary hover:bg-accent"
+              >
+                <span className="mt-0.5 shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-bold text-foreground/80">
+                  {index + 1}
+                </span>
+                <span className="min-w-0">
+                  {type ? (
+                    <span className="block text-[11px] font-bold uppercase tracking-[0.06em] text-foreground/70">
+                      {type}
+                    </span>
+                  ) : null}
+                  <span className="mt-0.5 flex items-start gap-1.5 text-[14.5px] font-semibold leading-snug text-primary">
+                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span className="break-words">{title}</span>
+                  </span>
+                </span>
+              </a>
+            );
+          })}
         </div>
-        <Button
-          variant="link"
-          size="sm"
-          className="mt-1 h-auto px-0 text-[13px] font-semibold text-primary"
-          onClick={() => setShowSources(!showSources)}
-        >
-          <BookOpen className="h-3 w-3" />
-          {showSources ? "Hide sources" : "Show sources"} (
-          {renderableSources.length})
-          {showSources ? (
-            <ChevronUp className="h-3 w-3" />
-          ) : (
-            <ChevronDown className="h-3 w-3" />
-          )}
-        </Button>
       </div>
     ) : null;
 
@@ -213,7 +196,7 @@ export default function AIChatMessage({
         <TypingIndicator />
       ) : (
         <>
-          <GuideMarkdown text={body} />
+          <GuideMarkdown text={displayBody} />
           {!isTyping && question ? (
             <p className="mt-3 font-semibold leading-relaxed">{question}</p>
           ) : null}

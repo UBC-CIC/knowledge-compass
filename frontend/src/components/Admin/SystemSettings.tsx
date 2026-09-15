@@ -505,8 +505,7 @@ export default function SystemSettings() {
       setLoading(true);
       setError(null);
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/system-settings`,
@@ -552,8 +551,7 @@ export default function SystemSettings() {
       return;
     }
     try {
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/system-messages`,
@@ -580,8 +578,7 @@ export default function SystemSettings() {
       setSaving(true);
       setError(null);
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       if (!adminEmail) throw new Error("Missing admin email (not authenticated?)");
 
@@ -640,8 +637,7 @@ export default function SystemSettings() {
     type: SystemMessageType,
     content: string
   ): Promise<SystemMessageVersion> => {
-    const session = await AuthService.getAuthSession(true);
-    const token = session.tokens.idToken;
+    const token = await AuthService.getAdminIdToken();
 
     if (!adminEmail) throw new Error("Missing adminEmail");
 
@@ -682,8 +678,7 @@ export default function SystemSettings() {
     type: SystemMessageType,
     versionId: string
   ): Promise<void> => {
-    const session = await AuthService.getAuthSession(true);
-    const token = session.tokens.idToken;
+    const token = await AuthService.getAdminIdToken();
 
     if (!adminEmail) throw new Error("Missing adminEmail");
 
@@ -725,8 +720,7 @@ export default function SystemSettings() {
     type: SystemMessageType,
     versionId: string
   ): Promise<void> => {
-    const session = await AuthService.getAuthSession(true);
-    const token = session.tokens.idToken;
+    const token = await AuthService.getAdminIdToken();
 
     if (!adminEmail) throw new Error("Missing adminEmail");
 

@@ -107,7 +107,7 @@ export class AuthService {
         return apiCache.get(this.AUTH_CACHE_KEY);
       }
 
-      const session = await fetchAuthSession();
+      const session = await fetchAuthSession({ forceRefresh: !useCache });
 
       // Cache successful session for 4 minutes
       if (useCache && session?.tokens?.accessToken) {
@@ -119,6 +119,33 @@ export class AuthService {
       console.error("Auth session error:", error);
       throw error;
     }
+  }
+
+  static getTokenString(token) {
+    if (!token) return null;
+    if (typeof token === "string") return token;
+    if (typeof token.toString === "function") {
+      const value = token.toString();
+      if (value && value !== "[object Object]") return value;
+    }
+    return null;
+  }
+
+  static async getAdminIdToken(useCache = true) {
+    const session = await this.getAuthSession(useCache);
+    const token = this.getTokenString(session?.tokens?.idToken);
+    if (!token) {
+      throw new Error("Missing admin ID token");
+    }
+    return token;
+  }
+
+  static async getAdminAuthHeaders(useCache = true) {
+    const token = await this.getAdminIdToken(useCache);
+    return {
+      Authorization: token,
+      "Content-Type": "application/json",
+    };
   }
 
   static clearAuthCache() {

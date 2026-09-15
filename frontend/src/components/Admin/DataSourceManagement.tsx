@@ -268,8 +268,7 @@ export default function DataSourceManagement() {
       setLoading(true);
       setError(null);
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       // no timeRange so backend returns ALL-TIME totals
       const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/analytics`, {
@@ -308,8 +307,7 @@ export default function DataSourceManagement() {
       setLoading(true);
       setError(null);
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
@@ -368,8 +366,7 @@ export default function DataSourceManagement() {
       setSyncing(true);
       setSyncStatus({ type: null, message: "" });
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/sync`,
@@ -438,8 +435,7 @@ export default function DataSourceManagement() {
       const include_patterns = parsePatterns(includePatternsText);
       const exclude_patterns = parsePatterns(excludePatternsText);
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
@@ -669,8 +665,7 @@ export default function DataSourceManagement() {
       setZipUploading(true);
       setZipStatus({ type: null, message: "" });
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       // Step 1: Get all presigned URLs in one request
       const filesPayload = validPairs.flatMap((p) => [
@@ -809,8 +804,7 @@ export default function DataSourceManagement() {
       setUploading(true);
       setUploadStatus({ type: null, message: "" });
 
-      const session = await AuthService.getAuthSession(true);
-      const token = session.tokens.idToken;
+      const token = await AuthService.getAdminIdToken();
 
       const primaryType = getPrimaryFileType(primaryFile);
 

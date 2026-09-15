@@ -348,6 +348,7 @@ def get_response(
     answer_started = False
     answer_text = ""
     cited_indices = []
+    expect_answer_tags = phase_name == "SUGGESTION"
 
     try:
         response = bedrock_runtime.converse_stream(**request_payload)
@@ -357,16 +358,19 @@ def get_response(
                 if "text" in delta:
                     chunk = delta["text"]
                     full_response_text += chunk
-                    
-                    # 1. Wait for <answer> to start processing
-                    if "<answer>" in full_response_text:
-                        answer_started = True
-                        target_text = full_response_text.split("<answer>", 1)[1]
-                    elif not answer_started and len(full_response_text) > 300 and "<" not in full_response_text:
-                        # Extreme fallback: Only trigger if string is very long and NO tags are forming
-                        target_text = full_response_text
+
+                    # Detective replies are plain text. Suggestion replies wrap
+                    # the visible answer in <answer> tags — don't stream those tags.
+                    if expect_answer_tags:
+                        if "<answer>" in full_response_text:
+                            answer_started = True
+                            target_text = full_response_text.split("<answer>", 1)[1]
+                        elif not answer_started and len(full_response_text) > 300 and "<" not in full_response_text:
+                            target_text = full_response_text
+                        else:
+                            continue
                     else:
-                        continue
+                        target_text = full_response_text
                         
                     # 2. Stop extracting if we hit a closing tag
                     stop_found = False

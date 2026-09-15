@@ -159,6 +159,7 @@ def handler(event, context=None):
                     # Send complete message with sources
                     complete_msg = {
                         'type': 'complete',
+                        'response': response_body['response'],
                         'sources': response_body['sources'],
                         'warning': response_body.get('warning'),
                         'chat_session_id': response_body['chat_session_id'],

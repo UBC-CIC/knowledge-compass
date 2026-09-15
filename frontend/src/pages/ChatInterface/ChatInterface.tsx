@@ -294,6 +294,10 @@ export default function AIChatPage({
                 msg.id === streamingMessageId
                   ? {
                       ...msg,
+                      text:
+                        message.response ||
+                        message.content ||
+                        msg.text,
                       sources_used: message.sources || [],
                       warning: message.warning || null,
                       phase: message.phase || null,

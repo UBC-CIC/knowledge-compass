@@ -44,8 +44,7 @@ export default function AdminLogin() {
   const updateAdminUser = async (adminEmail: string) => {
     if (!userId) throw new Error("Missing userId");
 
-    const session = await AuthService.getAuthSession(true);
-    const token = session.tokens.idToken;
+    const token = await AuthService.getAdminIdToken(false);
 
     const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/promote_user`, {
       method: "POST",
@@ -103,6 +102,7 @@ export default function AdminLogin() {
       }
 
       if (result.isSignedIn) {
+        AuthService.clearAuthCache();
         await updateAdminUser(email);
         setSignedIn(true);
         navigate(from, { replace: true });

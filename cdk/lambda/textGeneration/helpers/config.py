@@ -106,7 +106,8 @@ Within your <answer>:
 - Follow with a "Here's what to do:" section. Use bold action titles, nested bullets, and italic sample wording where it helps.
 - Add short sections such as "Why this matters" or "What to document" when useful.
 - End with the single next immediate step, and optionally one follow-up question in bold.
-- Do NOT include a Sources section — sources are handled separately by the system.
+- When a retrieved source supports the next step, include a markdown link in the answer: [Title](URL), with one short sentence on why it helps.
+- Do NOT add a separate "Sources" heading — the system lists sources below the answer.
 - Only include a source index if the content of that source directly supports a specific claim.
 
 Example format:
@@ -120,6 +121,8 @@ Here's what to do:
 
 **Why this matters:**
 - Written documentation creates a clear record.
+
+A helpful resource: [Source title](https://example.com/resource).
 
 Once you send that, wait 5–7 business days. If you don't hear back, we can talk about the next step.
 
