@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   MessageCircleMore,
   Archive,
+  Copy,
+  Download,
 } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { getCurrentUser } from "aws-amplify/auth";
@@ -187,6 +189,24 @@ function expectedMetadataFileName(primaryFileName: string) {
   return `${primaryFileName}.metadata.json`;
 }
 
+function exampleMetadataContents(primaryFileName: string) {
+  const lower = primaryFileName.toLowerCase();
+  const type =
+    lower.endsWith(".md") || lower.endsWith(".markdown") ? "markdown" : "csv";
+  const title = primaryFileName.replace(/\.(csv|md|markdown)$/i, "");
+
+  return JSON.stringify(
+    {
+      source: primaryFileName,
+      type,
+      title,
+      schema_version: "1.0",
+    },
+    null,
+    2
+  );
+}
+
 export default function DataSourceManagement() {
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
 
@@ -220,6 +240,7 @@ export default function DataSourceManagement() {
   const [zipPairs, setZipPairs] = useState<ZipFilePair[]>([]);
   const [zipValidating, setZipValidating] = useState(false);
   const [zipUploading, setZipUploading] = useState(false);
+  const [copiedMetadata, setCopiedMetadata] = useState(false);
   const [zipStatus, setZipStatus] = useState<{
     type: "success" | "error" | null;
     message: string;
@@ -494,6 +515,7 @@ export default function DataSourceManagement() {
       return;
     }
     setPrimaryFile(selectedFile);
+    setCopiedMetadata(false);
   };
 
   const handleMetadataFileSelect = (selectedFile: File) => {
@@ -504,6 +526,33 @@ export default function DataSourceManagement() {
       return;
     }
     setMetadataFile(selectedFile);
+  };
+
+  const handleCopyExampleMetadata = async () => {
+    if (!primaryFile) return;
+    try {
+      await navigator.clipboard.writeText(exampleMetadataContents(primaryFile.name));
+      setCopiedMetadata(true);
+      window.setTimeout(() => setCopiedMetadata(false), 2000);
+    } catch {
+      setUploadStatus({
+        type: "error",
+        message: "Could not copy the metadata example.",
+      });
+    }
+  };
+
+  const handleDownloadExampleMetadata = () => {
+    if (!primaryFile) return;
+    const blob = new Blob([exampleMetadataContents(primaryFile.name)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = expectedMetadataFileName(primaryFile.name);
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const getPresignedUpload = async (
@@ -897,8 +946,7 @@ export default function DataSourceManagement() {
     return map;
   })();
 
-  // For CSV -> JSON pairing: "alumni_data_final.csv" -> find "alumni_data_final.csv.metadata.json"
-  // For markdown -> JSON pairing: "alumni_data_final.md" -> find "alumni_data_final.md.metadata.json"
+  // Pair CSV/Markdown files with "<filename>.metadata.json" sidecars.
   const jsonByCsvName = (() => {
     const map = new Map<string, DataSourceRow>();
     for (const ds of dataSources) {
@@ -1105,9 +1153,9 @@ export default function DataSourceManagement() {
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-2xl">
                   <DialogHeader>
-                    <DialogTitle>Upload Data</DialogTitle>
+                    <DialogTitle>Upload guidance files</DialogTitle>
                     <DialogDescription>
-                      Upload files to stage for the next sync.
+                      Add CSV or Markdown resources to the Knowledge Compass knowledge base. Each file needs a matching metadata JSON sidecar.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -1266,30 +1314,56 @@ export default function DataSourceManagement() {
                           <div className="text-amber-800">
                             <div className="font-semibold">Two files are required</div>
                             <div className="mt-1 text-amber-700">
-                              1) The <span className="font-medium">CSV</span> or <span className="font-medium">Markdown</span> file
+                              1) A <span className="font-medium">CSV</span> or <span className="font-medium">Markdown</span> guidance file (header row for CSVs; any columns are fine)
                               <br />
                               2) A matching <span className="font-medium">metadata JSON</span> file
-                              with the exact name{" "}
+                              named{" "}
                               <code className="bg-white/70 px-1 py-0.5 rounded border border-amber-200">
-                                {"<csv/md-file-name>.metadata.json"}
+                                {primaryFile
+                                  ? expectedMetadataFileName(primaryFile.name)
+                                  : "<filename>.metadata.json"}
                               </code>
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      <div className="text-gray-500">
-                        <p className="font-medium mb-1 text-gray-700">Required CSV Columns for Alumni Data:</p>
-                        <code className="bg-gray-100 px-1 py-0.5 rounded">
-                          Profile, Headline, Year, Degree
-                        </code>
-                      </div>
-
-                      <div className="text-gray-500">
-                        <p className="font-medium mb-1 text-gray-700">Metadata JSON for Alumni Data should include:</p>
-                        <code className="bg-gray-100 px-1 py-0.5 rounded">
-                          size_bytes, storage_class, schema_version, columns, source
-                        </code>
+                      <div className="rounded-lg border border-foreground/12 bg-muted/40 p-3 text-foreground/80">
+                        <p className="font-medium mb-1 text-foreground">
+                          Metadata JSON example
+                        </p>
+                        <p className="mb-2">
+                          Create this file yourself — Knowledge Compass does not generate it from the CSV. Copy or download the example, then upload it next to your file.
+                        </p>
+                        <pre className="overflow-x-auto rounded-md border border-foreground/10 bg-white p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                          {exampleMetadataContents(
+                            primaryFile?.name || "guidance-resources.csv"
+                          )}
+                        </pre>
+                        {primaryFile ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8"
+                              onClick={handleCopyExampleMetadata}
+                            >
+                              <Copy className="mr-1.5 h-3.5 w-3.5" />
+                              {copiedMetadata ? "Copied" : "Copy JSON"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8"
+                              onClick={handleDownloadExampleMetadata}
+                            >
+                              <Download className="mr-1.5 h-3.5 w-3.5" />
+                              Download {expectedMetadataFileName(primaryFile.name)}
+                            </Button>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1299,9 +1373,9 @@ export default function DataSourceManagement() {
                   {uploadTab === "zip" && (
                   <div className="grid gap-4 py-4">
                     <div className="text-sm text-gray-600">
-                      Upload a zip containing CSV/Markdown files and their matching{" "}
-                      <code className="bg-gray-100 px-1 rounded">*.metadata.json</code> files.
-                      Duplicates are skipped automatically.
+                      Zip CSV or Markdown guidance files together with a matching{" "}
+                      <code className="bg-gray-100 px-1 rounded">{"<filename>.metadata.json"}</code>{" "}
+                      sidecar for each one. Duplicates are skipped automatically.
                     </div>
 
                     {!zipFile ? (
