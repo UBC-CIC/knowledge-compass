@@ -292,10 +292,10 @@ export default function ChatHistory() {
                 <Card className="md:col-span-1 flex h-full flex-col overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
                     <CardHeader className="flex-shrink-0 border-b border-foreground/10 pb-4">
                         <CardTitle className="text-base font-bold">
-                            Families
+                            Users
                         </CardTitle>
                         <CardDescription className="text-[12.5px]">
-                            Open a family to see their conversations.
+                            Open a user to see their conversations.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="flex-1 overflow-y-auto p-0">
@@ -373,7 +373,7 @@ export default function ChatHistory() {
                             Conversation
                         </CardTitle>
                         <CardDescription className="text-[12.5px]">
-                            {selectedSessionId ? "Transcript of selected session." : "Pick a family on the left, then one of their conversations."}
+                            {selectedSessionId ? "Transcript of selected session." : "Pick a user on the left, then one of their conversations."}
                         </CardDescription>
                     </CardHeader>
 
@@ -382,7 +382,7 @@ export default function ChatHistory() {
                             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
                                 <div className="text-base font-semibold text-foreground">No conversation selected</div>
                                 <p className="max-w-[340px] text-[13.5px] leading-relaxed text-foreground/80">
-                                    Pick a family on the left, then one of their conversations.
+                                    Pick a user on the left, then one of their conversations.
                                 </p>
                             </div>
                         ) : loadingMessages ? (
@@ -406,7 +406,7 @@ export default function ChatHistory() {
                                                 "flex items-center gap-2 mb-1 text-xs",
                                                 isUser ? "justify-end text-gray-500" : "text-gray-500"
                                             )}>
-                                                <span className="font-semibold">{isUser ? "Family" : "Assistant"}</span>
+                                                <span className="font-semibold">{isUser ? "User" : "Assistant"}</span>
                                                 <span className="text-xs opacity-75">{formatDate(msg.created_at)}</span>
                                             </div>
 

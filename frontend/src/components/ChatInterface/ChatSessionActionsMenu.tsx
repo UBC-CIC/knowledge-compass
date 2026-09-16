@@ -62,7 +62,7 @@ export default function ChatSessionActionsMenu({
 
     const transcript = exportableMessages
       .map((m) => {
-        const speaker = m.sender === "user" ? "[Family]" : "[Knowledge Compass]";
+        const speaker = m.sender === "user" ? "[Guardian]" : "[Knowledge Compass]";
         return `${speaker}: ${m.text.trim()}`;
       })
       .join("\r\n====================\r\n");

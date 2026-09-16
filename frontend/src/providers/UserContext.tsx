@@ -56,7 +56,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (!tokenResponse.ok) throw new Error("Failed to get public token");
         const { token } = await tokenResponse.json();
 
-        // Create an anonymous session user — families do not sign in.
+        // Create an anonymous session user — guardians do not sign in.
         const response = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user`, {
           method: "POST",
           headers: {

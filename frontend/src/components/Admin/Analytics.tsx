@@ -169,7 +169,7 @@ export default function Analytics() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* Total Users Chart */}
           <ChartCard
-            title="Families reached"
+            title="Users reached"
             subtitle="Distinct people who started a conversation"
           >
             <ResponsiveContainer width="100%" height="100%">
@@ -243,7 +243,7 @@ export default function Analytics() {
           {/* Total Questions Chart */}
           <ChartCard
             title="Messages exchanged"
-            subtitle="Family and assistant messages combined"
+            subtitle="User and assistant messages combined"
           >
             <ResponsiveContainer width="100%" height="100%">
               <LineChart

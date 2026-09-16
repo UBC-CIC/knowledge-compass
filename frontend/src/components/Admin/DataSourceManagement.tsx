@@ -1195,7 +1195,7 @@ export default function DataSourceManagement() {
           Overview
         </h1>
         <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-          How families are using the assistant, and what the knowledge base is drawing on.
+          How users are using the assistant, and what the knowledge base is drawing on.
         </p>
       </div>
 
@@ -1210,7 +1210,7 @@ export default function DataSourceManagement() {
       {/* Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <MetricCard
-          title="Families reached"
+          title="Users reached"
           value={loading ? "..." : totals.users.toLocaleString()}
           icon={<Users className="h-5 w-5 text-primary" />}
           trend="Distinct people who started at least one conversation"
@@ -1221,7 +1221,7 @@ export default function DataSourceManagement() {
           title="Conversations"
           value={loading ? "..." : totals.chat_sessions.toLocaleString()}
           icon={<MessageCircleMore className="h-5 w-5 text-primary" />}
-          trend="All time, across every family"
+          trend="All time, across every user"
           tooltip="Total chat sessions across all users."
         />
 
@@ -1229,7 +1229,7 @@ export default function DataSourceManagement() {
           title="Messages exchanged"
           value={loading ? "..." : totals.messages.toLocaleString()}
           icon={<HelpCircle className="h-5 w-5 text-primary" />}
-          trend="Family and assistant messages combined"
+          trend="User and assistant messages combined"
           tooltip="Total chat messages exchanged across all sessions."
         />
       </div>
@@ -1686,7 +1686,7 @@ export default function DataSourceManagement() {
                   {uploadTab === "video" && (
                   <div className="grid gap-4 py-4">
                     <div className="text-sm text-gray-600">
-                      Upload a video or audio file. Amazon Transcribe processes it automatically; when that finishes, Knowledge Compass embeds the transcript. Provide the public URL families should be sent to (usually YouTube).
+                      Upload a video or audio file. Amazon Transcribe processes it automatically; when that finishes, Knowledge Compass embeds the transcript. Provide the public URL users should be sent to (usually YouTube).
                     </div>
                     <div className="space-y-2">
                       <div className="text-sm font-medium text-gray-900">Video or audio file</div>
@@ -1746,7 +1746,7 @@ export default function DataSourceManagement() {
                         id="video-title"
                         value={videoTitle}
                         onChange={(e) => setVideoTitle(e.target.value)}
-                        placeholder="Family rights webinar"
+                        placeholder="Inclusive education webinar"
                       />
                     </div>
                     <div className="space-y-2">

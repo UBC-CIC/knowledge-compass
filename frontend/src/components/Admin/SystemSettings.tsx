@@ -756,7 +756,7 @@ export default function SystemSettings() {
           Assistant settings
         </h1>
         <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-          Limits, tone of the detective questions, and the wording families see.
+          Limits, tone of the detective questions, and the wording users see.
         </p>
       </div>
 
@@ -1014,7 +1014,7 @@ export default function SystemSettings() {
             Wording library
           </h3>
           <p className="mt-1 text-[13.5px] leading-normal text-foreground/80">
-            Every edit creates a new version. The active version is what families get.
+            Every edit creates a new version. The active version is what users get.
           </p>
         </div>
 

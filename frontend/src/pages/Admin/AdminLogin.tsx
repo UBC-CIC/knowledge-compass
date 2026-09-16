@@ -317,7 +317,7 @@ export default function AdminLogin() {
           </div>
 
           <p className="mt-[18px] ml-1 text-[12.5px] leading-relaxed text-foreground/80">
-            This area is for Inclusion Canada staff. Families don't need an account — the assistant is open to everyone at{" "}
+            This area is for Inclusion Canada staff. Users don't need an account — the assistant is open to everyone at{" "}
             <Link to="/" className="font-semibold text-primary underline underline-offset-2">
               knowledgecompass.ca
             </Link>

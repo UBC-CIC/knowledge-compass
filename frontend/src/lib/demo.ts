@@ -25,7 +25,7 @@ export const DETECTIVE_SCRIPT = [
   {
     key: "duration" as const,
     label: "How long",
-    ack: "I'm sorry you're dealing with this — being sent home early is really disruptive for your family, and it sounds like the school hasn't given you a clear explanation of what's happening.",
+    ack: "I'm sorry you're dealing with this — being sent home early is really disruptive, and it sounds like the school hasn't given you a clear explanation of what's happening.",
     question:
       "Has this been happening since the start of the school year, or did it just begin recently?",
     chips: ["Since September", "It started a few weeks ago", "It comes and goes"],
@@ -362,13 +362,13 @@ export const DEMO_INGESTION_RUNS = [
 export const DEMO_ADMIN_USERS = [
   {
     id: "demo-family-1",
-    email: "anonymous family",
+    email: "anonymous user",
     role: "student",
     last_seen_at: "2026-09-12T16:00:00.000Z",
   },
   {
     id: "demo-family-2",
-    email: "anonymous family",
+    email: "anonymous user",
     role: "student",
     last_seen_at: "2026-08-14T16:00:00.000Z",
   },
