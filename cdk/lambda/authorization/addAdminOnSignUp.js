@@ -3,6 +3,7 @@ const {
   CognitoIdentityProviderClient,
   AdminAddUserToGroupCommand,
 } = require("@aws-sdk/client-cognito-identity-provider");
+const { randomUUID } = require("crypto");
 
 const cognito = new CognitoIdentityProviderClient({});
 const { SM_DB_CREDENTIALS, RDS_PROXY_ENDPOINT } = process.env;
@@ -25,19 +26,25 @@ exports.handler = async (event) => {
   try {
     // Extract user attributes from the event
     const userAttributes = request.userAttributes;
-    const email = userAttributes.email;
+    const email = (userAttributes.email || "").trim().toLowerCase();
     const givenName = userAttributes.given_name || "";
     const familyName = userAttributes.family_name || "";
     const displayName = `${givenName} ${familyName}`.trim() || email;
 
     console.log("Creating admin user:", { email, displayName });
 
+    if (!email) {
+      console.error("Post-confirmation event is missing email; skipping users insert");
+      return event;
+    }
+
     // Insert the new admin user into the Users table
     const result = await sqlConnection`
-      INSERT INTO users (display_name, email, role, created_at, updated_at)
-      VALUES (${displayName}, ${email}, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO users (id, display_name, email, role, created_at, last_seen_at)
+      VALUES (${randomUUID()}, ${displayName}, ${email}, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (email) DO UPDATE 
-      SET updated_at = CURRENT_TIMESTAMP
+      SET last_seen_at = CURRENT_TIMESTAMP,
+          role = 'admin'
       RETURNING id, email, role
     `;
 

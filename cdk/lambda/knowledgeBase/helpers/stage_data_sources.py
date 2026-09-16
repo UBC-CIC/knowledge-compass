@@ -3,6 +3,11 @@ import json
 import logging
 import boto3
 
+from helpers.admin_user import (
+    admin_email_from_request,
+    get_or_create_admin_user_id,
+    get_user_id_by_email,
+)
 from helpers.cors import get_cors_headers
 from helpers.video_transcription import is_http_url, start_transcription_job
 
@@ -28,18 +33,7 @@ def _response(event, status_code: int, body: dict):
 
 def _get_user_id_by_email(connection, email: str) -> str | None:
     """Look up the internal user ID for the admin email provided by the request"""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE email = %s
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cursor.fetchone()
-        return str(row[0]) if row else None
+    return get_user_id_by_email(connection, email)
 
 
 def _is_markdown_file(file_name: str) -> bool:
@@ -200,7 +194,7 @@ def stage_data_sources(event, body, connection):
     - type = "markdown"
     """
     source_type = body.get("type")
-    created_by = body.get("created_by")
+    created_by = admin_email_from_request(event, body)
 
     if source_type not in {"website", "csv", "markdown", "video"}:
         return _response(event, 400, {"error": "type must be one of: website, csv, markdown, video"})
@@ -208,9 +202,10 @@ def stage_data_sources(event, body, connection):
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})
 
-    created_by_user_id = _get_user_id_by_email(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
+    connection.commit()
 
     try:
         if source_type == "website":
@@ -321,10 +316,14 @@ def stage_data_sources(event, body, connection):
                 )
             except Exception as e:
                 logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
+                detail = str(e).strip().replace("\n", " ")[:400]
                 return _response(
                     event,
                     500,
-                    {"error": "Failed to start transcription. Check the file format and try again."},
+                    {
+                        "error": "Failed to start transcription. Check the file format and try again.",
+                        "detail": detail,
+                    },
                 )
 
             data_source_metadata = {

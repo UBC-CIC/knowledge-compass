@@ -319,7 +319,10 @@ export class ApiGatewayStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Create the API Gateway REST API
+    // Create the API Gateway REST API.
+    // SpecRestApi body Refs Lambda logical IDs via OpenAPI Fn::Sub. Do not also
+    // Ref this.api (permissions, IAM, env, addGatewayResponse) from those
+    // Lambdas — CloudFormation treats that as a cycle and changeset creation fails.
     this.api = new apigateway.SpecRestApi(this, `${id}-APIGateway`, {
       apiDefinition: apigateway.AssetApiDefinition.fromInline(data),
       endpointTypes: [apigateway.EndpointType.REGIONAL],
@@ -549,52 +552,14 @@ export class ApiGatewayStack extends cdk.Stack {
       ],
     });
 
-    // Custom Response for WAF Blocks (Returns 429 instead of 403)
-    this.api.addGatewayResponse(`${id}-WafBlockResponse`, {
-      type: apigateway.ResponseType.WAF_FILTERED,
-      statusCode: "429",
-      responseHeaders: {
-        "Access-Control-Allow-Origin": "'*'",
-        "Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-        "Access-Control-Allow-Methods": "'OPTIONS,GET,PUT,POST,DELETE'",
-      },
-      templates: {
-        "application/json": JSON.stringify({
-          error: "Rate limit exceeded. Please wait a few minutes before chatting again."
-        })
-      }
-    });
-
-    // Add Default 4XX Gateway Response to prevent CORS errors on bad requests
-    this.api.addGatewayResponse(`${id}-Default4XXResponse`, {
-      type: apigateway.ResponseType.DEFAULT_4XX,
-      responseHeaders: {
-        "Access-Control-Allow-Origin": "'*'",
-        "Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-        "Access-Control-Allow-Methods": "'OPTIONS,GET,PUT,POST,DELETE'",
-      },
-    });
-
-    // Add Default 5XX Gateway Response to prevent CORS errors on server errors (like Throttling)
-    this.api.addGatewayResponse(`${id}-Default5XXResponse`, {
-      type: apigateway.ResponseType.DEFAULT_5XX,
-      responseHeaders: {
-        "Access-Control-Allow-Origin": "'*'",
-        "Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-        "Access-Control-Allow-Methods": "'OPTIONS,GET,PUT,POST,DELETE'",
-      },
-    });
-
-    const wafAssociation = new wafv2.CfnWebACLAssociation(
+    new wafv2.CfnWebACLAssociation(
       this,
       `${id}-waf-association`,
       {
-        resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/${this.api.deploymentStage.stageName}`,
+        resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/prod`,
         webAclArn: waf.attrArn,
       }
     );
-
-    wafAssociation.node.addDependency(this.api.deploymentStage);
 
     const adminRole = new iam.Role(this, `${id}-AdminRole`, {
       assumedBy: new iam.FederatedPrincipal(
@@ -617,9 +582,12 @@ export class ApiGatewayStack extends cdk.Stack {
           createPolicyStatement(
             ["execute-api:Invoke"],
             [
-              `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/admin/*`,
-              `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/instructor/*`,
-              `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/user/*`,
+              // Wildcard API id: SpecRestApi already Refs these Lambdas in OpenAPI.
+              // Referencing this.api.restApiId here closes a CloudFormation cycle
+              // and KC-Api changeset creation fails.
+              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin/*`,
+              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/instructor/*`,
+              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/user/*`,
             ]
           ),
         ],
@@ -719,7 +687,7 @@ export class ApiGatewayStack extends cdk.Stack {
               "cognito-idp:AdminListGroupsForUser",
             ],
             resources: [
-              `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${this.userPool.userPoolId}`,
+              `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`,
             ],
           }),
         ],
@@ -789,7 +757,7 @@ export class ApiGatewayStack extends cdk.Stack {
           "cognito-idp:AdminListGroupsForUser",
         ],
         resources: [
-          `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${this.userPool.userPoolId}`,
+          `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`,
         ],
       })
     );
@@ -1151,7 +1119,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaTextGen.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/chat_sessions*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/chat_sessions*`,
     });
 
     new cloudwatch.Alarm(this, 'TextGenConcurrencyAlarm', {
@@ -1262,7 +1230,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaKnowledgeBase.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/admin/*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin/*`,
     });
 
     // lambdaRole already has read access to db.secretPathUser through the stack-wide policy
@@ -1343,14 +1311,14 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaUserFunction.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/member*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
     });
 
     //Allows Invoking Functions Easily for Testing Purposes
     lambdaUserFunction.addPermission("AllowTestInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/test-invoke-stage/*/*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
     });
 
     const cfnLambda_user = lambdaUserFunction.node
@@ -1360,7 +1328,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaUserFunction.addPermission("AllowAdminApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/user*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/user*`,
     });
 
     const lambdaSystemMessagesFunction = new lambda.Function(this, `${id}-systemMessagesFunction`, {
@@ -1392,13 +1360,13 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaSystemMessagesFunction.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/member*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
     });
 
     lambdaSystemMessagesFunction.addPermission("AllowTestInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/test-invoke-stage/*/*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
     });
 
     const cfnLambda_systemMessages = lambdaSystemMessagesFunction.node
@@ -1408,7 +1376,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaSystemMessagesFunction.addPermission("AllowAdminApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/system*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/system*`,
     });
 
 
@@ -1437,7 +1405,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaChatSessionFunction.addPermission("AllowApiGatewayInvokeShared", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/chat_sessions*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/chat_sessions*`,
     });
 
     lambdaChatSessionFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
@@ -1477,7 +1445,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaAdminFunction.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/*/*/admin*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin*`,
     });
 
     lambdaAdminFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
@@ -1492,7 +1460,7 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaAdminFunction.addPermission("AllowTestInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/test-invoke-stage/*/*`,
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
     });
 
     const cfnLambda_admin = lambdaAdminFunction.node
@@ -1600,7 +1568,7 @@ export class ApiGatewayStack extends cdk.Stack {
     const wsPolicy = new iam.PolicyStatement({
       actions: ["execute-api:ManageConnections"],
       resources: [
-        `arn:aws:execute-api:${this.region}:${this.account}:${this.webSocketApi.apiId}/*/*`,
+        `arn:aws:execute-api:${this.region}:${this.account}:*/*/@connections/*`,
       ],
     });
 
@@ -1671,11 +1639,11 @@ export class ApiGatewayStack extends cdk.Stack {
 
     this.wsStage.node.addDependency(apiGatewayAccount);
 
-    // Add environment variable to text generation function (include stage name)
-    lambdaTextGen.addEnvironment(
-      "WEBSOCKET_API_ENDPOINT",
-      `${this.webSocketApi.apiEndpoint}/${this.wsStage.stageName}`
-    );
+    // Do not put webSocketApi.apiEndpoint on lambdaTextGen (or any OpenAPI
+    // Lambda). Text gen already builds the management URL from requestContext.
+    // A CFN Ref from lambdaTextGen back to this WebSocket API is what closed
+    // the KC-Api circular dependency (RestApi → lambdaTextGen → WebSocket
+    // → defaultFunction → lambdaTextGen).
 
     // Add WebSocket URL as stack output
     new cdk.CfnOutput(this, "WebSocketUrl", {

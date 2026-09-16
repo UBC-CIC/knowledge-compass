@@ -55,8 +55,14 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
         "OutputBucketName": bucket,
         "OutputKey": output_key,
     }
+    # DataAccessRoleArn is only valid inside JobExecutionSettings, and only
+    # together with AllowDeferredExecution. A top-level DataAccessRoleArn is
+    # rejected by boto3 as ParamValidationError.
     if TRANSCRIBE_DATA_ACCESS_ROLE_ARN:
-        params["DataAccessRoleArn"] = TRANSCRIBE_DATA_ACCESS_ROLE_ARN
+        params["JobExecutionSettings"] = {
+            "AllowDeferredExecution": True,
+            "DataAccessRoleArn": TRANSCRIBE_DATA_ACCESS_ROLE_ARN,
+        }
 
     transcribe_client.start_transcription_job(**params)
     return {

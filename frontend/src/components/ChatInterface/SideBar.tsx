@@ -6,7 +6,7 @@ import BrandMark from "@/components/BrandMark";
 import ChatSessionActionsMenu from "./ChatSessionActionsMenu";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
-import { DEMO_CHECKLIST, isDemoMode } from "@/lib/demo";
+import { DEMO_CHECKLIST, getConversationProgress, isDemoMode } from "@/lib/demo";
 
 type UserProfile = {
   id: string;
@@ -96,16 +96,12 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
     setMobileOpen(false);
   };
 
-  const happeningValue =
-    conversationFacts.situation ||
-    activeChatName?.trim() ||
-    currentMessages.find((m) => m.sender === "user" && m.text?.trim())?.text ||
-    "";
-
-  const checklist = DEMO_CHECKLIST.map((item) => ({
-    label: item.label,
-    value: item.key === "situation" ? happeningValue : conversationFacts[item.key] || "",
-  }));
+  const progress = getConversationProgress({
+    storedFacts: conversationFacts,
+    messages: currentMessages,
+    hasSession: Boolean(activeChatSessionId),
+    sessionName: activeChatName,
+  });
 
   return (
     <div className="flex h-full flex-col">
@@ -124,20 +120,32 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="px-[22px] pt-1 text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
-          What I've learned so far
+        <div className="flex items-baseline justify-between gap-2 px-[22px] pt-1">
+          <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
+            What I've learned so far
+          </div>
+          <div className="text-[11px] font-semibold text-foreground/70">
+            {progress.guidanceReady
+              ? "Done"
+              : `${progress.completedCount} of ${progress.totalCount}`}
+          </div>
         </div>
         <div className="flex flex-col gap-0.5 px-4 pt-3">
-          {checklist.map((item) => {
-            const ready = Boolean(item.value);
+          {DEMO_CHECKLIST.map((item) => {
+            const value = progress.facts[item.key];
+            const ready = Boolean(value);
+            const current = progress.currentKey === item.key;
             return (
               <div
-                key={item.label}
+                key={item.key}
+                aria-current={current ? "step" : undefined}
                 className={cn(
                   "flex items-start gap-2.5 rounded-[9px] px-3 py-2.5",
-                  ready
-                    ? "border border-foreground/10 bg-white"
-                    : "border border-transparent"
+                  current
+                    ? "border border-primary/35 bg-secondary"
+                    : ready
+                      ? "border border-foreground/10 bg-white"
+                      : "border border-transparent"
                 )}
               >
                 <div
@@ -145,10 +153,12 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
                     "mt-0.5 flex size-[19px] shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
                     ready
                       ? "border-none bg-primary text-white"
-                      : "border-[1.5px] border-foreground/28 bg-transparent text-transparent"
+                      : current
+                        ? "border-[1.5px] border-primary bg-primary text-white"
+                        : "border-[1.5px] border-foreground/28 bg-transparent text-transparent"
                   )}
                 >
-                  {ready ? "✓" : ""}
+                  {ready ? "✓" : current ? "•" : ""}
                 </div>
                 <div className="min-w-0">
                   <div className="text-[11.5px] font-bold uppercase tracking-[0.03em] text-foreground/75">
@@ -157,10 +167,14 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
                   <div
                     className={cn(
                       "mt-0.5 line-clamp-2 text-[13.5px] leading-snug",
-                      ready ? "text-foreground" : "text-foreground/70"
+                      ready
+                        ? "text-foreground"
+                        : current
+                          ? "font-medium text-primary"
+                          : "text-foreground/70"
                     )}
                   >
-                    {item.value || "Not yet"}
+                    {value || (current ? "Asking now" : "Not yet")}
                   </div>
                 </div>
               </div>

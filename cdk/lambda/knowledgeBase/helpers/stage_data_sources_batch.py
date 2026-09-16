@@ -1,8 +1,8 @@
 import json
 import logging
 from helpers.cors import get_cors_headers
+from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.stage_data_sources import (
-    _get_user_id_by_email,
     _validate_file_pair,
     _assert_s3_object_exists,
     _existing_file_row_id,
@@ -44,7 +44,7 @@ def stage_data_sources_batch(event, body, connection):
       ]
     }
     """
-    created_by = body.get("created_by")
+    created_by = admin_email_from_request(event, body)
     items = body.get("items")
 
     if not created_by:
@@ -56,9 +56,10 @@ def stage_data_sources_batch(event, body, connection):
     if len(items) > 100:
         return _response(event, 400, {"error": "Too many items. Maximum is 100 per batch."})
 
-    created_by_user_id = _get_user_id_by_email(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
+    connection.commit()
 
     staged = []
     skipped = []

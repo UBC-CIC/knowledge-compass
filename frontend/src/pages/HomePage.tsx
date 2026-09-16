@@ -9,6 +9,7 @@ import AIChatPage from "@/pages/ChatInterface/ChatInterface";
 import {
   DEMO_USER_ID,
   deleteDemoSessionState,
+  getConversationProgress,
   isDemoMode,
   seedDemoHistory,
   setDemoSessionState,
@@ -290,17 +291,12 @@ const normalizeChatSession = (session: any): ChatSession => ({
     }
   };
 
-  const userTurns = currentMessages.filter(
-    (m) => m.sender === "user" && typeof m.text === "string" && m.text.trim()
-  ).length;
-  const conversationProgress = !activeChatSessionId
-    ? 0
-    : Math.min(100, (userTurns / 4) * 100);
-  const progressLabel = !activeChatSessionId
-    ? "4 short questions"
-    : userTurns >= 4
-      ? "Guidance ready"
-      : `Question ${Math.min(Math.max(userTurns, 1), 4)} of 4`;
+  const conversationProgress = getConversationProgress({
+    storedFacts: conversationFacts,
+    messages: currentMessages,
+    hasSession: Boolean(activeChatSessionId),
+    sessionName: activeChatName,
+  });
 
   if (isLoadingUser || isLoadingChatSessions) {
     return (
@@ -355,11 +351,11 @@ const normalizeChatSession = (session: any): ChatSession => ({
               <div className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-foreground/12">
                 <div
                   className="h-full rounded-[3px] bg-primary transition-[width] duration-500 ease-[cubic-bezier(0.2,0.7,0.3,1)]"
-                  style={{ width: `${conversationProgress}%` }}
+                  style={{ width: `${conversationProgress.percent}%` }}
                 />
               </div>
               <div className="shrink-0 text-[12.5px] font-semibold text-foreground/80">
-                {progressLabel}
+                {conversationProgress.label}
               </div>
             </div>
 

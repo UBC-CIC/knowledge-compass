@@ -16,7 +16,7 @@ import {
   Film,
 } from "lucide-react";
 import { AuthService } from "@/functions/authService";
-import { getCurrentUser } from "aws-amplify/auth";
+import { fetchUserAttributes, getCurrentUser } from "aws-amplify/auth";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -356,6 +356,15 @@ export default function DataSourceManagement() {
       setAdminEmail(DEMO_ADMIN_EMAIL);
       return;
     }
+    try {
+      const attrs = await fetchUserAttributes();
+      if (attrs.email) {
+        setAdminEmail(attrs.email);
+        return;
+      }
+    } catch {
+      // Fall back to the Cognito sign-in id when attributes are unavailable.
+    }
     const user = await getCurrentUser();
     const email = user?.signInDetails?.loginId ?? null;
     setAdminEmail(email);
@@ -689,7 +698,7 @@ export default function DataSourceManagement() {
     const uploadResponse = await fetch(presignedUrl, {
       method: "PUT",
       headers: {
-        "Content-Type": file.type || fallbackContentType,
+        "Content-Type": fallbackContentType,
       },
       body: file,
     });
@@ -1104,9 +1113,12 @@ export default function DataSourceManagement() {
 
       const responseJson = await stageResponse.json().catch(() => ({}));
       if (!stageResponse.ok) {
+        const detail =
+          typeof responseJson?.detail === "string" ? responseJson.detail : "";
         throw new Error(
-          responseJson?.error ||
-            responseJson?.message ||
+          [responseJson?.error || responseJson?.message, detail]
+            .filter(Boolean)
+            .join(" — ") ||
             "Video uploaded but transcription could not be started."
         );
       }

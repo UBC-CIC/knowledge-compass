@@ -26,6 +26,24 @@ x-amazon-apigateway-gateway-responses:
     responseTemplates:
       application/json: |
         {"message":$context.error.messageString}
+  WAF_FILTERED:
+    statusCode: "429"
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
+    responseTemplates:
+      application/json: '{"error":"Rate limit exceeded. Please wait a few minutes before chatting again."}'
+  DEFAULT_4XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
+  DEFAULT_5XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
 x-common-options: &commonOptions
   options:
     summary: CORS support
@@ -57,7 +75,7 @@ paths:
     <<: *commonOptions
     post:
       tags: [Admin]
-      summary: Update an existing user's email and role (update-only)
+      summary: Upsert the signed-in admin into the users table
       operationId: admin_update_user
       security:
         - adminAuthorizer: []
@@ -67,11 +85,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [user_id, email, role]
+              required: [email, role]
               properties:
                 user_id:
                   type: string
-                  description: UUID of the user row to update
+                  description: Deprecated. Admins are upserted by email.
                 email:
                   type: string
                 role:

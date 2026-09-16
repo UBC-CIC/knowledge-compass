@@ -3,6 +3,7 @@ import json
 import logging
 from uuid import uuid4
 
+from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.cors import get_cors_headers
 from helpers.process_s3_batch import process_s3_batch
 from helpers.process_website_batch import process_website_batch
@@ -30,22 +31,6 @@ def _response(event, status_code: int, body: dict):
         },
         "body": json.dumps(body),
     }
-
-
-def _get_user_id_by_email(connection, email: str) -> str | None:
-    """Look up the internal user ID for the admin email that initiated the sync"""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE email = %s
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cursor.fetchone()
-        return str(row[0]) if row else None
 
 
 def _promote_pending_to_queued(connection, *, sync_session_id: str) -> int:
@@ -103,13 +88,14 @@ def start_ingestion_job(event, body, connection, kb_id):
     - process_s3_batch(...)
     - process_website_batch(...)
     """
-    created_by = body.get("created_by")
+    created_by = admin_email_from_request(event, body)
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})
 
-    created_by_user_id = _get_user_id_by_email(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
+    connection.commit()
 
     sync_session_id = uuid4().hex
 

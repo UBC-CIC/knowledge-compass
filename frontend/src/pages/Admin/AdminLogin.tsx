@@ -2,12 +2,10 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router";
 import { confirmSignIn } from "aws-amplify/auth";
 import { AuthService } from "@/functions/authService";
-import { useUser } from "@/providers/user";
 import BrandMark from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/demo";
 
 export default function AdminLogin() {
-  const { userId } = useUser();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -42,8 +40,6 @@ export default function AdminLogin() {
   }, [navigate, from]);
 
   const updateAdminUser = async (adminEmail: string) => {
-    if (!userId) throw new Error("Missing userId");
-
     const token = await AuthService.getAdminIdToken(false);
 
     const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/promote_user`, {
@@ -53,7 +49,6 @@ export default function AdminLogin() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: userId,
         email: adminEmail,
         role: "admin",
       }),
@@ -142,6 +137,7 @@ export default function AdminLogin() {
 
       if (user.isSignedIn) {
         AuthService.clearAuthCache();
+        await updateAdminUser(email);
         setSignedIn(true);
         navigate(from, { replace: true });
       }

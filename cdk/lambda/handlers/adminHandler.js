@@ -11,6 +11,7 @@
  */
 
 const postgres = require("postgres");
+const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
 const {
   SecretsManagerClient,
@@ -102,7 +103,7 @@ exports.handler = async (event) => {
         response.body = JSON.stringify(data);
         break;
 
-      // POST /admin/promote_user - Update an existing user's email + role
+      // POST /admin/promote_user - Ensure the signed-in admin exists in users
       case "POST /admin/promote_user": {
         let body;
         try {
@@ -113,15 +114,8 @@ exports.handler = async (event) => {
           break;
         }
 
-        const userId = body?.user_id;
-        const email = (body?.email || "").trim().toLowerCase();
-        const role = body?.role; // 'admin' | 'student'
-
-        if (!userId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "user_id is required" });
-          break;
-        }
+        const email = (body?.email || event.requestContext?.authorizer?.email || "").trim().toLowerCase();
+        const role = body?.role || "admin";
 
         if (!email) {
           response.statusCode = 400;
@@ -137,12 +131,18 @@ exports.handler = async (event) => {
         }
 
         const updated = await sqlConnection`
-          UPDATE users
-          SET
-            email = ${email},
+          INSERT INTO users (id, email, display_name, role, created_at, last_seen_at)
+          VALUES (
+            ${randomUUID()}::uuid,
+            ${email},
+            ${email},
+            ${role}::user_role,
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (email) DO UPDATE SET
             role = ${role}::user_role,
             last_seen_at = NOW()
-          WHERE id = ${userId}::uuid
           RETURNING
             id,
             email,
@@ -154,12 +154,6 @@ exports.handler = async (event) => {
             messages_window_started_at,
             metadata
         `;
-
-        if (updated.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "User not found" });
-          break;
-        }
 
         response.statusCode = 200;
         response.body = JSON.stringify(updated[0]);

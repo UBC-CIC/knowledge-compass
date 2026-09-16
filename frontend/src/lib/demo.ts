@@ -65,7 +65,106 @@ export const DEMO_CHECKLIST = [
   { key: "duration" as const, label: "How long" },
   { key: "reason" as const, label: "School's reason" },
   { key: "tried" as const, label: "What you've tried" },
+  { key: "need" as const, label: "What you need most" },
 ];
+
+export type ChecklistKey = (typeof DEMO_CHECKLIST)[number]["key"];
+
+type ProgressMessage = {
+  sender?: string;
+  text?: string;
+  phase?: "DETECTIVE" | "SUGGESTION" | null;
+  showGuidance?: boolean;
+};
+
+export function getUserAnswers(messages: ProgressMessage[]): string[] {
+  return messages
+    .filter((m) => m.sender === "user" && typeof m.text === "string" && m.text.trim())
+    .map((m) => m.text!.trim());
+}
+
+export function resolveConversationFacts(
+  stored: Record<string, string> | DemoFacts,
+  messages: ProgressMessage[]
+): Required<DemoFacts> {
+  const answers = getUserAnswers(messages);
+  return {
+    situation: stored.situation || answers[0] || "",
+    duration: stored.duration || answers[1] || "",
+    reason: stored.reason || answers[2] || "",
+    tried: stored.tried || answers[3] || "",
+    need: stored.need || answers[4] || "",
+  };
+}
+
+export type ConversationProgress = {
+  facts: Required<DemoFacts>;
+  currentKey: ChecklistKey | null;
+  completedCount: number;
+  totalCount: number;
+  questionNumber: number;
+  guidanceReady: boolean;
+  percent: number;
+  label: string;
+};
+
+export function getConversationProgress({
+  storedFacts,
+  messages,
+  hasSession,
+  sessionName,
+}: {
+  storedFacts: Record<string, string> | DemoFacts;
+  messages: ProgressMessage[];
+  hasSession: boolean;
+  sessionName?: string | null;
+}): ConversationProgress {
+  const facts = resolveConversationFacts(storedFacts, messages);
+  if (!facts.situation && sessionName?.trim() && getUserAnswers(messages).length > 0) {
+    facts.situation = sessionName.trim();
+  }
+
+  const lastBot = [...messages].reverse().find((m) => m.sender === "bot");
+  const guidanceReady =
+    Boolean(facts.need) ||
+    Boolean(lastBot?.showGuidance) ||
+    lastBot?.phase === "SUGGESTION";
+
+  const completedCount = DEMO_CHECKLIST.filter((item) => Boolean(facts[item.key])).length;
+  const currentKey: ChecklistKey | null = !hasSession
+    ? "situation"
+    : guidanceReady
+      ? null
+      : DEMO_CHECKLIST.find((item) => !facts[item.key])?.key ?? null;
+
+  const detectiveFilled = DETECTIVE_SCRIPT.filter((step) => Boolean(facts[step.key])).length;
+  const started = hasSession && (completedCount > 0 || messages.length > 0);
+
+  let percent = 0;
+  let label = `${DETECTIVE_SCRIPT.length} short questions`;
+  let questionNumber = 0;
+
+  if (guidanceReady && hasSession) {
+    percent = 100;
+    label = "Guidance ready";
+    questionNumber = DETECTIVE_SCRIPT.length;
+  } else if (started) {
+    questionNumber = Math.min(DETECTIVE_SCRIPT.length, detectiveFilled + 1);
+    percent = (questionNumber / DETECTIVE_SCRIPT.length) * 100;
+    label = `Question ${questionNumber} of ${DETECTIVE_SCRIPT.length}`;
+  }
+
+  return {
+    facts,
+    currentKey,
+    completedCount,
+    totalCount: DEMO_CHECKLIST.length,
+    questionNumber,
+    guidanceReady: Boolean(hasSession && guidanceReady),
+    percent,
+    label,
+  };
+}
 
 const demoSessionStore = new Map<string, DemoSessionState>();
 
