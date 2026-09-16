@@ -191,18 +191,39 @@ function validateVideoFile(file: File): string | null {
   return null;
 }
 
+const VIDEO_CONTENT_TYPE_BY_EXT: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".flac": "audio/flac",
+  ".ogg": "audio/ogg",
+  ".amr": "audio/amr",
+};
+
 function videoContentType(file: File): string {
-  if (file.type && file.type !== "application/octet-stream") return file.type;
+  // Always map from the extension. Browser `file.type` is unreliable on Windows
+  // (application/mp4, video/mpeg, codecs=... parameters) and is not always in
+  // the API allowlist, which makes presign fail before the file is uploaded.
   const lower = file.name.toLowerCase();
-  if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
-  if (lower.endsWith(".webm")) return "video/webm";
-  if (lower.endsWith(".mp3")) return "audio/mpeg";
-  if (lower.endsWith(".wav")) return "audio/wav";
-  if (lower.endsWith(".m4a")) return "audio/mp4";
-  if (lower.endsWith(".flac")) return "audio/flac";
-  if (lower.endsWith(".ogg")) return "audio/ogg";
-  if (lower.endsWith(".amr")) return "audio/amr";
+  for (const [ext, contentType] of Object.entries(VIDEO_CONTENT_TYPE_BY_EXT)) {
+    if (lower.endsWith(ext)) return contentType;
+  }
   return "video/mp4";
+}
+
+function sanitizeUploadFileName(fileName: string): string {
+  const base = fileName.replace(/^.*[/\\]/, "").trim() || "upload";
+  const lastDot = base.lastIndexOf(".");
+  const ext = lastDot >= 0 ? base.slice(lastDot).toLowerCase() : "";
+  const stem = lastDot >= 0 ? base.slice(0, lastDot) : base;
+  const cleanedStem =
+    stem.replace(/[^\w.\-]+/g, "_").replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "") ||
+    "upload";
+  const cleanedExt = ext.replace(/[^\w.]/g, "");
+  return `${cleanedStem}${cleanedExt}`.slice(0, 180);
 }
 
 function displayedStatus(
@@ -630,12 +651,17 @@ export default function DataSourceManagement() {
         ? "video/mp4"
         : "application/json";
 
+    const contentType =
+      uploadType === "video"
+        ? videoContentType(file)
+        : file.type || fallbackContentType;
+    const fileName =
+      uploadType === "video" ? sanitizeUploadFileName(file.name) : file.name;
+
     const res = await fetch(
       `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
-        file.name
-      )}&content_type=${encodeURIComponent(
-        uploadType === "video" ? videoContentType(file) : file.type || fallbackContentType
-      )}`,
+        fileName
+      )}&content_type=${encodeURIComponent(contentType)}`,
       {
         headers: {
           Authorization: token,
@@ -644,7 +670,12 @@ export default function DataSourceManagement() {
     );
 
     if (!res.ok) {
-      throw new Error(`Failed to generate upload URL for ${file.name}`);
+      const err = await res.json().catch(() => ({}));
+      throw new Error(
+        (typeof err?.error === "string" && err.error) ||
+          (typeof err?.message === "string" && err.message) ||
+          `Failed to generate upload URL for ${file.name} (HTTP ${res.status})`
+      );
     }
 
     return (await res.json()) as PresignedUploadResponse;

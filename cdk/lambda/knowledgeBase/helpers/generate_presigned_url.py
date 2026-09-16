@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from helpers.cors import get_cors_headers
 import time
 import boto3
@@ -21,10 +22,16 @@ ALLOWED_CONTENT_TYPES = {
     "video/mp4",
     "video/webm",
     "video/x-m4v",
+    "video/mpeg",
+    "video/quicktime",
+    "video/x-mp4",
+    "application/mp4",
     "audio/mpeg",
     "audio/mp4",
     "audio/wav",
     "audio/x-wav",
+    "audio/wave",
+    "audio/x-m4a",
     "audio/flac",
     "audio/ogg",
     "audio/amr",
@@ -41,6 +48,18 @@ VIDEO_EXTENSIONS = (
     ".webm",
     ".m4a",
 )
+
+EXT_TO_CONTENT_TYPE = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".amr": "audio/amr",
+}
 
 s3 = boto3.client(
     "s3",
@@ -63,7 +82,28 @@ def _response(event, status_code: int, body: dict):
     }
 
 def _sanitize_file_name(file_name: str) -> str:
-    return os.path.basename(file_name).strip()
+    base = os.path.basename(file_name).strip()
+    stem, ext = os.path.splitext(base)
+    stem = re.sub(r"[^\w.\-]+", "_", stem, flags=re.UNICODE)
+    stem = re.sub(r"_+", "_", stem).strip("._") or "upload"
+    ext = re.sub(r"[^\w.]", "", ext.lower())
+    return f"{stem}{ext}"[:180]
+
+
+def _normalize_content_type(content_type: str) -> str:
+    normalized = (content_type or "application/octet-stream").strip().lower()
+    return normalized.split(";", 1)[0].strip() or "application/octet-stream"
+
+
+def _content_type_for_file(file_name: str, content_type: str) -> str:
+    """Keep a client type if it is allowed; otherwise map known video extensions."""
+    if content_type in ALLOWED_CONTENT_TYPES:
+        return content_type
+    lower_name = file_name.lower()
+    for ext, canonical in EXT_TO_CONTENT_TYPE.items():
+        if lower_name.endswith(ext):
+            return canonical
+    return content_type
 
 def _is_markdown_file(file_name: str) -> bool:
     lower_name = file_name.lower()
@@ -95,7 +135,7 @@ def generate_presigned_url(event):
     query_params = event.get("queryStringParameters") or {}
 
     file_name = query_params.get("file_name")
-    content_type = query_params.get("content_type", "application/octet-stream")
+    content_type = _normalize_content_type(query_params.get("content_type", "application/octet-stream"))
 
     if not file_name:
         return _response(event, 400, {"error": "Missing file_name parameter"})
@@ -103,6 +143,8 @@ def generate_presigned_url(event):
     file_name = _sanitize_file_name(file_name)
     if not file_name:
         return _response(event, 400, {"error": "Invalid file_name parameter"})
+
+    content_type = _content_type_for_file(file_name, content_type)
 
     if content_type not in ALLOWED_CONTENT_TYPES:
         return _response(
@@ -124,9 +166,6 @@ def generate_presigned_url(event):
 
     if lower_name.endswith(".json") and content_type not in {"application/json", "text/json", "application/octet-stream"}:
         return _response(event, 400, {"error": "JSON files must use content_type application/json, text/json, or application/octet-stream"})
-
-    if _is_video_file(file_name) and content_type not in ALLOWED_CONTENT_TYPES:
-        return _response(event, 400, {"error": "Unsupported video/audio content type"})
 
     prefix = _infer_upload_prefix(file_name, content_type)
     timestamp = int(time.time())

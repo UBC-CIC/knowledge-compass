@@ -29,6 +29,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import { VpcStack } from "./vpc-stack";
 import { DatabaseStack } from "./database-stack";
 
@@ -267,6 +269,40 @@ export class IngestionStack extends Stack {
       },
     });
     this.transcriberTaskDef.node.addDependency(transcriberImageWaiter);
+
+    // Keep EventBridge out of KC-Api: SpecRestApi already has a CloudFormation
+    // cycle, and targeting that stack's Lambdas makes the changeset fail.
+    const knowledgeBaseName = `${props.stackPrefix}-Api-lambdaKnowledgeBase`;
+    const knowledgeBaseArn = `arn:aws:lambda:${this.region}:${this.account}:function:${knowledgeBaseName}`;
+    const transcribeRelay = new lambda.Function(this, "transcribeRelay", {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset("lambda/transcribeRelay"),
+      timeout: Duration.seconds(30),
+      memorySize: 128,
+      environment: {
+        TARGET_FUNCTION_NAME: knowledgeBaseName,
+      },
+      functionName: `${id}-transcribeRelay`,
+    });
+    transcribeRelay.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["lambda:InvokeFunction"],
+        resources: [knowledgeBaseArn, `${knowledgeBaseArn}:*`],
+      })
+    );
+    new events.Rule(this, "TranscribeComplete", {
+      description: "Forward Amazon Transcribe job results to the knowledge-base Lambda",
+      eventPattern: {
+        source: ["aws.transcribe"],
+        detailType: ["Transcribe Job State Change"],
+        detail: {
+          TranscriptionJobStatus: ["COMPLETED", "FAILED"],
+        },
+      },
+      targets: [new targets.LambdaFunction(transcribeRelay)],
+    });
   }
 
   /**
