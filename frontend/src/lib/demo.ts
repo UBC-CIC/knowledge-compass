@@ -137,21 +137,24 @@ export function getConversationProgress({
       ? null
       : DEMO_CHECKLIST.find((item) => !facts[item.key])?.key ?? null;
 
-  const detectiveFilled = DETECTIVE_SCRIPT.filter((step) => Boolean(facts[step.key])).length;
+  const totalQuestions = DEMO_CHECKLIST.length;
   const started = hasSession && (completedCount > 0 || messages.length > 0);
 
   let percent = 0;
-  let label = `${DETECTIVE_SCRIPT.length} short questions`;
+  let label = `${totalQuestions} short questions`;
   let questionNumber = 0;
 
   if (guidanceReady && hasSession) {
     percent = 100;
     label = "Guidance ready";
-    questionNumber = DETECTIVE_SCRIPT.length;
+    questionNumber = totalQuestions;
   } else if (started) {
-    questionNumber = Math.min(DETECTIVE_SCRIPT.length, detectiveFilled + 1);
-    percent = (questionNumber / DETECTIVE_SCRIPT.length) * 100;
-    label = `Question ${questionNumber} of ${DETECTIVE_SCRIPT.length}`;
+    const currentIndex = currentKey
+      ? DEMO_CHECKLIST.findIndex((item) => item.key === currentKey) + 1
+      : completedCount;
+    questionNumber = Math.min(totalQuestions, Math.max(1, currentIndex));
+    percent = (questionNumber / totalQuestions) * 100;
+    label = `Question ${questionNumber} of ${totalQuestions}`;
   }
 
   return {

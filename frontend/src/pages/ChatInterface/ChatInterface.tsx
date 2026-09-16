@@ -51,10 +51,22 @@ const WELCOME_STARTERS = [
   },
 ];
 
+const WELCOME_HEADING =
+  "Hi, I'm here to help you navigate your child's education.";
+const WELCOME_ASK =
+  "Tell me what's been happening. What's going on with your child's schooling right now?";
 const DEFAULT_WELCOME_MESSAGE =
   "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
+
+function welcomeBody(message: string): string {
+  let text = message.trim();
+  for (const chrome of [WELCOME_HEADING, WELCOME_ASK]) {
+    text = text.split(chrome).join("");
+  }
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
 
 type AIChatPageProps = {
   welcomeMessage?: string;
@@ -794,6 +806,10 @@ export default function AIChatPage({
     });
   };
 
+  const displayedWelcome = isLoadingWelcome
+    ? "Loading..."
+    : welcomeBody(welcomeMessage);
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full px-4 md:px-[34px]">
@@ -801,13 +817,15 @@ export default function AIChatPage({
           {isWelcome ? (
             <div>
               <h1 className="font-serif text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
-                Hi, I'm here to help you navigate your child's education.
+                {WELCOME_HEADING}
               </h1>
-              <p className="mt-4 text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
-                {isLoadingWelcome ? "Loading..." : welcomeMessage}
-              </p>
+              {displayedWelcome ? (
+                <p className="mt-4 text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
+                  {displayedWelcome}
+                </p>
+              ) : null}
               <p className="mt-3.5 text-[17.5px] font-semibold leading-relaxed text-pretty">
-                Tell me what's been happening. What's going on with your child's schooling right now?
+                {WELCOME_ASK}
               </p>
 
               <div className="mt-[26px] text-[11px] font-bold uppercase tracking-[0.08em] text-foreground/70">
