@@ -97,9 +97,12 @@ export class CICDStack extends cdk.Stack {
     );
 
     // Create GitHub connection using CodeStar Connections
+    // Note: logical ID bumped to GitHubConnectionV2 because the previous
+    // connection (GitHubConnection) was deleted outside of CloudFormation,
+    // leaving the stack pointing at a physical ARN that no longer exists.
     const githubConnection = new codeconnections.CfnConnection(
       this,
-      "GitHubConnection",
+      "GitHubConnectionV2",
       {
         connectionName: `${id}-github-conn`,
         providerType: "GitHub",
@@ -246,7 +249,8 @@ export class CICDStack extends cdk.Stack {
                     SCAN_RESULTS=$(aws ecr describe-image-scan-findings \
                       --repository-name $REPO_NAME \
                       --image-id imageTag=latest \
-                      --query "imageScanFindingsSummary.findingCounts.CRITICAL" \
+                      --no-paginate \
+                      --query "imageScanFindings.findingSeverityCounts.CRITICAL" \
                       --output text 2>/dev/null || echo "0")
                     
                     if [[ "$SCAN_RESULTS" != "0" && "$SCAN_RESULTS" != "None" ]]; then

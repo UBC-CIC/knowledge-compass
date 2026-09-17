@@ -23,8 +23,50 @@ type SourceItem = {
   type?: string;
   source_type?: string;
   score?: number;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    chunk_start?: string;
+    chunk_end?: string;
+    [key: string]: unknown;
+  };
 };
+
+const PREVIEW_MAX_CHARS = 320;
+
+function truncatePreview(text: string) {
+  const clean = text.trim();
+  if (clean.length <= PREVIEW_MAX_CHARS) return clean;
+  return `${clean.slice(0, PREVIEW_MAX_CHARS).trimEnd()}…`;
+}
+
+function getVideoTimestamp(source: SourceItem | string) {
+  if (typeof source === "string") return null;
+  const isVideo = (source.source_type || source.type || "").toLowerCase() === "video";
+  const { chunk_start, chunk_end } = source.metadata || {};
+  if (!isVideo || !chunk_start || !chunk_end) return null;
+  return { start: chunk_start, end: chunk_end };
+}
+
+function timestampToSeconds(ts: string): number | null {
+  const match = ts.match(/^(\d+):(\d{2}):(\d{2})(?:\.\d+)?$/);
+  if (!match) return null;
+  const [, h, m, s] = match;
+  return Number(h) * 3600 + Number(m) * 60 + Number(s);
+}
+
+function withStartTime(url: string, start: string) {
+  const seconds = timestampToSeconds(start);
+  if (seconds === null) return url;
+  try {
+    const parsed = new URL(url);
+    const isYouTube =
+      parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtu.be");
+    if (!isYouTube) return url;
+    parsed.searchParams.set("t", `${seconds}s`);
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
 
 type AIChatMessageProps = {
   text: string;
@@ -93,12 +135,14 @@ function sourceLabel(source: SourceItem | string) {
       title: source.replace(urlMatch?.[0] ?? "", "").trim() || source,
       url: urlMatch?.[0] ?? "",
       type: "",
+      preview: "",
     };
   }
   const url = source.url || source.uri || "";
   const title = source.title || url || "Source";
   const type = (source.source_type || source.type || "").toLowerCase();
-  return { title, url, type };
+  const preview = source.content ? truncatePreview(source.content) : "";
+  return { title, url, type, preview };
 }
 
 function isHttpSource(source: SourceItem | string) {
@@ -143,11 +187,13 @@ export default function AIChatMessage({
         </div>
         <div className="mt-2.5 flex flex-col gap-2">
           {resourceSources.map((source, index) => {
-            const { title, url, type } = sourceLabel(source);
+            const { title, url, type, preview } = sourceLabel(source);
+            const timestamp = getVideoTimestamp(source);
+            const href = timestamp ? withStartTime(url, timestamp.start) : url;
             return (
               <a
                 key={`${url}-${index}`}
-                href={url}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-start gap-2.5 rounded-[10px] border border-foreground/14 px-4 py-3 hover:border-primary hover:bg-accent"
@@ -165,6 +211,17 @@ export default function AIChatMessage({
                     <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span className="break-words">{title}</span>
                   </span>
+                  {timestamp ? (
+                    <span className="mt-1 block font-mono text-[12px] font-semibold text-foreground/70">
+                      [{timestamp.start} - {timestamp.end}]
+                    </span>
+                  ) : null}
+                  {preview ? (
+                    <span className="mt-1 block whitespace-pre-line break-words text-[13px] font-normal leading-snug text-foreground/80">
+                      {timestamp ? "Preview: " : ""}
+                      {preview}
+                    </span>
+                  ) : null}
                 </span>
               </a>
             );
