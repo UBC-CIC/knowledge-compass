@@ -14,6 +14,7 @@ from helpers.update_status import update_status
 from helpers.video_transcription import handle_transcribe_complete
 from helpers.process_crawler_batch import handle_ecs_task_stopped
 from helpers.retry_ingestion_run import retry_ingestion_run
+from helpers.delete_data_source import delete_data_source
 
 # Set up logging
 logger = logging.getLogger()
@@ -195,6 +196,21 @@ def handler(event, context=None):
             if not data_source_id:
                 return _response(event, 400, {"error": "Missing data source id"})
             return retry_ingestion_run(
+                event=event,
+                body=body,
+                connection=connection,
+                data_source_id=data_source_id,
+            )
+
+        # Route: DELETE /admin/data_sources/{id}
+        if method == "DELETE" and (
+            resource == "/admin/data_sources/{id}"
+            or (path.startswith("/admin/data_sources/") and not path.endswith("/retry"))
+        ):
+            data_source_id = (event.get("pathParameters") or {}).get("id")
+            if not data_source_id:
+                return _response(event, 400, {"error": "Missing data source id"})
+            return delete_data_source(
                 event=event,
                 body=body,
                 connection=connection,

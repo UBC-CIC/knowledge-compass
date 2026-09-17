@@ -14,6 +14,7 @@ import {
   Copy,
   Download,
   Film,
+  Trash2,
 } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { fetchUserAttributes, getCurrentUser } from "aws-amplify/auth";
@@ -339,6 +340,12 @@ export default function DataSourceManagement() {
     message: string;
   }>({ type: null, message: "" });
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteStatus, setDeleteStatus] = useState<{
+    type: "success" | "error" | null;
+    message: string;
+  }>({ type: null, message: "" });
+
   const [totals, setTotals] = useState<AnalyticsTotals>({
     users: 0,
     chat_sessions: 0,
@@ -578,6 +585,65 @@ export default function DataSourceManagement() {
       });
     } finally {
       setRetryingId(null);
+    }
+  };
+
+  const handleDelete = async (dataSourceId: string, name: string) => {
+    if (
+      !confirm(
+        `Delete "${name}"? This permanently removes it (and any paired metadata file) from the knowledge base. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    if (isDemoMode) {
+      setDeleteStatus({
+        type: "success",
+        message: "Demo: this would permanently delete the resource.",
+      });
+      return;
+    }
+
+    try {
+      setDeletingId(dataSourceId);
+      setDeleteStatus({ type: null, message: "" });
+
+      const token = await AuthService.getAdminIdToken();
+
+      const res = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const responseJson = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          responseJson?.error || responseJson?.message || "Failed to delete resource"
+        );
+      }
+
+      setDeleteStatus({
+        type: "success",
+        message: responseJson?.message || "Resource deleted.",
+      });
+
+      await fetchAdminDataSources();
+    } catch (e) {
+      console.error(e);
+      setDeleteStatus({
+        type: "error",
+        message: e instanceof Error ? e.message : "Failed to delete resource",
+      });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -1934,6 +2000,18 @@ export default function DataSourceManagement() {
               {retryStatus.message}
             </div>
           )}
+
+          {deleteStatus.message && (
+            <div
+              className={`text-sm p-3 rounded ${
+                deleteStatus.type === "success"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+              {deleteStatus.message}
+            </div>
+          )}
         </div>
 
         <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
@@ -1952,17 +2030,18 @@ export default function DataSourceManagement() {
             <Table>
               <TableHeader className="bg-gray-50">
                 <TableRow>
-                  <TableHead className="w-[45%]">Name</TableHead>
+                  <TableHead className="w-[40%]">Name</TableHead>
                   <TableHead className="w-[10%]">Type</TableHead>
                   <TableHead className="w-[12%]">Status</TableHead>
-                  <TableHead className="w-[16%]">Uploaded</TableHead>
-                  <TableHead className="w-[16%]">Completed</TableHead>
+                  <TableHead className="w-[15%]">Uploaded</TableHead>
+                  <TableHead className="w-[15%]">Completed</TableHead>
+                  <TableHead className="w-[8%] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-10">
+                    <TableCell colSpan={6} className="py-10">
                       <div className="flex items-center justify-center gap-2 text-gray-500">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         <span>Loading data sources...</span>
@@ -1971,7 +2050,7 @@ export default function DataSourceManagement() {
                   </TableRow>
                 ) : pagedDataSources.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-10 text-gray-500">
+                    <TableCell colSpan={6} className="text-center py-10 text-gray-500">
                       No data sources found.
                     </TableCell>
                   </TableRow>
@@ -2049,11 +2128,29 @@ export default function DataSourceManagement() {
                           <TableCell className="align-top text-sm text-gray-700">
                             {formatDateTime(run?.completed_at ?? null)}
                           </TableCell>
+
+                          <TableCell className="align-top text-right">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-gray-500 hover:text-red-600 hover:bg-red-50"
+                              title="Delete this resource"
+                              onClick={() => handleDelete(ds.id, ds.name)}
+                              disabled={deletingId === ds.id}
+                            >
+                              {deletingId === ds.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </TableCell>
                         </TableRow>
 
                         {isOpen ? (
                           <TableRow key={`${ds.id}-sub`}>
-                            <TableCell colSpan={5} className="bg-gray-50/70">
+                            <TableCell colSpan={6} className="bg-gray-50/70">
                               {ds.type === "website" ? (
                                 <div className="space-y-3">
                                   <div className="text-sm font-medium text-gray-800">

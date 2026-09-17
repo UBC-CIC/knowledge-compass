@@ -737,6 +737,51 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/data_sources/{id}:
+    <<: *commonOptions
+    delete:
+      tags: [Admin]
+      summary: Permanently delete an uploaded data source (file, video, or website)
+      operationId: delete_data_source
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Data source deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  action: { type: string }
+                  data_source_id: { type: string }
+                  deleted_data_source_ids:
+                    type: array
+                    items: { type: string }
+                  warnings:
+                    type: array
+                    items: { type: string }
+        "400":
+          description: Invalid request
+        "404":
+          description: Data source not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/system-settings:
     <<: *commonOptions
     get:
