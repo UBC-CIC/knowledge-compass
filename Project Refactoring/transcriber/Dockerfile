@@ -16,9 +16,10 @@ WORKDIR /app
 COPY transcriber/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Fetch the RDS CA bundle at build time for verify-full TLS.
-RUN python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', '/app/global-bundle.pem')"
-ENV DB_SSL_ROOT_CERT=/app/global-bundle.pem
+# DB_HOST is the RDS Proxy endpoint, not the RDS instance directly. RDS Proxy
+# serves an ACM-issued certificate (not an rds-ca-* one), so verify-full must
+# check it against the OS trust store, not the RDS CA bundle.
+ENV DB_SSL_ROOT_CERT=/etc/ssl/certs/ca-certificates.crt
 
 COPY common/ ./common/
 COPY transcriber/transcrbe.py ./transcrbe.py

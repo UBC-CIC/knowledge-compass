@@ -751,7 +751,9 @@ def main() -> None:
     parser.add_argument("seed_url", nargs="?", default=env_seed, help="Starting URL (or SEED_URL env)")
     parser.add_argument("--max-pages", type=int, default=int(env_max_pages) if env_max_pages else 50)
     parser.add_argument("--max-words", type=int, default=650, help="Max words per chunk before splitting")
-    parser.add_argument("--output",   default="crawl_output.json")
+    # /tmp: the ECS image runs as a non-root user with a read-only $CWD (/app),
+    # so a relative default here would crash every containerized run.
+    parser.add_argument("--output",   default="/tmp/crawl_output.json")
     parser.add_argument("--write-db", action="store_true", default=env_write_db,
                         help="Embed chunks and write to database (or WRITE_DB env)")
     parser.add_argument("--job-id", default=env_job_id,

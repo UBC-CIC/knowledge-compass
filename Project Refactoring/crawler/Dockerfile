@@ -24,9 +24,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # pinned playwright package is present (no-op if already installed).
 RUN python -m playwright install chromium
 
-# Fetch the RDS CA bundle at build time for verify-full TLS.
-RUN python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', '/app/global-bundle.pem')"
-ENV DB_SSL_ROOT_CERT=/app/global-bundle.pem
+# DB_HOST is the RDS Proxy endpoint, not the RDS instance directly. RDS Proxy
+# serves an ACM-issued certificate (not an rds-ca-* one), so verify-full must
+# check it against the OS trust store, not the RDS CA bundle.
+ENV DB_SSL_ROOT_CERT=/etc/ssl/certs/ca-certificates.crt
 
 # App code: shared config package + crawler.
 COPY common/ ./common/

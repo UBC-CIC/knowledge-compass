@@ -524,7 +524,9 @@ def main() -> None:
                         help="Use semantic chunking — embed segments to detect topic boundaries")
     parser.add_argument("--semantic-threshold", type=float, default=SEMANTIC_THRESHOLD_VTT,
                         help="Cosine similarity threshold for topic splits (default 0.5)")
-    parser.add_argument("--output",        default="vtt_output.json")
+    # /tmp: the ECS image runs as a non-root user with a read-only $CWD (/app),
+    # so a relative default here would crash every containerized run.
+    parser.add_argument("--output",        default="/tmp/vtt_output.json")
     parser.add_argument("--write-db",      action="store_true", default=env_write_db,
                         help="Embed chunks and write to database (or WRITE_DB env)")
     parser.add_argument("--job-id",        default=env_job_id,

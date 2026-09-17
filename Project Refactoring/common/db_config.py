@@ -31,7 +31,12 @@ Optional:
   DB_PORT               Database port (default: 5432)
   DB_AUTH               iam | secret | password (default: iam)
   DB_SSLMODE            libpq sslmode (default: verify-full)
-  DB_SSL_ROOT_CERT      Path to RDS CA bundle PEM (default: unset -> system trust)
+  DB_SSL_ROOT_CERT      CA bundle for verify-ca/verify-full (default: unset, which
+                        makes libpq look for ~/.postgresql/root.crt -- NOT the OS
+                        trust store). Connecting through RDS Proxy: point this at
+                        the OS bundle (e.g. /etc/ssl/certs/ca-certificates.crt),
+                        since RDS Proxy serves an ACM certificate, not an rds-ca-*
+                        one -- the RDS CA bundle will fail verify-full against it.
   DB_SECRET_NAME        Secrets Manager secret id (required when DB_AUTH=secret)
   DB_PASSWORD           Password (required when DB_AUTH=password)
 
