@@ -142,6 +142,74 @@ def _network_configuration() -> dict:
     }
 
 
+def _task_arn_from_run_task(resp: dict, *, kind: str) -> str:
+    """Raise if ecs.RunTask returned failures / no task instead of indexing [0]."""
+    failures = resp.get("failures") or []
+    tasks = resp.get("tasks") or []
+    if failures or not tasks:
+        reasons = "; ".join(
+            f"{f.get('arn', 'n/a')}: {f.get('reason', 'unknown')}" for f in failures
+        ) or "ecs.RunTask returned no tasks"
+        raise RuntimeError(f"{kind} RunTask failed: {reasons}")
+    arn = tasks[0].get("taskArn")
+    if not arn:
+        raise RuntimeError(f"{kind} RunTask returned a task without taskArn")
+    return arn
+
+
+def handle_ecs_task_stopped(event, connection) -> dict:
+    """
+    Fail an ingestion_runs row that is still 'running' after its ECS task stops.
+
+    Successful tasks finalize the row themselves (completed/failed) before exit;
+    this only catches crashes that never reached the DB.
+    """
+    detail = event.get("detail") or {}
+    if (detail.get("lastStatus") or "").upper() != "STOPPED":
+        return {"ignored": True, "reason": "not_stopped"}
+
+    task_arn = detail.get("taskArn")
+    if not task_arn:
+        return {"ignored": True, "reason": "missing_task_arn"}
+
+    stopped_reason = detail.get("stoppedReason") or "ECS task stopped"
+    container_bits = []
+    for container in detail.get("containers") or []:
+        exit_code = container.get("exitCode")
+        reason = container.get("reason") or ""
+        if exit_code not in (None, 0) or reason:
+            name = container.get("name") or "container"
+            container_bits.append(f"{name}: exit={exit_code} {reason}".strip())
+    error = stopped_reason
+    if container_bits:
+        error = f"{stopped_reason}; " + "; ".join(container_bits)
+    error = error[:1000]
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'failed'::ingestion_status,
+                error_message = %s,
+                completed_at = now(),
+                finished_at = now()
+            WHERE metadata->>'ecs_task_arn' = %s
+              AND status = 'running'::ingestion_status
+            RETURNING id
+            """,
+            (error, task_arn),
+        )
+        row = cursor.fetchone()
+    connection.commit()
+
+    if not row:
+        logger.info("No running ingestion run for stopped task %s", task_arn)
+        return {"ignored": True, "task_arn": task_arn}
+
+    logger.warning("Marked ingestion run %s failed after ECS task stopped: %s", row[0], error)
+    return {"failed_run_id": str(row[0]), "task_arn": task_arn, "error": error}
+
+
 def _run_crawler_task(run: dict) -> str:
     """Launch the crawler ECS task for a website source. Returns the ECS task ARN."""
     # For website sources, ds.name holds the seed URL (see stage_data_sources.py).
@@ -158,7 +226,7 @@ def _run_crawler_task(run: dict) -> str:
         networkConfiguration=_network_configuration(),
         overrides={"containerOverrides": [{"name": CRAWLER_CONTAINER_NAME, "environment": env}]},
     )
-    return resp["tasks"][0]["taskArn"]
+    return _task_arn_from_run_task(resp, kind="crawler")
 
 
 def launch_transcriber_for_run(connection, *, ingestion_run_id: str, sync_session_id: str) -> dict:
@@ -232,7 +300,7 @@ def _run_transcriber_task(run: dict) -> str:
         networkConfiguration=_network_configuration(),
         overrides={"containerOverrides": [{"name": TRANSCRIBER_CONTAINER_NAME, "environment": env}]},
     )
-    return resp["tasks"][0]["taskArn"]
+    return _task_arn_from_run_task(resp, kind="transcriber")
 
 
 def process_crawler_batch(event, connection, sync_session_id: str, triggered_by_scheduler: bool = False):

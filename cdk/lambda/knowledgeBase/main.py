@@ -12,6 +12,7 @@ from helpers.generate_presigned_url import generate_presigned_url
 from helpers.generate_presigned_urls_batch import generate_presigned_urls_batch
 from helpers.update_status import update_status
 from helpers.video_transcription import handle_transcribe_complete
+from helpers.process_crawler_batch import handle_ecs_task_stopped
 
 # Set up logging
 logger = logging.getLogger()
@@ -116,6 +117,14 @@ def handler(event, context=None):
                 logger.error(f"Error connecting to database: {e}")
                 return _response(event, 500, {"error": "Error connecting to database"})
             return handle_transcribe_complete(event, connection)
+
+        if event.get("source") == "aws.ecs":
+            try:
+                connection = _connect_to_db()
+            except Exception as e:
+                logger.error(f"Error connecting to database: {e}")
+                return _response(event, 500, {"error": "Error connecting to database"})
+            return handle_ecs_task_stopped(event, connection)
 
         # Scheduler polling path
         if event.get("task") == "poll_ingestion_run":

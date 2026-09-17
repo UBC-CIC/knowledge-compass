@@ -36,5 +36,5 @@ COPY crawler/crawler.py ./crawler.py
 USER pwuser
 
 # The proxy Lambda supplies work via env vars: JOB_ID, SEED_URL, MAX_PAGES,
-# WRITE_DB, SEMANTIC. DB config (DB_HOST/DB_NAME/DB_USER, DB_AUTH=iam) also via env.
+# WRITE_DB, SEMANTIC. DB config (DB_HOST/DB_NAME/DB_USER, DB_AUTH=secret) also via env.
 ENTRYPOINT ["python", "crawler.py"]

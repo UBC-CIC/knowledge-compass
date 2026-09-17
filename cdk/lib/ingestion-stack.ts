@@ -92,6 +92,9 @@ export class IngestionStack extends Stack {
 
     // ── Security group for ingestion tasks ─────────────────────────────────────
     // Outbound HTTPS (Bedrock/S3/Secrets Manager) + Postgres to the DB/RDS Proxy.
+    // DNS is required: allowAllOutbound=false otherwise blocks AmazonProvidedDNS
+    // (VPC CIDR + 2), so the task cannot resolve RDS Proxy / S3 / Bedrock and
+    // dies while the admin row stays 'running'.
     this.ingestSecurityGroup = new ec2.SecurityGroup(this, `${id}-TaskSg`, {
       vpc: vpcStack.vpc,
       description: "Security group for pgvector ingestion Fargate tasks",
@@ -99,6 +102,8 @@ export class IngestionStack extends Stack {
     });
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), "Outbound HTTPS (Bedrock/S3/SecretsManager)");
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(5432), "Postgres to RDS/RDS Proxy within VPC");
+    this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.udp(53), "DNS UDP (AmazonProvidedDNS)");
+    this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(53), "DNS TCP fallback");
 
     // ── S3 ingest bucket (video uploads + transcript outputs) ──────────────────
     const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
@@ -169,6 +174,18 @@ export class IngestionStack extends Stack {
     const crawlerTaskRole = makeTaskRole(`${id}-CrawlerTaskRole`, false);
     const transcriberTaskRole = makeTaskRole(`${id}-TranscriberTaskRole`, true);
 
+    // RDS Proxy is configured for Secrets Manager auth, not IAM tokens. The
+    // knowledge-base Lambda already connects this way; containers must too or
+    // get_db_connection() fails and the adopted JOB_ID is never finalized.
+    const containerDbEnv: { [key: string]: string } = {
+      DB_HOST: db.rdsProxyEndpoint,
+      DB_NAME: "KC",
+      DB_USER: "app_rw",
+      DB_AUTH: "secret",
+      DB_SECRET_NAME: db.secretPathUser.secretName,
+      AWS_REGION: region,
+    };
+
     this.transcribeDataAccessRole = new iam.Role(this, `${id}-TranscribeAccessRole`, {
       assumedBy: new iam.ServicePrincipal("transcribe.amazonaws.com"),
       description: "Lets Amazon Transcribe read uploaded videos and write transcript JSON",
@@ -237,13 +254,7 @@ export class IngestionStack extends Stack {
         streamPrefix: "crawler",
         logRetention: logs.RetentionDays.ONE_MONTH,
       }),
-      environment: {
-        DB_HOST: db.rdsProxyEndpoint,
-        DB_NAME: "KC",
-        DB_USER: "app_rw",
-        DB_AUTH: "iam",
-        AWS_REGION: region,
-      },
+      environment: containerDbEnv,
     });
     this.crawlerTaskDef.node.addDependency(crawlerImageWaiter);
 
@@ -260,13 +271,7 @@ export class IngestionStack extends Stack {
         streamPrefix: "transcriber",
         logRetention: logs.RetentionDays.ONE_MONTH,
       }),
-      environment: {
-        DB_HOST: db.rdsProxyEndpoint,
-        DB_NAME: "KC",
-        DB_USER: "app_rw",
-        DB_AUTH: "iam",
-        AWS_REGION: region,
-      },
+      environment: containerDbEnv,
     });
     this.transcriberTaskDef.node.addDependency(transcriberImageWaiter);
 
@@ -303,6 +308,21 @@ export class IngestionStack extends Stack {
       },
       targets: [new targets.LambdaFunction(transcribeRelay)],
     });
+
+    // If a Fargate task dies before it can UPDATE ingestion_runs, the admin row
+    // stays 'running'. Fail that row when ECS reports the task STOPPED.
+    new events.Rule(this, "IngestionTaskStopped", {
+      description: "Forward stopped ingestion ECS tasks so stuck running rows can be failed",
+      eventPattern: {
+        source: ["aws.ecs"],
+        detailType: ["ECS Task State Change"],
+        detail: {
+          lastStatus: ["STOPPED"],
+          clusterArn: [this.cluster.clusterArn],
+        },
+      },
+      targets: [new targets.LambdaFunction(transcribeRelay)],
+    });
   }
 
   /**
@@ -313,7 +333,18 @@ export class IngestionStack extends Stack {
     const runTaskStatement = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ecs:RunTask"],
-      resources: [this.crawlerTaskDef.taskDefinitionArn, this.transcriberTaskDef.taskDefinitionArn],
+      resources: [
+        this.crawlerTaskDef.taskDefinitionArn,
+        this.transcriberTaskDef.taskDefinitionArn,
+        this.cluster.clusterArn,
+      ],
+    });
+    const tagTaskStatement = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ecs:TagResource"],
+      resources: [
+        `arn:aws:ecs:${this.region}:${this.account}:task/${this.cluster.clusterName}/*`,
+      ],
     });
     const passRoleStatement = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -328,6 +359,7 @@ export class IngestionStack extends Stack {
     });
     if (principal.addToRolePolicy) {
       principal.addToRolePolicy(runTaskStatement);
+      principal.addToRolePolicy(tagTaskStatement);
       principal.addToRolePolicy(passRoleStatement);
       principal.addToRolePolicy(
         new iam.PolicyStatement({

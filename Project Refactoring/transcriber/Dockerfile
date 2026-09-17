@@ -28,5 +28,5 @@ RUN useradd --create-home appuser
 USER appuser
 
 # The ingestion-trigger supplies work via env vars: JOB_ID, TRANSCRIPT_JSON,
-# VIDEO_URL, VIDEO_NAME, WRITE_DB, SEMANTIC. DB config via env (DB_AUTH=iam).
+# VIDEO_URL, VIDEO_NAME, WRITE_DB, SEMANTIC. DB config via env (DB_AUTH=secret).
 ENTRYPOINT ["python", "transcrbe.py"]

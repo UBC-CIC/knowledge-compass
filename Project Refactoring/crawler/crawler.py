@@ -112,7 +112,7 @@ def start_crawl_run(conn, source_id: str, job_id: str = None) -> str:
                    SET status     = 'running',
                        source_id  = %s,
                        started_at = now()
-                 WHERE id = %s
+                 WHERE id = %s::uuid
                 RETURNING id
                 """,
                 (source_id, job_id),
@@ -120,7 +120,7 @@ def start_crawl_run(conn, source_id: str, job_id: str = None) -> str:
             row = cur.fetchone()
             if row:
                 return str(row[0])
-            # Fall through to insert if the supplied job_id was not found.
+            raise RuntimeError(f"ingestion_runs row not found for JOB_ID={job_id}")
         cur.execute(
             """
             INSERT INTO ingestion_runs (source_id, status, started_at)
@@ -146,7 +146,7 @@ def finish_crawl_run(conn, run_id: str, status: str, stats: dict, error_message:
               error_message   = %s,
               finished_at     = now(),
               completed_at    = now()
-            WHERE id = %s
+            WHERE id = %s::uuid
             """,
             (
                 status,
@@ -368,6 +368,23 @@ def _chunk_semantic(
 
 # ── DB Writer ─────────────────────────────────────────────────────────────────
 
+def _fail_adopted_run(job_id: str, error_message: str) -> None:
+    """Best-effort: mark a pre-created ingestion_runs row failed if the task dies."""
+    if not job_id:
+        return
+    try:
+        conn = get_db_connection()
+        try:
+            finish_crawl_run(
+                conn, job_id, "failed", {}, error_message=(error_message or "crawler failed")[:1000]
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[db] could not mark JOB_ID={job_id} failed: {exc}", file=sys.stderr)
+
+
 def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_id: str = None) -> None:
     """
     For each crawled page, upsert a row in sources then upsert chunks.
@@ -426,9 +443,10 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
 
     except Exception as e:
         conn.rollback()
-        if run_id:
+        fail_id = run_id or job_id
+        if fail_id:
             try:
-                finish_crawl_run(conn, run_id, "failed", stats, error_message=str(e)[:1000])
+                finish_crawl_run(conn, fail_id, "failed", stats, error_message=str(e)[:1000])
                 conn.commit()
             except Exception:
                 pass
@@ -806,4 +824,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        _fail_adopted_run(os.environ.get("JOB_ID") or "", str(e))
+        raise

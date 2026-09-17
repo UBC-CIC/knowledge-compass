@@ -390,7 +390,7 @@ def start_ingestion_run(conn, source_id: str, job_id: str = None) -> str:
                 """
                 UPDATE ingestion_runs
                    SET status = 'running', source_id = %s, started_at = now()
-                 WHERE id = %s
+                 WHERE id = %s::uuid
                 RETURNING id
                 """,
                 (source_id, job_id),
@@ -398,6 +398,7 @@ def start_ingestion_run(conn, source_id: str, job_id: str = None) -> str:
             row = cur.fetchone()
             if row:
                 return str(row[0])
+            raise RuntimeError(f"ingestion_runs row not found for JOB_ID={job_id}")
         cur.execute(
             """
             INSERT INTO ingestion_runs (source_id, status, started_at)
@@ -421,7 +422,7 @@ def finish_ingestion_run(conn, run_id: str, status: str, stats: dict, error_mess
               error_message   = %s,
               finished_at     = now(),
               completed_at    = now()
-            WHERE id = %s
+            WHERE id = %s::uuid
             """,
             (
                 status,
@@ -434,6 +435,23 @@ def finish_ingestion_run(conn, run_id: str, status: str, stats: dict, error_mess
 
 
 # ── DB Writer ─────────────────────────────────────────────────────────────────
+
+def _fail_adopted_run(job_id: str, error_message: str) -> None:
+    """Best-effort: mark a pre-created ingestion_runs row failed if the task dies."""
+    if not job_id:
+        return
+    try:
+        conn = get_db_connection()
+        try:
+            finish_ingestion_run(
+                conn, job_id, "failed", {}, error_message=(error_message or "transcriber failed")[:1000]
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[db] could not mark JOB_ID={job_id} failed: {exc}", file=sys.stderr)
+
 
 def write_to_db(chunks: list, video_url: str, name: str, job_id: str = None) -> None:
     conn = get_db_connection()
@@ -465,9 +483,10 @@ def write_to_db(chunks: list, video_url: str, name: str, job_id: str = None) -> 
               file=sys.stderr)
     except Exception as e:
         conn.rollback()
-        if run_id:
+        fail_id = run_id or job_id
+        if fail_id:
             try:
-                finish_ingestion_run(conn, run_id, "failed", stats, error_message=str(e)[:1000])
+                finish_ingestion_run(conn, fail_id, "failed", stats, error_message=str(e)[:1000])
                 conn.commit()
             except Exception:
                 pass
@@ -573,4 +592,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        _fail_adopted_run(os.environ.get("JOB_ID") or "", str(e))
+        raise

@@ -123,7 +123,7 @@ def load_db_settings() -> DbSettings:
     )
 
 
-def _password_from_secrets_manager(settings: DbSettings) -> str:
+def _credentials_from_secrets_manager(settings: DbSettings) -> tuple[str, str]:
     if not settings.secret_name:
         raise ConfigError("DB_AUTH=secret requires DB_SECRET_NAME to be set.")
     client = boto3.client("secretsmanager", region_name=settings.region)
@@ -134,13 +134,18 @@ def _password_from_secrets_manager(settings: DbSettings) -> str:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        # Secret stored as a raw password string
-        return raw
+        return settings.user, raw
     password = parsed.get("password")
     if not password:
         raise ConfigError(
             f"Secret {settings.secret_name} JSON does not contain a 'password' key."
         )
+    user = parsed.get("username") or settings.user
+    return user, password
+
+
+def _password_from_secrets_manager(settings: DbSettings) -> str:
+    _user, password = _credentials_from_secrets_manager(settings)
     return password
 
 
@@ -169,13 +174,16 @@ def get_db_connection():
     supported credential modes. Never reads credentials from source code.
     """
     settings = load_db_settings()
-    password = _resolve_password(settings)
+    if settings.auth_mode == "secret":
+        user, password = _credentials_from_secrets_manager(settings)
+    else:
+        user, password = settings.user, _resolve_password(settings)
 
     connect_kwargs = dict(
         host=settings.host,
         port=settings.port,
         dbname=settings.name,
-        user=settings.user,
+        user=user,
         password=password,
         sslmode=settings.sslmode,
     )
