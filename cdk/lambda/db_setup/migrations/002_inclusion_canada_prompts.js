@@ -1,7 +1,7 @@
 /**
  * 002_inclusion_canada_prompts.js
  *
- * Phase 3 of the pgvector migration (see Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+ * Phase 3 of the pgvector migration (see Docs/PGVECTOR_MIGRATION_PLAN.md).
  *
  * Switches the assistant's conversational content from the UBC Science
  * Specialization Explorer to the Inclusion Canada inclusive-education guide.

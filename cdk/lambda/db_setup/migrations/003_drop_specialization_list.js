@@ -2,7 +2,7 @@
  * 003_drop_specialization_list.js
  *
  * Cleanup for the pgvector migration (item R4; see
- * Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+ * Docs/PGVECTOR_MIGRATION_PLAN.md).
  *
  * Removes the UBC-specific `specialization_list` column from `system_settings`.
  * As of Phase 3 the application no longer reads this column (config.load_config

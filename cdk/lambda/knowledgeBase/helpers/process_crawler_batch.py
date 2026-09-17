@@ -1,7 +1,7 @@
 """
 process_crawler_batch.py
 
-pgvector ingestion path (item R3; see Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+pgvector ingestion path (item R3; see Docs/PGVECTOR_MIGRATION_PLAN.md).
 
 This is the pgvector-backend counterpart to process_s3_batch.py / process_website_batch.py.
 Instead of driving Amazon Bedrock ingestion jobs, it launches the containerized

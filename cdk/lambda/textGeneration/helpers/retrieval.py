@@ -1,7 +1,7 @@
 """
 pgvector retrieval for the text-generation Lambda.
 
-Phase 2 of the pgvector migration (see Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+Phase 2 of the pgvector migration (see Docs/PGVECTOR_MIGRATION_PLAN.md).
 
 This module is the drop-in replacement for `helpers/bedrock.retrieve_documents`.
 It embeds the query with Cohere embed-english-v3 (search_query space) and runs a

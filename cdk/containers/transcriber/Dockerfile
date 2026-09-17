@@ -1,9 +1,9 @@
 # Video transcript ingestor image (ECS Fargate task or container Lambda).
 #
-# IMPORTANT: build from the `Project Refactoring/` directory so the shared
+# IMPORTANT: build from the `cdk/containers/` directory so the shared
 # `common/` package is in the build context:
 #
-#   docker build -f transcriber/Dockerfile -t kc-transcriber "Project Refactoring"
+#   docker build -f transcriber/Dockerfile -t kc-transcriber cdk/containers
 #
 # Lightweight: no browser needed (unlike the crawler). Only psycopg2 + boto3.
 FROM python:3.12-slim

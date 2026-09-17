@@ -15,7 +15,7 @@ interface LambdaConfig {
   sourceDir: string; // Path used for path-filter change detection AND default Dockerfile location
   // Optional Docker build context (relative to repo root). Defaults to sourceDir.
   // Use this when the Dockerfile needs files outside sourceDir (e.g. the shared
-  // "Project Refactoring/common" package for the crawler/transcriber images).
+  // "cdk/containers/common" package for the crawler/transcriber images).
   buildContext?: string;
   // Optional Dockerfile path (relative to repo root). Defaults to sourceDir/Dockerfile.
   dockerfile?: string;

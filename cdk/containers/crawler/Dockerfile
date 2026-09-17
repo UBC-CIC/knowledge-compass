@@ -1,9 +1,9 @@
 # Web crawler ECS Fargate task image.
 #
-# IMPORTANT: build from the `Project Refactoring/` directory so the shared
+# IMPORTANT: build from the `cdk/containers/` directory so the shared
 # `common/` package is in the build context:
 #
-#   docker build -f crawler/Dockerfile -t kc-crawler "Project Refactoring"
+#   docker build -f crawler/Dockerfile -t kc-crawler cdk/containers
 #
 # Uses the official Playwright Python image, which ships a matching Chromium +
 # system dependencies (avoids the 250MB Lambda limit; see crawler/README.md).

@@ -19,16 +19,16 @@ cdk.context.json
 
 .kiro
 
-# ── Ingestion prototype (Project Refactoring) ──────────────────────────────
+# ── Ingestion containers (cdk/containers) ───────────────────────────────────
 # Local crawl/transcribe outputs — never commit scraped content dumps
 crawl_output.json
 vtt_output.json
-Project Refactoring/**/crawl_output.json
-Project Refactoring/**/vtt_output.json
+cdk/containers/**/crawl_output.json
+cdk/containers/**/vtt_output.json
 
 # RDS CA bundle is fetched at runtime; do not commit downloaded copies
 global-bundle.pem
-Project Refactoring/**/global-bundle.pem
+cdk/containers/**/global-bundle.pem
 
 # Local environment files (may hold DB endpoints / credentials)
 .env

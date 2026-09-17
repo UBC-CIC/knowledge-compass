@@ -36,7 +36,7 @@ Env / args:
   --textgen-helpers  path to cdk/lambda/textGeneration (default: inferred)
 
 DB config for the pgvector backend is read the same way the container tools read it
-(see Project Refactoring/common/db_config.py): env DB_HOST/DB_NAME/DB_USER/DB_AUTH etc.
+(see cdk/containers/common/db_config.py): env DB_HOST/DB_NAME/DB_USER/DB_AUTH etc.
 """
 
 import argparse
@@ -61,7 +61,7 @@ def _load_textgen_helpers(textgen_dir: str):
 
 
 def _load_db_config():
-    """Load the shared secret-free DB config (Project Refactoring/common/db_config.py)."""
+    """Load the shared secret-free DB config (cdk/containers/common/db_config.py)."""
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "..", "common", "db_config.py")
     spec = importlib.util.spec_from_file_location("db_config", path)
@@ -189,7 +189,7 @@ def main() -> None:
     parser.add_argument("--output", default="comparison_results.json")
     parser.add_argument("--gen-model-id", default="us.anthropic.claude-haiku-4-5-20251001-v1:0")
     parser.add_argument("--verifier-model-id", default="us.anthropic.claude-haiku-4-5-20251001-v1:0")
-    default_textgen = os.path.join(os.path.dirname(__file__), "..", "..", "cdk", "lambda", "textGeneration")
+    default_textgen = os.path.join(os.path.dirname(__file__), "..", "..", "lambda", "textGeneration")
     parser.add_argument("--textgen-helpers", default=default_textgen)
     args = parser.parse_args()
 

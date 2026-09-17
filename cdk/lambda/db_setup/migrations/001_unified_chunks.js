@@ -1,7 +1,7 @@
 /**
  * 001_unified_chunks.js
  *
- * Phase 1 of the pgvector migration (see Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+ * Phase 1 of the pgvector migration (see Docs/PGVECTOR_MIGRATION_PLAN.md).
  *
  * Adds the unified retrieval corpus used by the crawler, the transcriber, and the
  * text-generation retrieval path:

@@ -2,7 +2,7 @@
  * 004_suggestion_output_format.js
  *
  * Aligns the suggestion-phase output contract with the notebook sample in
- * Project Refactoring/textgen_v1.ipynb: summary, "Here's what to do", sample
+ * Docs/textgen_v1.ipynb: summary, "Here's what to do", sample
  * wording, and a single follow-up question. Sources stay outside the answer.
  */
 

@@ -36,6 +36,17 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 ├── cdk/
 │   ├── bin/
 │   │   └── cdk.ts
+│   ├── containers/
+│   │   ├── common/
+│   │   │   └── db_config.py
+│   │   ├── crawler/
+│   │   │   ├── Dockerfile
+│   │   │   └── crawler.py
+│   │   ├── transcriber/
+│   │   │   ├── Dockerfile
+│   │   │   └── transcrbe.py
+│   │   └── tools/
+│   │       └── compare_retrieval.py
 │   ├── lambda/
 │   │   ├── adminAuthorizerFunction/
 │   │   │   └── adminAuthorizerFunction.js
@@ -99,12 +110,15 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 │
 ├── Docs/
 │   ├── media/
+│   ├── user-stories/
 │   ├── API_DOCUMENTATION.md
 │   ├── ARCHITECTURE_DEEP_DIVE.md
 │   ├── AWS_MANAGED_KEYS.md
 │   ├── BEDROCK_GUARDRAILS.md
 │   ├── DATABASE_MIGRATIONS.md
 │   ├── DEPENDENCY_MANAGEMENT.MD
+│   ├── PGVECTOR_MIGRATION_PLAN.md
+│   ├── RETIREMENT_RUNBOOK.md
 │   ├── DEPLOYMENT_GUIDE.md
 │   ├── MODIFICATION_GUIDE.md
 │   ├── SECURITY_OVERVIEW.md

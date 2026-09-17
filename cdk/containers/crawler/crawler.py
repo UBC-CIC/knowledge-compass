@@ -3,7 +3,7 @@
 Prototype web crawler + chunker + embeddings writer for the Inclusion Canada RAG pipeline.
 
 Configuration is secret-free and environment-driven. See
-`Project Refactoring/common/db_config.py` for the full list of environment
+`cdk/containers/common/db_config.py` for the full list of environment
 variables and supported credential modes (RDS IAM auth, Secrets Manager, or a
 local DB_PASSWORD fallback).
 

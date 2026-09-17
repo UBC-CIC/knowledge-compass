@@ -69,7 +69,7 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(
             f"Missing required environment variable: {name}. "
-            f"See Project Refactoring/common/db_config.py for the full list."
+            f"See cdk/containers/common/db_config.py for the full list."
         )
     return value
 

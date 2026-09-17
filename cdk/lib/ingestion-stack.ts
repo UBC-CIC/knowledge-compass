@@ -2,7 +2,7 @@
  * ingestion-stack.ts
  *
  * pgvector ingestion infrastructure (item R2; see
- * Project Refactoring/PGVECTOR_MIGRATION_PLAN.md).
+ * Docs/PGVECTOR_MIGRATION_PLAN.md).
  *
  * Creates the ECS Fargate cluster + task definitions that run the containerized
  * web crawler and video transcriber, writing directly into the unified

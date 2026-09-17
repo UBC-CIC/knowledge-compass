@@ -54,28 +54,28 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
     // pgvector ingestion container images (R2). These are ECS task images, not
     // Lambdas, so functionName is unused by the ECS consumer; the CICD build step
     // that runs `lambda update-function-code` no-ops when the function is absent.
-    // Build context is "Project Refactoring" so the shared common/ package is present.
+    // Build context is "cdk/containers" so the shared common/ package is present.
     {
       name: "crawler",
       functionName: `${StackPrefix}-Ingestion-Crawler`,
-      sourceDir: "Project Refactoring/crawler",
-      // Build context is the refactoring root so the shared common/ package is included.
-      buildContext: "Project Refactoring",
-      dockerfile: "Project Refactoring/crawler/Dockerfile",
+      sourceDir: "cdk/containers/crawler",
+      // Build context is the containers root so the shared common/ package is included.
+      buildContext: "cdk/containers",
+      dockerfile: "cdk/containers/crawler/Dockerfile",
     },
     {
       name: "transcriber",
       functionName: `${StackPrefix}-Ingestion-Transcriber`,
-      sourceDir: "Project Refactoring/transcriber",
-      buildContext: "Project Refactoring",
-      dockerfile: "Project Refactoring/transcriber/Dockerfile",
+      sourceDir: "cdk/containers/transcriber",
+      buildContext: "cdk/containers",
+      dockerfile: "cdk/containers/transcriber/Dockerfile",
     },
   ],
   pathFilters: [
     "cdk/lambda/vectorIndexManagerSigV4/**",
-    "Project Refactoring/crawler/**",
-    "Project Refactoring/transcriber/**",
-    "Project Refactoring/common/**",
+    "cdk/containers/crawler/**",
+    "cdk/containers/transcriber/**",
+    "cdk/containers/common/**",
   ],
 });
 
