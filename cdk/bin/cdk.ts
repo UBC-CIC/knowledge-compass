@@ -44,6 +44,14 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
   githubBranch: githubBranch,
   environmentName: environment,
   lambdaFunctions: [
+    // Kept until a KC-Ingestion deploy drops the leftover CloudFormation import
+    // of this ECR repo. Removing it here first fails with:
+    // Cannot delete export ...vectorIndexManagerSigV4Repo... as it is in use by KC-Ingestion.
+    {
+      name: "vectorIndexManagerSigV4",
+      functionName: `${StackPrefix}-KnowledgeBase-VectorIndexManagerFn-v2`,
+      sourceDir: "cdk/lambda/vectorIndexManagerSigV4",
+    },
     // pgvector ingestion container images (R2). These are ECS task images, not
     // Lambdas, so functionName is unused by the ECS consumer; the CICD build step
     // that runs `lambda update-function-code` no-ops when the function is absent.
@@ -65,6 +73,7 @@ const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
     },
   ],
   pathFilters: [
+    "cdk/lambda/vectorIndexManagerSigV4/**",
     "cdk/containers/crawler/**",
     "cdk/containers/transcriber/**",
     "cdk/containers/common/**",
@@ -81,6 +90,7 @@ const ingestionStack = new IngestionStack(
     stackPrefix: StackPrefix,
     crawlerRepository: cicdStack.ecrRepositories["crawler"],
     transcriberRepository: cicdStack.ecrRepositories["transcriber"],
+    vectorIndexManagerRepository: cicdStack.ecrRepositories["vectorIndexManagerSigV4"],
     imageBuildPipelineName: cicdStack.pipelineName,
   }
 );

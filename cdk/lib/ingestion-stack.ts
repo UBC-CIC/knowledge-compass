@@ -20,7 +20,7 @@
  * wiring, RDS IAM-auth user setup, and image availability before deploying.
  */
 
-import { Stack, StackProps, RemovalPolicy, Duration, CustomResource } from "aws-cdk-lib";
+import { Stack, StackProps, RemovalPolicy, Duration, CustomResource, CfnOutput } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -38,6 +38,9 @@ export interface IngestionStackProps extends StackProps {
   stackPrefix: string;
   crawlerRepository: ecr.IRepository;
   transcriberRepository: ecr.IRepository;
+  // Temporary: keep the CICD stack export alive while the leftover
+  // KC-KnowledgeBase / prior Ingestion template in AWS still imports it.
+  vectorIndexManagerRepository: ecr.IRepository;
   // CodePipeline that builds the crawler/transcriber images (from CICDStack).
   // Used by the ECR image waiter to trigger a build if the image is missing.
   imageBuildPipelineName: string;
@@ -65,6 +68,18 @@ export class IngestionStack extends Stack {
     props: IngestionStackProps
   ) {
     super(scope, id, props);
+
+    // Keep importing this CICD ECR repo (ARN + name). `--all` deploys CICD first;
+    // if this stack stops importing, CICD drops the CloudFormation exports and
+    // the live Ingestion stack still using them rolls CICD back.
+    new CfnOutput(this, "LegacyVectorIndexManagerRepoArn", {
+      value: props.vectorIndexManagerRepository.repositoryArn,
+      description: "Temporary import of KC-CICD vectorIndexManager repo ARN; remove after KC-Ingestion no longer imports it in AWS",
+    });
+    new CfnOutput(this, "LegacyVectorIndexManagerRepoName", {
+      value: props.vectorIndexManagerRepository.repositoryName,
+      description: "Temporary import of KC-CICD vectorIndexManager repo name; remove after KC-Ingestion no longer imports it in AWS",
+    });
 
     // ── ECS cluster ──────────────────────────────────────────────────────────
     this.cluster = new ecs.Cluster(this, `${id}-Cluster`, {

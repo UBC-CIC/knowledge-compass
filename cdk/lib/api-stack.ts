@@ -1266,10 +1266,16 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Self-invoke permission for the async document-ingestion worker
     // (trigger_document_batch -> lambda_client.invoke(InvocationType="Event")).
+    // Uses a manually-built ARN (not lambdaKnowledgeBase.functionArn) because
+    // lambdaKnowledgeBase shares lambdaRole with other functions; a live
+    // Fn::GetAtt reference back to lambdaKnowledgeBase here would make the
+    // shared role's policy depend on the function while the function also
+    // depends on the policy (auto-added by addToRolePolicy) — a circular
+    // dependency that fails changeset creation for the whole shared-role graph.
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["lambda:InvokeFunction"],
-      resources: [lambdaKnowledgeBase.functionArn],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${id}-lambdaKnowledgeBase`],
     }));
 
     // pgvector ingestion wiring (R12): when the IngestionStack is provided, set
