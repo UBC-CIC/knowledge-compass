@@ -1239,7 +1239,11 @@ export class ApiGatewayStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "main.handler",
       code: lambda.Code.fromAsset("lambda/knowledgeBase"),
-      timeout: Duration.seconds(300),
+      // 600s (vs. the previous 300s): the pgvector document-ingestion worker
+      // (helpers/process_document_batch.py) runs via an async self-invocation,
+      // not behind API Gateway's 29s limit, so it needs headroom to chunk +
+      // embed larger CSV/Markdown uploads. Synchronous routes are unaffected.
+      timeout: Duration.seconds(600),
       role: lambdaRole,
       layers: [psycopgLayer],
       memorySize: 512,
@@ -1249,8 +1253,7 @@ export class ApiGatewayStack extends cdk.Stack {
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         REGION: this.region,
-        SCHEDULER_ROLE_ARN: `arn:aws:iam::${this.account}:role/${id}-schedulerInvokeRole`,
-        SCHEDULER_TARGET_ARN: `arn:aws:lambda:${this.region}:${this.account}:function:${id}-lambdaKnowledgeBase`,
+        LAMBDA_FUNCTION_NAME: `${id}-lambdaKnowledgeBase`,
       },
     });
 
@@ -1261,9 +1264,17 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
+    // Self-invoke permission for the async document-ingestion worker
+    // (trigger_document_batch -> lambda_client.invoke(InvocationType="Event")).
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["lambda:InvokeFunction"],
+      resources: [lambdaKnowledgeBase.functionArn],
+    }));
+
     // pgvector ingestion wiring (R12): when the IngestionStack is provided, set
-    // INGESTION_BACKEND=pgvector + ECS cluster/taskdef/subnet/SG env, and grant
-    // ecs:RunTask + iam:PassRole so process_crawler_batch.py can launch tasks.
+    // the ECS cluster/taskdef/subnet/SG env, and grant ecs:RunTask + iam:PassRole
+    // so process_crawler_batch.py can launch tasks.
     if (props.ingestion) {
       const ingestionEnv = props.ingestion.ingestionEnv();
       for (const [key, value] of Object.entries(ingestionEnv)) {
@@ -1284,52 +1295,6 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     // lambdaRole already has read access to db.secretPathUser through the stack-wide policy
-
-    lambdaKnowledgeBase.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "scheduler:CreateSchedule",
-          "scheduler:DeleteSchedule",
-          "scheduler:GetSchedule",
-        ],
-        resources: [
-          `arn:aws:scheduler:${this.region}:${this.account}:schedule/default/*`,
-        ],
-      })
-    );
-
-    // EventBridge Scheduler role to invoke this Lambda function
-    const schedulerInvokeRole = new iam.Role(this, `${id}-schedulerInvokeRole`, {
-      roleName: `${id}-schedulerInvokeRole`,
-      assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
-    });
-
-    schedulerInvokeRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["lambda:InvokeFunction"],
-        resources: [
-          `arn:aws:lambda:${this.region}:${this.account}:function:${id}-lambdaKnowledgeBase`,
-        ],
-      })
-    );
-    
-    // Scheduler also requires the caller to be allowed to pass the target role
-    lambdaKnowledgeBase.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["iam:PassRole"],
-        resources: [
-          `arn:aws:iam::${this.account}:role/${id}-schedulerInvokeRole`,
-        ],
-        conditions: {
-          StringEquals: {
-            "iam:PassedToService": "scheduler.amazonaws.com",
-          },
-        },
-      })
-    );
 
     const lambdaUserFunction = new lambda.Function(this, `${id}-userFunction`, {
       runtime: lambda.Runtime.NODEJS_22_X,

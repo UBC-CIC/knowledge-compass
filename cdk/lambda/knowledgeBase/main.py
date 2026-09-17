@@ -10,11 +10,11 @@ from helpers.stage_data_sources_batch import stage_data_sources_batch
 from helpers.start_ingestion_job import start_ingestion_job
 from helpers.generate_presigned_url import generate_presigned_url
 from helpers.generate_presigned_urls_batch import generate_presigned_urls_batch
-from helpers.update_status import update_status
 from helpers.video_transcription import handle_transcribe_complete
 from helpers.process_crawler_batch import handle_ecs_task_stopped
 from helpers.retry_ingestion_run import retry_ingestion_run
 from helpers.delete_data_source import delete_data_source
+from helpers.process_document_batch import process_document_batch
 
 # Set up logging
 logger = logging.getLogger()
@@ -22,14 +22,8 @@ logger.setLevel(logging.INFO)
 
 # Environment variables
 DB_SECRET_NAME = os.environ["SM_DB_CREDENTIALS"]
-# KB_SECRET_NAME is only required for the Bedrock ingestion backend. Under the
-# pgvector backend it is unused (and absent once Bedrock KB is retired).
-KB_SECRET_NAME = os.environ.get("KB_SECRET_NAME")
 REGION = os.environ["REGION"]
 RDS_PROXY_ENDPOINT = os.environ["RDS_PROXY_ENDPOINT"]
-
-# "bedrock" (default) or "pgvector". Selects the ingestion backend for /sync.
-INGESTION_BACKEND = os.environ.get("INGESTION_BACKEND", "bedrock").strip().lower()
 
 # Cached resources
 connection = None
@@ -128,15 +122,17 @@ def handler(event, context=None):
                 return _response(event, 500, {"error": "Error connecting to database"})
             return handle_ecs_task_stopped(event, connection)
 
-        # Scheduler polling path
-        if event.get("task") == "poll_ingestion_run":
+        # Async self-invocation path (pgvector document ingestion; see
+        # helpers/process_document_batch.py). Fired via lambda_client.invoke(...,
+        # InvocationType="Event") from trigger_document_batch so the actual
+        # chunk+embed work isn't bound by API Gateway's 29s integration timeout.
+        if event.get("task") == "process_document_batch":
             try:
                 connection = _connect_to_db()
             except Exception as e:
                 logger.error(f"Error connecting to database: {e}")
-                return _response(event, 500, {"error": "Error connecting to database"})
-
-            return update_status(event=event, connection=connection)
+                return {"error": "Error connecting to database"}
+            return process_document_batch(event=event, connection=connection)
 
         # API Gateway path
         method = event.get("httpMethod", "")
@@ -217,15 +213,6 @@ def handler(event, context=None):
                 data_source_id=data_source_id,
             )
 
-        # The Bedrock backend needs the KB ID; the pgvector backend does not.
-        kb_id = None
-        if INGESTION_BACKEND != "pgvector":
-            try:
-                kb_id = _get_secret(KB_SECRET_NAME, expect_json=False)
-            except Exception as e:
-                logger.error(f"Error getting knowledge base ID: {e}")
-                return _response(event, 500, {"error": "Error getting knowledge base ID"})
-
         # Route: POST /admin/data_sources/sync
         if method == "POST" and (
             resource == "/admin/data_sources/sync"
@@ -235,7 +222,6 @@ def handler(event, context=None):
                 event=event,
                 body=body,
                 connection=connection,
-                kb_id=kb_id,
             )
 
         return _response(

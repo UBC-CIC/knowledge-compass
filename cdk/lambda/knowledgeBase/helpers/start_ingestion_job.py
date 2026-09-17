@@ -5,20 +5,13 @@ from uuid import uuid4
 
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.cors import get_cors_headers
-from helpers.process_s3_batch import process_s3_batch
-from helpers.process_website_batch import process_website_batch
 from helpers.process_crawler_batch import process_crawler_batch
+from helpers.process_document_batch import trigger_document_batch
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.environ["REGION"]
-
-# Ingestion backend selector (pgvector migration, R3):
-#   "bedrock"  -> existing Bedrock Knowledge Base ingestion (S3 + web crawler)
-#   "pgvector" -> ECS crawler/transcriber tasks writing to the unified sources/chunks
-# Defaults to bedrock so behavior is unchanged until explicitly switched.
-INGESTION_BACKEND = os.environ.get("INGESTION_BACKEND", "bedrock").strip().lower()
 
 
 def _response(event, status_code: int, body: dict):
@@ -72,7 +65,7 @@ def _promote_pending_to_queued(connection, *, sync_session_id: str) -> int:
         return cursor.rowcount
 
 
-def start_ingestion_job(event, body, connection, kb_id):
+def start_ingestion_job(event, body, connection):
     """
     Start a new sync session for staged data sources.
 
@@ -80,13 +73,13 @@ def start_ingestion_job(event, body, connection, kb_id):
     - validates the requesting admin
     - creates a new sync_session_id
     - promotes pending ingestion runs to queued
-    - attempts to start the S3 batch first
-    - if no S3 batch is eligible, attempts to start the website batch
-    - returns the first phase that was successfully started
+    - launches ECS crawler/transcriber tasks for website/video sources and an
+      async self-invocation for csv/markdown/json sources
+    - returns whether any ingestion work was actually started
 
     The actual ingestion work is delegated to:
-    - process_s3_batch(...)
-    - process_website_batch(...)
+    - process_crawler_batch(...)   (website/video, via ECS Fargate)
+    - trigger_document_batch(...)  (csv/markdown/json, via async Lambda self-invoke)
     """
     created_by = admin_email_from_request(event, body)
     if not created_by:
@@ -116,84 +109,36 @@ def start_ingestion_job(event, body, connection, kb_id):
                 },
             )
 
-        # pgvector backend: launch ECS crawler/transcriber tasks instead of
-        # Bedrock ingestion jobs. Each task self-finalizes its ingestion_runs row.
-        if INGESTION_BACKEND == "pgvector":
-            crawler_started = process_crawler_batch(
-                event=event,
-                connection=connection,
-                sync_session_id=sync_session_id,
-                triggered_by_scheduler=False,
-            )
-            status_code = 200 if crawler_started.get("started") else 409
-            return _response(
-                event,
-                status_code,
-                {
-                    "message": (
-                        "Pending data sources queued and ingestion tasks started."
-                        if crawler_started.get("started")
-                        else "Pending data sources were queued, but no ingestion tasks could be started."
-                    ),
-                    "action": "queued_and_started_pgvector_ingestion",
-                    "backend": "pgvector",
-                    "sync_session_id": sync_session_id,
-                    "queued_count": queued_count,
-                    "details": crawler_started,
-                },
-            )
-
-        s3_started = process_s3_batch(
+        # Launch ECS crawler/transcriber tasks for website/video, and an async
+        # self-invocation for csv/markdown/json (see helpers/process_document_batch.py).
+        # Each self-finalizes its own ingestion_runs row(s), independent of this
+        # request's lifecycle.
+        crawler_started = process_crawler_batch(
             event=event,
             connection=connection,
-            kb_id=kb_id,
             sync_session_id=sync_session_id,
             triggered_by_scheduler=False,
         )
-        if s3_started.get("started"):
-            return _response(
-                event,
-                200,
-                {
-                    "message": "Pending data sources queued and S3 sync started.",
-                    "action": "queued_and_started_s3_sync",
-                    "sync_session_id": sync_session_id,
-                    "queued_count": queued_count,
-                    "phase_started": "s3",
-                    "details": s3_started,
-                },
-            )
-
-        website_started = process_website_batch(
+        document_started = trigger_document_batch(
             event=event,
             connection=connection,
-            kb_id=kb_id,
             sync_session_id=sync_session_id,
-            triggered_by_scheduler=False,
         )
-        if website_started.get("started"):
-            return _response(
-                event,
-                200,
-                {
-                    "message": "Pending data sources queued and website sync started.",
-                    "action": "queued_and_started_website_sync",
-                    "sync_session_id": sync_session_id,
-                    "queued_count": queued_count,
-                    "phase_started": "website",
-                    "details": website_started,
-                },
-            )
-
+        started = crawler_started.get("started") or document_started.get("started")
+        status_code = 200 if started else 409
         return _response(
             event,
-            409,
+            status_code,
             {
-                "error": "Pending data sources were queued, but no eligible batch could be started.",
+                "message": (
+                    "Pending data sources queued and ingestion tasks started."
+                    if started
+                    else "Pending data sources were queued, but no ingestion tasks could be started."
+                ),
+                "action": "queued_and_started_pgvector_ingestion",
                 "sync_session_id": sync_session_id,
                 "queued_count": queued_count,
-                "s3_result": s3_started,
-                "website_result": website_started,
+                "details": {"crawler": crawler_started, "documents": document_started},
             },
         )
 

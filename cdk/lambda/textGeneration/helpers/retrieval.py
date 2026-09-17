@@ -1,18 +1,16 @@
 """
 pgvector retrieval for the text-generation Lambda.
 
-Phase 2 of the pgvector migration (see Docs/PGVECTOR_MIGRATION_PLAN.md).
-
-This module is the drop-in replacement for `helpers/bedrock.retrieve_documents`.
-It embeds the query with Cohere embed-english-v3 (search_query space) and runs a
-cosine-similarity search against the unified `chunks` + `sources` tables created by
-migration 001_unified_chunks.js.
+The sole retrieval path since the Bedrock Knowledge Base / OpenSearch
+Serverless cutover (see Docs/PGVECTOR_MIGRATION_PLAN.md). It embeds the query
+with Cohere embed-english-v3 (search_query space) and runs a cosine-similarity
+search against the unified `chunks` + `sources` tables created by migration
+001_unified_chunks.js.
 
 Output contract
 ---------------
-`retrieve_from_pgvector` returns a list of dicts that are a SUPERSET of the shape
-returned by `bedrock.retrieve_documents`, so `format_context_for_prompt` and the
-rest of `chat.py` keep working without change:
+`retrieve_from_pgvector` returns a list of dicts consumed by
+`format_context_for_prompt` and the rest of `chat.py`:
 
     {
         "type":        "WEB" | "VIDEO" | "DOCUMENT",  # legacy key (uppercased)
@@ -110,10 +108,8 @@ def retrieve_from_pgvector(
       4. If fewer than min_results survive the score filter, backfill with the
          nearest results regardless of score (so the model always has some context).
 
-    Signature intentionally parallels bedrock.retrieve_documents(query, kb_id,
-    region, num_results, ...) minus the knowledge_base_id, so chat.py can swap
-    retrievers with a thin adapter. Returns [] on any failure (matching the
-    fail-soft behavior of the Bedrock retriever).
+    Returns [] on any failure (embedding error, DB error) so a retrieval
+    hiccup degrades to an ungrounded response rather than a hard failure.
     """
     try:
         embedding = embed_query(query, region, embed_model_id)

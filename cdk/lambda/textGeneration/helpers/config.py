@@ -12,8 +12,6 @@ _CONFIG_LOADED = False
 # DEFAULT VALUES (Fallbacks)
 # ------------------------------------------------------------------
 
-KB_ID = None
-
 HAIKU_ARN = None
 SONNET_ARN = None
 
@@ -23,14 +21,6 @@ LLM_REGION = os.getenv("LLM_REGION", "us-west-2")
 GUARDRAIL_ID = os.getenv('GUARDRAIL_ID')
 GUARDRAIL_VERSION = os.getenv('GUARDRAIL_VERSION')
 
-KB_SECRET_NAME = os.getenv('KB_SECRET_NAME')
-
-# Retrieval backend selector (pgvector migration, Phase 2).
-# When true, retrieval uses the unified pgvector corpus (chunks/sources) instead
-# of the Bedrock Knowledge Base. Defaults to false so the existing KB path stays
-# the default until pgvector retrieval has been validated.
-USE_PGVECTOR_RETRIEVAL = os.getenv('USE_PGVECTOR_RETRIEVAL', 'true').strip().lower() in ('1', 'true', 'yes')
-
 # Chat Configuration
 MAX_MESSAGES_PER_DAY = 45
 MIN_EXCHANGES_BEFORE_SUGGEST = 4
@@ -38,7 +28,6 @@ MAX_CHARACTERS_PER_USER_MESSAGE = 2000
 MAX_CHARACTERS_PER_AI_MESSAGE = 5000
 
 # Bedrock Configuration
-SEARCH_TYPE = "HYBRID"
 MAX_TOKENS = 4000
 TEMPERATURE = 0.15
 TOP_P = 0.5
@@ -151,7 +140,6 @@ def load_config(db_connection):
     global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_AI_MESSAGE, TEMPERATURE, TOP_P, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
     global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
     global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, INITIAL_PROMPT, WELCOME_MESSAGE
-    global KB_ID
     global HAIKU_ARN, SONNET_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
 
@@ -159,21 +147,6 @@ def load_config(db_connection):
         return
 
     logger.info("Loading system config from DB and Secrets Manager...")
-
-    # Knowledge Base ID is only required for the legacy Bedrock retrieval path.
-    if not USE_PGVECTOR_RETRIEVAL and not KB_ID:
-        if not KB_SECRET_NAME:
-            raise RuntimeError("KB_SECRET_NAME is required when USE_PGVECTOR_RETRIEVAL is false")
-        try:
-            client = boto3.client('secretsmanager')
-            response = client.get_secret_value(SecretId=KB_SECRET_NAME)
-            KB_ID = response.get('SecretString')
-            logger.info("Successfully loaded KB_ID from Secrets Manager.")
-        except Exception as e:
-            logger.error(f"Failed to load KB_ID from Secrets Manager: {e}")
-            raise
-    elif USE_PGVECTOR_RETRIEVAL:
-        logger.info("Skipping KB_ID load; using pgvector retrieval.")
 
     if not HAIKU_ARN:
         ssm_param = os.environ.get("HAIKU_ARN")

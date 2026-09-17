@@ -14,7 +14,7 @@ State machine reused unchanged: stage_data_sources -> 'pending';
 start_ingestion_job promotes -> 'queued'; this module marks -> 'running'; the
 ECS task sets -> 'completed' | 'failed'.
 
-Env vars required (set on lambdaKnowledgeBase when INGESTION_BACKEND=pgvector):
+Env vars required (set on lambdaKnowledgeBase):
   REGION
   ECS_CLUSTER_ARN            ECS cluster to run tasks in
   CRAWLER_TASK_DEF_ARN       task definition for the web crawler container
@@ -38,7 +38,7 @@ logger.setLevel(logging.INFO)
 
 REGION = os.environ["REGION"]
 
-# ECS wiring (only required when INGESTION_BACKEND=pgvector).
+# ECS wiring.
 ECS_CLUSTER_ARN = os.environ.get("ECS_CLUSTER_ARN")
 CRAWLER_TASK_DEF_ARN = os.environ.get("CRAWLER_TASK_DEF_ARN")
 TRANSCRIBER_TASK_DEF_ARN = os.environ.get("TRANSCRIBER_TASK_DEF_ARN")

@@ -7,7 +7,7 @@ from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session
 )
 from helpers.logic import get_current_prompt
-from helpers.bedrock import retrieve_documents, format_context_for_prompt
+from helpers.bedrock import format_context_for_prompt
 from helpers.retrieval import retrieve_from_pgvector
 from helpers.intervention import assess_response
 import helpers.config as config
@@ -76,23 +76,17 @@ Output ONLY the search query. Do not include explanations, preambles, or quotes.
 
 def _prepare_conversation(
     query: str,
-    knowledge_base_id: str,
     region: str,
     llm_region: str,
     chat_session_id: str,
     user_id: Optional[str],
     db_connection,
-    search_type: Optional[str] = None,
     save_user_message: bool = True
 ) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]], str]:
     """
     Handles validation, history fetching, user msg saving, retrieval, and prompt construction.
     Returns: (bedrock_messages, full_system_prompt, sources, phase_name)
     """
-    # Resolve dynamic defaults
-    if search_type is None:
-        search_type = config.SEARCH_TYPE
-
     # 1. Validation
     if not query or not query.strip():
         raise ValueError("Please provide a non-empty question.")
@@ -133,25 +127,13 @@ def _prepare_conversation(
     )
 
     # 6. RAG Retrieval (using rewritten query)
-    # Retrieval backend is feature-flagged during the pgvector migration. Both
-    # retrievers return the same source dict shape, so the rest of this function
-    # (context building, prompt assembly) is unchanged.
-    if config.USE_PGVECTOR_RETRIEVAL:
-        sources = retrieve_from_pgvector(
-            search_query,
-            db_connection,
-            region,
-            num_results=num_retrieval_results,
-        )
-    else:
-        sources = retrieve_documents(
-            search_query,
-            knowledge_base_id,
-            region,
-            num_retrieval_results,
-            search_type=search_type
-        )
-    
+    sources = retrieve_from_pgvector(
+        search_query,
+        db_connection,
+        region,
+        num_results=num_retrieval_results,
+    )
+
     # 7. Build Context
     context_block = format_context_for_prompt(sources)
     
@@ -214,7 +196,6 @@ def _save_ai_response(
 
 def get_response(
     query: str,
-    knowledge_base_id: str,
     region: str,
     llm_region: str,
     chat_session_id: str,
@@ -286,7 +267,6 @@ def get_response(
 
         bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn = _prepare_conversation(
             query,
-            knowledge_base_id,
             region,
             llm_region,
             chat_session_id,
