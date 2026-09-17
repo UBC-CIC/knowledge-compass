@@ -324,7 +324,7 @@ export default function DataSourceManagement() {
   const [zipUploading, setZipUploading] = useState(false);
   const [copiedMetadata, setCopiedMetadata] = useState(false);
   const [zipStatus, setZipStatus] = useState<{
-    type: "success" | "error" | null;
+    type: "success" | "error" | "warning" | null;
     message: string;
   }>({ type: null, message: "" });
 
@@ -800,10 +800,17 @@ export default function DataSourceManagement() {
       const zip = await JSZip.loadAsync(file);
       const allNames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
 
-      // Build a map of name -> JSZip file entry (basename only, ignore subdirs)
+      // Build a map of name -> JSZip file entry (basename only, ignore subdirs).
+      // Files are matched to their metadata sidecar by basename, so folder
+      // structure inside the zip is ignored — track collisions so a later
+      // duplicate silently overwriting an earlier one doesn't go unnoticed.
       const fileMap = new Map<string, JSZip.JSZipObject>();
+      const duplicateBaseNames = new Set<string>();
       for (const name of allNames) {
         const base = name.split("/").pop()!;
+        if (fileMap.has(base)) {
+          duplicateBaseNames.add(base);
+        }
         fileMap.set(base, zip.files[name]);
       }
 
@@ -853,6 +860,13 @@ export default function DataSourceManagement() {
       if (pairs.length === 0) {
         setZipStatus({ type: "error", message: "No valid CSV or Markdown files found in the zip." });
         setZipFile(null);
+      } else if (duplicateBaseNames.size > 0) {
+        const names = Array.from(duplicateBaseNames).sort().join(", ");
+        setZipStatus({
+          type: "warning",
+          message: `Multiple files share the same name in different folders — only one of each was kept, the rest were dropped (folder structure is ignored when matching files): ${names}. Rename the others and re-upload if you need all of them.`,
+        });
+        setZipPairs(pairs);
       } else {
         setZipPairs(pairs);
       }
@@ -1734,7 +1748,13 @@ export default function DataSourceManagement() {
                     )}
 
                     {zipStatus.message && (
-                      <div className={`text-sm p-2 rounded ${zipStatus.type === "success" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                      <div className={`text-sm p-2 rounded ${
+                        zipStatus.type === "success"
+                          ? "bg-green-100 text-green-700"
+                          : zipStatus.type === "warning"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-red-100 text-red-700"
+                      }`}>
                         {zipStatus.message}
                       </div>
                     )}

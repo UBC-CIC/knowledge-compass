@@ -424,6 +424,13 @@ export default function AIChatPage({
   }, []);
 
   useEffect(() => {
+    // A session switch always invalidates any in-flight stream from the
+    // previous session — otherwise the composer can stay disabled forever if
+    // the old session's "complete"/"error" event never matches up with the
+    // newly displayed messages.
+    setIsStreaming(false);
+    setStreamingMessageId(null);
+
     if (!activeChatSessionId) {
       setMessages([]);
       setIsLoadingHistory(false);
@@ -449,6 +456,10 @@ export default function AIChatPage({
       setIsLoadingHistory(false);
       return;
     }
+
+    // Guards against a slower earlier request (e.g. from a session the user
+    // has since navigated away from) overwriting a faster later one.
+    let isActive = true;
 
     const loadChatHistory = async () => {
       setIsLoadingHistory(true);
@@ -518,15 +529,21 @@ export default function AIChatPage({
         // Ensure order (backend already orders, but safe)
         chatMessages.sort((a, b) => a.time - b.time);
 
+        if (!isActive) return;
         setMessages(chatMessages);
       } catch (error) {
+        if (!isActive) return;
         console.error("Failed to load chat history:", error);
       } finally {
-        setIsLoadingHistory(false);
+        if (isActive) setIsLoadingHistory(false);
       }
     };
 
     loadChatHistory();
+
+    return () => {
+      isActive = false;
+    };
   }, [activeChatSessionId, userId]);
 
   async function sendMessage(textOverride?: string) {

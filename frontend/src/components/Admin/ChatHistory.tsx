@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -95,6 +95,10 @@ export default function ChatHistory() {
     const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loadingMessages, setLoadingMessages] = useState(false);
+    // Tracks the most recently requested session so a slower, earlier fetch
+    // (e.g. from a session the admin has since clicked away from) can't
+    // overwrite what's currently displayed.
+    const latestSessionIdRef = useRef<string | null>(null);
 
     // Initial load
     useEffect(() => {
@@ -186,7 +190,7 @@ export default function ChatHistory() {
         if (!forceRefresh) {
             const cached = getCachedItem(cacheKey);
             if (cached) {
-                setMessages(cached);
+                if (latestSessionIdRef.current === sessionId) setMessages(cached);
                 return;
             }
         }
@@ -203,12 +207,13 @@ export default function ChatHistory() {
 
             const data = await res.json();
             const messagesData = Array.isArray(data) ? data : [];
-            setMessages(messagesData);
             setCachedItem(cacheKey, messagesData);
+            if (latestSessionIdRef.current !== sessionId) return;
+            setMessages(messagesData);
         } catch (e) {
             console.error(e);
         } finally {
-            setLoadingMessages(false);
+            if (latestSessionIdRef.current === sessionId) setLoadingMessages(false);
         }
     };
 
@@ -226,6 +231,7 @@ export default function ChatHistory() {
     };
 
     const handleSessionSelect = (sessionId: string) => {
+        latestSessionIdRef.current = sessionId;
         setSelectedSessionId(sessionId);
         setMessages([]); // prevent old messages from showing
         fetchMessagesForSession(sessionId);
@@ -259,6 +265,7 @@ export default function ChatHistory() {
 
     const handleRefresh = () => {
         clearAdminCache();
+        latestSessionIdRef.current = null;
         setExpandedUserIds(new Set());
         setSelectedSessionId(null);
         setUserSessions({});
@@ -395,7 +402,7 @@ export default function ChatHistory() {
                             </div>
                         ) : (
                             <div className="space-y-6">
-                                {messages.slice(1).map((msg, idx) => {
+                                {messages.map((msg, idx) => {
                                     const isUser = msg.sender.toLowerCase() === "user";
                                     return (
                                         <div

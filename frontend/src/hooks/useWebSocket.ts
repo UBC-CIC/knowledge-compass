@@ -25,6 +25,11 @@ export const useWebSocket = (
   const heartbeatIntervalRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const isManualDisconnectRef = useRef(false);
+  // scheduleReconnect is memoized with an empty deps array (its retry timer
+  // must not reset every render), so it can't close over `connect` directly —
+  // `connect` is recreated whenever `url` changes. Route through a ref that's
+  // always kept current instead, so a reconnect always uses the latest URL.
+  const connectRef = useRef<() => void>(() => {});
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("disconnected");
@@ -85,7 +90,7 @@ export const useWebSocket = (
 
     reconnectTimeoutRef.current = window.setTimeout(() => {
       reconnectAttemptsRef.current++;
-      connect();
+      connectRef.current();
     }, delay);
   }, []);
 
@@ -166,6 +171,8 @@ export const useWebSocket = (
       scheduleReconnect();
     }
   }, [url, startHeartbeat, stopHeartbeat, scheduleReconnect]);
+
+  connectRef.current = connect;
 
   const disconnect = useCallback(() => {
     console.log("[WebSocket] Manual disconnect requested");
