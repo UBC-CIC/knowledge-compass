@@ -47,6 +47,16 @@ exports.handler = async (event) => {
     const token = extractToken(event.authorizationToken);
     const payload = await jwtVerifier.verify(token);
 
+    // The ID token already carries group membership as a claim — no extra
+    // Cognito API call needed. Membership in the "admin" group is the
+    // authoritative admin marker (see Docs/DEPLOYMENT_GUIDE.md and
+    // addAdminOnSignUp.js); do not grant admin context to any verified token.
+    const groups = payload["cognito:groups"] || [];
+    if (!groups.includes("admin")) {
+      console.warn("Authorization denied: caller is not in the admin group", { sub: payload.sub });
+      throw new Error("Unauthorized");
+    }
+
     const parts = event.methodArn.split("/");
     const resource = parts.slice(0, 2).join("/") + "*";
 

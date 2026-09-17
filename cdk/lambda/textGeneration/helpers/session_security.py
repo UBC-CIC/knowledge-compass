@@ -22,22 +22,33 @@ def sanitize_session_id(session_id: str) -> str:
     return session_id
 
 def validate_session_ownership(db_connection, session_id: str, user_id: str) -> bool:
-    if not session_id or not user_id: 
+    """
+    Returns True when the session either doesn't exist yet (chat.py's
+    ensure_session_exists will create it for this user_id on first save) or is
+    already owned by this user_id. Returns False only when the session exists
+    and belongs to a different user_id.
+    """
+    if not session_id or not user_id:
         logger.error("Session ID or user ID is empty or None")
         return False
-    
-    try: 
-        with db_connection.cursor() as cursor: 
-            cursor.execute("SELECT 1 FROM chat_sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
-            result = cursor.fetchone()
-            is_owner = (result is not None)
 
-            if not is_owner: 
-                logger.warning(f"User{user_id} does not own chat session: {session_id}")
-            
+    try:
+        with db_connection.cursor() as cursor:
+            cursor.execute("SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,))
+            result = cursor.fetchone()
+
+            if result is None:
+                # Session doesn't exist yet; it will be created for this user_id.
+                return True
+
+            is_owner = (result[0] == user_id)
+
+            if not is_owner:
+                logger.warning(f"User {user_id} does not own chat session: {session_id}")
+
             return is_owner
-        
-    except Exception as e: 
+
+    except Exception as e:
         logger.error(f"DB Error: {e}")
         return False
 

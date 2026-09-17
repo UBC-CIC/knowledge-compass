@@ -137,7 +137,9 @@ export class DatabaseStack extends Stack {
       parameterGroup: parameterGroup,
     });
 
-    // Add CIDR ranges of private subnets to inbound rules of RDS
+    // Scope RDS ingress to the private (Lambda-hosting) subnet tier only, not
+    // the whole VPC CIDR — the whole-VPC range also spans the public subnet
+    // tier, which should never reach Postgres directly.
     const dbSecurityGroup = this.dbInstance.connections.securityGroups[0];
     if (
       vpcStack.privateSubnetsCidrStrings &&
@@ -151,22 +153,11 @@ export class DatabaseStack extends Stack {
         );
       });
     } else {
-      console.log(
-        "Deploying with new VPC. No need to add private subnet CIDR ranges to inbound rules of RDS."
+      throw new Error(
+        "vpcStack.privateSubnetsCidrStrings is empty; refusing to fall back to " +
+        "VPC-wide RDS ingress. Populate it for this VPC path before deploying."
       );
     }
-
-    // Add CIDR ranges of public subnets to inbound rules of RDS
-    this.dbInstance.connections.securityGroups.forEach(function (
-      securityGroup
-    ) {
-      // Allow Postgres access in VPC
-      securityGroup.addIngressRule(
-        ec2.Peer.ipv4(vpcStack.vpcCidrString),
-        ec2.Port.tcp(5432),
-        "Allow PostgreSQL traffic from public subnets"
-      );
-    });
 
     /**
      * Create IAM role for RDS Proxy

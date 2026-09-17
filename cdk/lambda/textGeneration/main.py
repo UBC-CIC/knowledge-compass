@@ -49,11 +49,11 @@ def handler(event, context=None):
         chat_session_id = event['pathParameters'].get('chat_session_id') or event['pathParameters'].get('id')
 
     user_id = body.get('user_id')
-    
-    if not query or not chat_session_id:
+
+    if not query or not chat_session_id or not user_id:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': 'Missing query or chat_session_id'})
+            'body': json.dumps({'error': 'Missing query, chat_session_id, or user_id'})
         }
 
     # Sanitize session ID before querying DB
@@ -70,13 +70,13 @@ def handler(event, context=None):
     try:
         conn = get_db_connection()
 
-        # Validate the session ownership before doing anything with the session 
-        if user_id: 
-            if not validate_session_ownership(conn, chat_session_id, user_id): 
-                return {
-                    'statusCode': 403,
-                    'body': json.dumps({'error': 'Unauthorized access to chat session'})
-                }
+        # Validate the session ownership before doing anything with the session
+        # (user_id is required above, so this always runs).
+        if not validate_session_ownership(conn, chat_session_id, user_id):
+            return {
+                'statusCode': 403,
+                'body': json.dumps({'error': 'Unauthorized access to chat session'})
+            }
         
         # Load dynamic configuration from DB
         config.load_config(conn)

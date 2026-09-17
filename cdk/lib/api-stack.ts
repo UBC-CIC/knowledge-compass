@@ -383,10 +383,19 @@ export class ApiGatewayStack extends cdk.Stack {
         metricName: "KC-firewall",
       },
       rules: [
-        // Rule 1: AWS Managed Common Rule Set (SQL injection, XSS, etc.)
-        // SizeRestrictions_BODY is excluded for batch admin endpoints which send large JSON payloads
+        // Rule 1: AWS Managed Common Rule Set (SQL injection, XSS, etc.) for the
+        // two batch admin endpoints ONLY, with SizeRestrictions_BODY exempted
+        // (they send large JSON payloads). A managed-rule-group's
+        // scopeDownStatement gates evaluation of the WHOLE group, not an
+        // individual ruleActionOverride, so the size exemption can only be
+        // scoped to these two paths by giving them their own rule instance
+        // (Rule 1) separate from the unscoped, full-enforcement instance that
+        // covers every other path (Rule 1b). Do not merge these back into one
+        // rule with a single scopeDownStatement — that previously exempted
+        // these two paths from the ENTIRE managed rule group (SQLi/XSS/etc.
+        // included), not just the body-size check.
         {
-          name: "AWS-AWSManagedRulesCommonRuleSet",
+          name: "AWS-AWSManagedRulesCommonRuleSet-AdminBatchEndpoints",
           priority: 1,
           statement: {
             managedRuleGroupStatement: {
@@ -398,6 +407,47 @@ export class ApiGatewayStack extends cdk.Stack {
                   actionToUse: { count: {} },
                 },
               ],
+              scopeDownStatement: {
+                orStatement: {
+                  statements: [
+                    {
+                      byteMatchStatement: {
+                        searchString: "/admin/generate-presigned-urls/batch",
+                        fieldToMatch: { uriPath: {} },
+                        textTransformations: [{ priority: 0, type: "NONE" }],
+                        positionalConstraint: "ENDS_WITH",
+                      },
+                    },
+                    {
+                      byteMatchStatement: {
+                        searchString: "/admin/data_sources/batch",
+                        fieldToMatch: { uriPath: {} },
+                        textTransformations: [{ priority: 0, type: "NONE" }],
+                        positionalConstraint: "ENDS_WITH",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          overrideAction: { none: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWS-AWSManagedRulesCommonRuleSet-AdminBatchEndpoints",
+          },
+        },
+
+        // Rule 1b: Same managed rule set, full enforcement (no overrides), for
+        // every path OTHER than the two batch admin endpoints above.
+        {
+          name: "AWS-AWSManagedRulesCommonRuleSet-Default",
+          priority: 2,
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesCommonRuleSet",
               scopeDownStatement: {
                 notStatement: {
                   statement: {
@@ -430,14 +480,14 @@ export class ApiGatewayStack extends cdk.Stack {
           visibilityConfig: {
             sampledRequestsEnabled: true,
             cloudWatchMetricsEnabled: true,
-            metricName: "AWS-AWSManagedRulesCommonRuleSet",
+            metricName: "AWS-AWSManagedRulesCommonRuleSet-Default",
           },
         },
 
         // Rule 2: Strict limit for unauthenticated requests (100 req/5min per IP)
         {
           name: "LimitUnauthenticatedRequests",
-          priority: 2,
+          priority: 3,
           action: {
             block: {},
           },
@@ -479,7 +529,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // Rule 3: More lenient for authenticated requests (2000 req/5min per IP)
         {
           name: "LimitAuthenticatedRequests",
-          priority: 3,
+          priority: 4,
           action: {
             block: {},
           },
@@ -517,7 +567,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // Rule 4: Moderate limit for expensive AI endpoints (500 req/5min per IP)
         {
           name: "LimitExpensiveEndpoints",
-          priority: 4,
+          priority: 5,
           action: {
             block: {},
           },

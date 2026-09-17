@@ -272,6 +272,15 @@ export class VpcStack extends Stack {
 
       this.vpc.addFlowLog("KC-vpcFlowLog");
 
+      // Lambdas (vpc: vpcStack.vpc, no explicit vpcSubnets) default to running in
+      // PRIVATE_WITH_EGRESS subnets, while RDS sits in PRIVATE_ISOLATED
+      // (see database-stack.ts). Expose these CIDRs so database-stack.ts can
+      // scope the DB security group's ingress to just this tier instead of the
+      // whole VPC (which would otherwise also include the public subnet tier).
+      this.privateSubnetsCidrStrings = this.vpc.privateSubnets.map(
+        (subnet) => subnet.ipv4CidrBlock
+      );
+
       // Add secrets manager endpoint to VPC
       this.vpc.addInterfaceEndpoint(`${id}-Secrets Manager Endpoint`, {
         service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
