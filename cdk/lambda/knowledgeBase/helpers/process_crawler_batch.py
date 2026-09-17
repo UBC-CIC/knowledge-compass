@@ -46,6 +46,8 @@ INGESTION_SUBNET_IDS = [s for s in os.environ.get("INGESTION_SUBNET_IDS", "").sp
 INGESTION_SECURITY_GROUP_IDS = [s for s in os.environ.get("INGESTION_SECURITY_GROUP_IDS", "").split(",") if s]
 CRAWLER_CONTAINER_NAME = os.environ.get("CRAWLER_CONTAINER_NAME", "crawler")
 TRANSCRIBER_CONTAINER_NAME = os.environ.get("TRANSCRIBER_CONTAINER_NAME", "transcriber")
+# Same secret lambdaKnowledgeBase already uses to talk to RDS Proxy.
+DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME") or os.environ.get("SM_DB_CREDENTIALS", "")
 
 ecs_client = boto3.client("ecs", region_name=REGION)
 
@@ -142,6 +144,20 @@ def _network_configuration() -> dict:
     }
 
 
+def _container_db_overrides() -> list[dict]:
+    """
+    Force Secrets Manager auth at RunTask time.
+
+    RDS Proxy does not accept IAM tokens. These keys override the task definition
+    so we can change auth without replacing the ECS task definition (that
+    replacement is blocked while KC-Api imports the task-def ARN export).
+    """
+    env = [{"name": "DB_AUTH", "value": "secret"}]
+    if DB_SECRET_NAME:
+        env.append({"name": "DB_SECRET_NAME", "value": DB_SECRET_NAME})
+    return env
+
+
 def _task_arn_from_run_task(resp: dict, *, kind: str) -> str:
     """Raise if ecs.RunTask returned failures / no task instead of indexing [0]."""
     failures = resp.get("failures") or []
@@ -217,6 +233,7 @@ def _run_crawler_task(run: dict) -> str:
         {"name": "JOB_ID", "value": run["ingestion_run_id"]},
         {"name": "SEED_URL", "value": run["name"]},
         {"name": "WRITE_DB", "value": "true"},
+        *_container_db_overrides(),
     ]
     resp = ecs_client.run_task(
         cluster=ECS_CLUSTER_ARN,
@@ -291,6 +308,7 @@ def _run_transcriber_task(run: dict) -> str:
         {"name": "VIDEO_NAME", "value": run["name"]},
         {"name": "TRANSCRIPT_JSON", "value": meta.get("transcript_s3_uri", "")},
         {"name": "WRITE_DB", "value": "true"},
+        *_container_db_overrides(),
     ]
     resp = ecs_client.run_task(
         cluster=ECS_CLUSTER_ARN,

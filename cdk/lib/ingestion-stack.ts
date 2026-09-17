@@ -174,15 +174,15 @@ export class IngestionStack extends Stack {
     const crawlerTaskRole = makeTaskRole(`${id}-CrawlerTaskRole`, false);
     const transcriberTaskRole = makeTaskRole(`${id}-TranscriberTaskRole`, true);
 
-    // RDS Proxy is configured for Secrets Manager auth, not IAM tokens. The
-    // knowledge-base Lambda already connects this way; containers must too or
-    // get_db_connection() fails and the adopted JOB_ID is never finalized.
+    // Keep these env vars stable. Changing an ECS task definition replaces the
+    // resource and updates KC-Ingestion's task-def ARN export, which CloudFormation
+    // refuses while KC-Api still imports it. Secret DB auth is injected at RunTask
+    // time in process_crawler_batch.py (overrides DB_AUTH=iam below).
     const containerDbEnv: { [key: string]: string } = {
       DB_HOST: db.rdsProxyEndpoint,
       DB_NAME: "KC",
       DB_USER: "app_rw",
-      DB_AUTH: "secret",
-      DB_SECRET_NAME: db.secretPathUser.secretName,
+      DB_AUTH: "iam",
       AWS_REGION: region,
     };
 

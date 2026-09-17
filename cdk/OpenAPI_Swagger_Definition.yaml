@@ -684,6 +684,59 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/data_sources/{id}/retry:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Re-queue a data source whose latest ingestion run failed
+      operationId: retry_data_source
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                created_by:
+                  type: string
+                  example: example@email.com
+      responses:
+        "200":
+          description: Retry queued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  action: { type: string }
+                  data_source_id: { type: string }
+                  retry_of_ingestion_run_id: { type: string }
+                  pending_ingestion_run_id: { type: string }
+        "400":
+          description: Invalid request
+        "404":
+          description: Data source not found
+        "409":
+          description: Latest ingestion run for this data source did not fail
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/system-settings:
     <<: *commonOptions
     get:

@@ -13,6 +13,7 @@ from helpers.generate_presigned_urls_batch import generate_presigned_urls_batch
 from helpers.update_status import update_status
 from helpers.video_transcription import handle_transcribe_complete
 from helpers.process_crawler_batch import handle_ecs_task_stopped
+from helpers.retry_ingestion_run import retry_ingestion_run
 
 # Set up logging
 logger = logging.getLogger()
@@ -184,6 +185,21 @@ def handler(event, context=None):
             or path.endswith("/admin/data_sources/batch")
         ):
             return stage_data_sources_batch(event=event, body=body, connection=connection)
+
+        # Route: POST /admin/data_sources/{id}/retry
+        if method == "POST" and (
+            resource == "/admin/data_sources/{id}/retry"
+            or path.endswith("/retry")
+        ):
+            data_source_id = (event.get("pathParameters") or {}).get("id")
+            if not data_source_id:
+                return _response(event, 400, {"error": "Missing data source id"})
+            return retry_ingestion_run(
+                event=event,
+                body=body,
+                connection=connection,
+                data_source_id=data_source_id,
+            )
 
         # The Bedrock backend needs the KB ID; the pgvector backend does not.
         kb_id = None

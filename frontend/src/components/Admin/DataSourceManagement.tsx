@@ -333,6 +333,12 @@ export default function DataSourceManagement() {
     message: string;
   }>({ type: null, message: "" });
 
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryStatus, setRetryStatus] = useState<{
+    type: "success" | "error" | null;
+    message: string;
+  }>({ type: null, message: "" });
+
   const [totals, setTotals] = useState<AnalyticsTotals>({
     users: 0,
     chat_sessions: 0,
@@ -520,6 +526,58 @@ export default function DataSourceManagement() {
       });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleRetry = async (dataSourceId: string) => {
+    if (isDemoMode) {
+      setRetryStatus({
+        type: "success",
+        message: "Demo: this would re-queue the resource for the next sync.",
+      });
+      return;
+    }
+
+    try {
+      setRetryingId(dataSourceId);
+      setRetryStatus({ type: null, message: "" });
+
+      const token = await AuthService.getAdminIdToken();
+
+      const res = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}/retry`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ created_by: adminEmail }),
+        }
+      );
+
+      const responseJson = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          responseJson?.error || responseJson?.message || "Failed to retry resource"
+        );
+      }
+
+      setRetryStatus({
+        type: "success",
+        message: responseJson?.message || "Resource re-queued. Click Sync now to run it.",
+      });
+
+      await fetchAdminDataSources();
+    } catch (e) {
+      console.error(e);
+      setRetryStatus({
+        type: "error",
+        message: e instanceof Error ? e.message : "Failed to retry resource",
+      });
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -1844,6 +1902,18 @@ export default function DataSourceManagement() {
               {syncStatus.message}
             </div>
           )}
+
+          {retryStatus.message && (
+            <div
+              className={`text-sm p-3 rounded ${
+                retryStatus.type === "success"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+              {retryStatus.message}
+            </div>
+          )}
         </div>
 
         <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
@@ -1929,7 +1999,28 @@ export default function DataSourceManagement() {
                             <Badge variant="secondary">{typeLabel(ds.type)}</Badge>
                           </TableCell>
 
-                          <TableCell className="align-top">{statusBadge(status)}</TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex items-center gap-1.5">
+                              {statusBadge(status)}
+                              {status === "failed" && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-6 rounded-full px-2 text-[11px]"
+                                  title="Re-queue this resource for the next sync"
+                                  onClick={() => handleRetry(ds.id)}
+                                  disabled={retryingId === ds.id}
+                                >
+                                  {retryingId === ds.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
 
                           <TableCell className="align-top text-sm text-gray-700">
                             {formatDateTime(ds.created_at)}
@@ -2038,7 +2129,26 @@ export default function DataSourceManagement() {
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100">
-                                                {statusBadge(jsonStatus)}
+                                                <div className="flex items-center gap-1.5">
+                                                  {statusBadge(jsonStatus)}
+                                                  {jsonStatus === "failed" && (
+                                                    <Button
+                                                      type="button"
+                                                      variant="outline"
+                                                      size="sm"
+                                                      className="h-6 rounded-full px-2 text-[11px]"
+                                                      title="Re-queue this resource for the next sync"
+                                                      onClick={() => handleRetry(json.id)}
+                                                      disabled={retryingId === json.id}
+                                                    >
+                                                      {retryingId === json.id ? (
+                                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                                      ) : (
+                                                        <RefreshCw className="h-3 w-3" />
+                                                      )}
+                                                    </Button>
+                                                  )}
+                                                </div>
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100 text-xs text-gray-700">
