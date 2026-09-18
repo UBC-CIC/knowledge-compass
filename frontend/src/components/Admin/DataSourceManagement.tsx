@@ -55,7 +55,7 @@ type AnalyticsTotals = {
   questions?: number;
 };
 
-type DataSourceType = "csv" | "markdown" | "json" | "website" | "video";
+type DataSourceType = "csv" | "markdown" | "json" | "website" | "video" | "document";
 
 type DataSourceRow = {
   id: string;
@@ -124,6 +124,7 @@ function typeLabel(t: DataSourceType) {
   if (t === "markdown") return "Markdown";
   if (t === "json") return "JSON";
   if (t === "video") return "Video";
+  if (t === "document") return "Document";
   return t;
 }
 
@@ -213,6 +214,35 @@ function videoContentType(file: File): string {
     if (lower.endsWith(ext)) return contentType;
   }
   return "video/mp4";
+}
+
+function isDocumentFile(file: File) {
+  const lower = file.name.toLowerCase();
+  return lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".txt");
+}
+
+function validateDocumentFile(file: File): string | null {
+  if (!isDocumentFile(file)) {
+    return "Use pdf, docx, or txt.";
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    return "Document must be smaller than 50MB.";
+  }
+  return null;
+}
+
+const DOCUMENT_CONTENT_TYPE_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+};
+
+function documentContentType(file: File): string {
+  const lower = file.name.toLowerCase();
+  for (const [ext, contentType] of Object.entries(DOCUMENT_CONTENT_TYPE_BY_EXT)) {
+    if (lower.endsWith(ext)) return contentType;
+  }
+  return "application/pdf";
 }
 
 function sanitizeUploadFileName(fileName: string): string {
@@ -313,10 +343,12 @@ export default function DataSourceManagement() {
   }>({ type: null, message: "" });
 
   // Upload tab: "single" | "zip"
-  const [uploadTab, setUploadTab] = useState<"single" | "zip" | "video">("single");
+  const [uploadTab, setUploadTab] = useState<"single" | "zip" | "video" | "document">("single");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [videoTitle, setVideoTitle] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentTitle, setDocumentTitle] = useState("");
 
   // Zip upload state
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -773,7 +805,7 @@ export default function DataSourceManagement() {
   const getPresignedUpload = async (
     token: string,
     file: File,
-    uploadType: "csv" | "markdown" | "json" | "video"
+    uploadType: "csv" | "markdown" | "json" | "video" | "document"
   ): Promise<PresignedUploadResponse> => {
     const fallbackContentType =
       uploadType === "csv"
@@ -782,14 +814,20 @@ export default function DataSourceManagement() {
         ? "text/markdown"
         : uploadType === "video"
         ? "video/mp4"
+        : uploadType === "document"
+        ? "application/pdf"
         : "application/json";
 
     const contentType =
       uploadType === "video"
         ? videoContentType(file)
+        : uploadType === "document"
+        ? documentContentType(file)
         : file.type || fallbackContentType;
     const fileName =
-      uploadType === "video" ? sanitizeUploadFileName(file.name) : file.name;
+      uploadType === "video" || uploadType === "document"
+        ? sanitizeUploadFileName(file.name)
+        : file.name;
 
     const res = await fetch(
       `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
@@ -844,6 +882,8 @@ export default function DataSourceManagement() {
     setVideoFile(null);
     setVideoUrl("");
     setVideoTitle("");
+    setDocumentFile(null);
+    setDocumentTitle("");
   };
 
   const handleZipSelect = async (file: File) => {
@@ -1280,6 +1320,95 @@ export default function DataSourceManagement() {
     }
   };
 
+  const handleDocumentFileSelect = (selectedFile: File) => {
+    setUploadStatus({ type: null, message: "" });
+    const validationError = validateDocumentFile(selectedFile);
+    if (validationError) {
+      setUploadStatus({ type: "error", message: validationError });
+      return;
+    }
+    setDocumentFile(selectedFile);
+    if (!documentTitle.trim()) {
+      setDocumentTitle(selectedFile.name.replace(/\.[^.]+$/, ""));
+    }
+  };
+
+  const handleDocumentUpload = async () => {
+    if (isDemoMode) {
+      setUploadStatus({
+        type: "success",
+        message: "Demo: the document would be chunked and embedded automatically.",
+      });
+      return;
+    }
+    if (!documentFile) {
+      setUploadStatus({ type: "error", message: "Choose a PDF, DOCX, or TXT file." });
+      return;
+    }
+    if (!adminEmail) {
+      setUploadStatus({
+        type: "error",
+        message: "Unable to determine the current admin email.",
+      });
+      return;
+    }
+
+    try {
+      setUploading(true);
+      setUploadStatus({ type: null, message: "" });
+
+      const token = await AuthService.getAdminIdToken();
+      const upload = await getPresignedUpload(token, documentFile, "document");
+      await uploadFileToS3(upload.presignedUrl, documentFile, documentContentType(documentFile));
+
+      const stageResponse = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "document",
+            document_file_name: documentFile.name,
+            document_s3_bucket: upload.bucket,
+            document_s3_key: upload.key,
+            name: documentTitle.trim() || documentFile.name,
+            created_by: adminEmail,
+          }),
+        }
+      );
+
+      const responseJson = await stageResponse.json().catch(() => ({}));
+      if (!stageResponse.ok) {
+        const detail =
+          typeof responseJson?.detail === "string" ? responseJson.detail : "";
+        throw new Error(
+          [responseJson?.error || responseJson?.message, detail]
+            .filter(Boolean)
+            .join(" — ") ||
+            "Document uploaded but embedding could not be started."
+        );
+      }
+
+      setUploadStatus({
+        type: "success",
+        message: responseJson?.message || "Document staged. Embedding has started.",
+      });
+      await fetchAdminDataSources();
+      setTimeout(() => resetUploadDialog(), 1500);
+    } catch (err) {
+      console.error("Document upload error:", err);
+      setUploadStatus({
+        type: "error",
+        message: err instanceof Error ? err.message : "Document upload failed",
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const latestRunBySourceId = (() => {
     const map = new Map<string, IngestionRunRow>();
     for (const r of ingestionRuns) {
@@ -1496,14 +1625,14 @@ export default function DataSourceManagement() {
                 <DialogTrigger asChild>
                   <Button variant="outline" className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground">
                     <Upload className="mr-2 h-4 w-4" />
-                    Upload files or video
+                    Upload files, video, or documents
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-2xl">
                   <DialogHeader>
                     <DialogTitle>Upload guidance files</DialogTitle>
                     <DialogDescription>
-                      Add CSV, Markdown, or video resources to the Knowledge Compass knowledge base.
+                      Add CSV, Markdown, video, or document (PDF/DOCX/TXT) resources to the Knowledge Compass knowledge base.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -1544,6 +1673,18 @@ export default function DataSourceManagement() {
                     >
                       <Film className="inline h-3.5 w-3.5 mr-1.5" />
                       Video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUploadTab("document")}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        uploadTab === "document"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <FileText className="inline h-3.5 w-3.5 mr-1.5" />
+                      Document
                     </button>
                   </div>
 
@@ -1921,6 +2062,86 @@ export default function DataSourceManagement() {
                   </div>
                   )}
 
+                  {uploadTab === "document" && (
+                  <div className="grid gap-4 py-4">
+                    <div className="text-sm text-gray-600">
+                      Upload a single PDF, DOCX, or TXT file. Knowledge Compass extracts the text and embeds it automatically — no metadata JSON file required.
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-gray-900">Document file</div>
+                      {!documentFile ? (
+                        <div
+                          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const droppedFile = e.dataTransfer.files?.[0];
+                            if (droppedFile) handleDocumentFileSelect(droppedFile);
+                          }}
+                          onClick={() => document.getElementById("document-upload")?.click()}
+                        >
+                          <div className="flex flex-col items-center gap-2">
+                            <FileText className="h-8 w-8 text-gray-400" />
+                            <span className="text-sm font-medium text-gray-600">
+                              Drag and drop pdf, docx, or txt
+                            </span>
+                            <span className="text-xs text-gray-400">or click to browse (max 50MB)</span>
+                          </div>
+                          <Input
+                            id="document-upload"
+                            type="file"
+                            className="hidden"
+                            accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                            onChange={(e) => {
+                              const selectedFile = e.target.files?.[0];
+                              if (selectedFile) handleDocumentFileSelect(selectedFile);
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="border rounded-lg p-4 bg-gray-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                              <span className="text-sm font-medium truncate">{documentFile.name}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                              onClick={() => setDocumentFile(null)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <div className="text-xs text-gray-500">{formatSizeMb(documentFile)}</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-900" htmlFor="document-title">
+                        Title
+                      </label>
+                      <Input
+                        id="document-title"
+                        value={documentTitle}
+                        onChange={(e) => setDocumentTitle(e.target.value)}
+                        placeholder="Family rights handbook"
+                      />
+                    </div>
+                    {uploadStatus.message && uploadTab === "document" ? (
+                      <div
+                        className={`text-sm p-2 rounded ${
+                          uploadStatus.type === "success"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {uploadStatus.message}
+                      </div>
+                    ) : null}
+                  </div>
+                  )}
+
                   <DialogFooter>
                     <Button variant="outline" onClick={resetUploadDialog} disabled={uploading || zipUploading}>
                       Cancel
@@ -1953,6 +2174,21 @@ export default function DataSourceManagement() {
                           </>
                         ) : (
                           "Upload & transcribe"
+                        )}
+                      </Button>
+                    ) : uploadTab === "document" ? (
+                      <Button
+                        className="bg-primary hover:bg-primary/90"
+                        onClick={handleDocumentUpload}
+                        disabled={!documentFile || uploading}
+                      >
+                        {uploading ? (
+                          <>
+                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          "Upload & embed"
                         )}
                       </Button>
                     ) : (
@@ -2061,6 +2297,7 @@ export default function DataSourceManagement() {
                     const isExpandable =
                       ds.type === "website" ||
                       ds.type === "video" ||
+                      ds.type === "document" ||
                       ((ds.type === "csv" || ds.type === "markdown") && !!jsonByCsvName.get(ds.name));
                     const isOpen = !!expanded[ds.id];
 
@@ -2212,6 +2449,17 @@ export default function DataSourceManagement() {
                                   </div>
                                   <div className="text-xs text-gray-600">
                                     Transcription: {String(ds.metadata?.transcribe_status || "not started")}
+                                  </div>
+                                  {run?.error_message ? (
+                                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
+                                      {run.error_message}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : ds.type === "document" ? (
+                                <div className="space-y-3 text-sm">
+                                  <div className="text-xs text-gray-600">
+                                    File: {String(ds.metadata?.document_file_name || ds.name)}
                                   </div>
                                   {run?.error_message ? (
                                     <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">

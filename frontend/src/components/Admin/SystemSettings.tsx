@@ -181,34 +181,6 @@ const DEFAULT_SYSTEM_MESSAGES: Record<SystemMessageType, SystemMessageVersion[]>
       created_at: undefined,
     },
   ],
-  partial_hallucination_warning: [
-    {
-      id: "seed-partial_hallucination_warning-v1",
-      type: "partial_hallucination_warning",
-      content:
-        "Warning: The knowledge base powering the AI-driven BSc Specialization Explorer contains information from within and outside of UBC-governed sources. Given the nature of the Explorer's LLM, parts of this answer may not be fully supported by the UBC source content and could contain inaccurate program or course details. Please verify against the relevant UBC calendar page.",
-      character_limit: 700,
-      version: 1,
-      is_active: true,
-      affects_text_generation: false,
-      created_by_email: null,
-      created_at: undefined,
-    },
-  ],
-  full_hallucination_warning: [
-    {
-      id: "seed-full_hallucination_warning-v1",
-      type: "full_hallucination_warning",
-      content:
-        "Warning: The knowledge base powering the AI-driven BSc Specialization Explorer contains information from within and outside of UBC-governed sources. Given the nature of the Explorer's LLM, this answer may not be reliably grounded in the UBC source content and could contain incorrect program or course information. Please verify against the relevant UBC calendar page.",
-      character_limit: 700,
-      version: 1,
-      is_active: true,
-      affects_text_generation: false,
-      created_by_email: null,
-      created_at: undefined,
-    },
-  ],
 };
 
 type MessageMeta = {
@@ -270,18 +242,6 @@ export const MESSAGE_META: Record<SystemMessageType, MessageMeta> = {
   disclaimer: {
     title: "Disclaimer",
     description: "A short note explaining the limits of the assistant’s advice and responsibility",
-    affectsTextGeneration: false,
-    placement: "ui_only",
-  },
-  partial_hallucination_warning: {
-    title: "Partial Hallucination Warning",
-    description: "A warning message for when the LLM's output might contain some hallucinations",
-    affectsTextGeneration: false,
-    placement: "ui_only",
-  },
-  full_hallucination_warning: {
-    title: "Full Hallucination Warning",
-    description: "A warning message for when the LLM's output definitely contains some hallucinations",
     affectsTextGeneration: false,
     placement: "ui_only",
   },

@@ -316,7 +316,7 @@ paths:
                             name: { type: string }
                             type:
                               type: string
-                              enum: [website, csv, markdown, json, video]
+                              enum: [website, csv, markdown, json, video, document]
                             created_at: { type: string }
                             metadata:
                               type: object
@@ -373,7 +373,7 @@ paths:
               properties:
                 type:
                   type: string
-                  enum: [website, csv, markdown, video]
+                  enum: [website, csv, markdown, video, document]
                   example: website
                 created_by:
                   type: string
@@ -418,6 +418,15 @@ paths:
                 video_url:
                   type: string
                   example: https://www.youtube.com/watch?v=example
+                document_file_name:
+                  type: string
+                  example: family-rights-handbook.pdf
+                document_s3_bucket:
+                  type: string
+                  example: my-kb-bucket
+                document_s3_key:
+                  type: string
+                  example: uploads/document/1712345678_family-rights-handbook.pdf
       responses:
         "200":
           description: Data source(s) staged successfully

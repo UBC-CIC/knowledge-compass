@@ -36,9 +36,7 @@ export type SystemMessageType =
   | "initial_prompt"
   | "detective_phase_prompt"
   | "suggestion_phase_prompt"
-  | "welcome_message"
-  | "partial_hallucination_warning"
-  | "full_hallucination_warning";
+  | "welcome_message";
 
 export type MessagePlacement =
   | "initial_prompt"
@@ -138,12 +136,7 @@ function nextVersionNumber(list: SystemMessageVersion[]) {
 }
 
 function defaultAffectsTextGeneration(type: SystemMessageType) {
-  return ![
-    "disclaimer",
-    "welcome_message",
-    "partial_hallucination_warning",
-    "full_hallucination_warning",
-  ].includes(type);
+  return !["disclaimer", "welcome_message"].includes(type);
 }
 
 function truncatePreview(text?: string, max = 120) {

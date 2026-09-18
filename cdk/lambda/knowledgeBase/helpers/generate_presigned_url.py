@@ -35,6 +35,9 @@ ALLOWED_CONTENT_TYPES = {
     "audio/flac",
     "audio/ogg",
     "audio/amr",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
 }
 
 VIDEO_EXTENSIONS = (
@@ -49,6 +52,12 @@ VIDEO_EXTENSIONS = (
     ".m4a",
 )
 
+DOCUMENT_EXTENSIONS = (
+    ".pdf",
+    ".docx",
+    ".txt",
+)
+
 EXT_TO_CONTENT_TYPE = {
     ".mp4": "video/mp4",
     ".m4v": "video/mp4",
@@ -59,6 +68,9 @@ EXT_TO_CONTENT_TYPE = {
     ".flac": "audio/flac",
     ".ogg": "audio/ogg",
     ".amr": "audio/amr",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain",
 }
 
 s3 = boto3.client(
@@ -114,6 +126,18 @@ def _is_video_file(file_name: str) -> bool:
     return lower_name.endswith(VIDEO_EXTENSIONS)
 
 
+def _is_document_file(file_name: str) -> bool:
+    lower_name = file_name.lower()
+    return lower_name.endswith(DOCUMENT_EXTENSIONS)
+
+
+_DOCUMENT_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+}
+
+
 def _infer_upload_prefix(file_name: str, content_type: str) -> str:
     lower_name = file_name.lower()
 
@@ -128,6 +152,9 @@ def _infer_upload_prefix(file_name: str, content_type: str) -> str:
 
     if _is_video_file(file_name) or content_type.startswith("video/") or content_type.startswith("audio/"):
         return "uploads/video"
+
+    if _is_document_file(file_name) or content_type in _DOCUMENT_CONTENT_TYPES:
+        return "uploads/document"
 
     return "uploads/files"
 
@@ -170,7 +197,7 @@ def generate_presigned_url(event):
     prefix = _infer_upload_prefix(file_name, content_type)
     timestamp = int(time.time())
     key = f"{prefix}/{timestamp}_{file_name}"
-    expires_in = 3600 if prefix == "uploads/video" else 300
+    expires_in = 3600 if prefix in ("uploads/video", "uploads/document") else 300
 
     try:
         presigned_url = s3.generate_presigned_url(

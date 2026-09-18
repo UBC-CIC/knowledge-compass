@@ -10,6 +10,9 @@ from helpers.admin_user import (
 )
 from helpers.cors import get_cors_headers
 from helpers.video_transcription import is_http_url, start_transcription_job
+from helpers.process_document_batch import trigger_uploaded_document
+
+DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt")
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -192,12 +195,14 @@ def stage_data_sources(event, body, connection):
     - type = "website"
     - type = "csv"
     - type = "markdown"
+    - type = "video"
+    - type = "document"
     """
     source_type = body.get("type")
     created_by = admin_email_from_request(event, body)
 
-    if source_type not in {"website", "csv", "markdown", "video"}:
-        return _response(event, 400, {"error": "type must be one of: website, csv, markdown, video"})
+    if source_type not in {"website", "csv", "markdown", "video", "document"}:
+        return _response(event, 400, {"error": "type must be one of: website, csv, markdown, video, document"})
 
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})
@@ -371,6 +376,86 @@ def stage_data_sources(event, body, connection):
                     "staged_data_source_ids": [data_source_id],
                     "pending_ingestion_run_ids": [ingestion_run_id],
                     "transcribe_job_name": transcribe_info["transcribe_job_name"],
+                },
+            )
+
+        if source_type == "document":
+            file_name = body.get("document_file_name")
+            s3_bucket = body.get("document_s3_bucket")
+            s3_key = body.get("document_s3_key")
+            display_name = (body.get("name") or file_name or "").strip()
+
+            if not file_name or not s3_bucket or not s3_key:
+                return _response(event, 400, {"error": "Missing document file details"})
+            if not file_name.lower().endswith(DOCUMENT_EXTENSIONS):
+                return _response(
+                    event,
+                    400,
+                    {"error": "document_file_name must end with .pdf, .docx, or .txt"},
+                )
+
+            try:
+                _assert_s3_object_exists(s3_bucket, s3_key)
+            except Exception as e:
+                logger.error("Uploaded document not found in S3: %s", e, exc_info=True)
+                return _response(event, 400, {"error": "Uploaded document does not exist in S3"})
+
+            existing_id = _existing_file_row_id(connection, s3_bucket=s3_bucket, s3_key=s3_key)
+            if existing_id:
+                return _response(
+                    event,
+                    409,
+                    {
+                        "error": "Document file already exists in data_sources",
+                        "existing_data_source_id": existing_id,
+                        "file_name": file_name,
+                    },
+                )
+
+            data_source_metadata = {
+                "source": "staged_document",
+                "action": "processing",
+                "s3_bucket": s3_bucket,
+                "s3_key": s3_key,
+                "document_file_name": file_name,
+            }
+
+            data_source_id = _insert_data_source_row(
+                connection,
+                name=display_name,
+                data_source_type="document",
+                created_by_user_id=created_by_user_id,
+                metadata=data_source_metadata,
+            )
+
+            ingestion_run_id = _insert_ingestion_run_row(
+                connection,
+                data_source_row_id=data_source_id,
+                status="pending",
+                metadata={
+                    "source": "staged_document",
+                    "action": "awaiting_embedding",
+                },
+            )
+
+            connection.commit()
+
+            trigger_result = trigger_uploaded_document(connection, ingestion_run_id)
+
+            return _response(
+                event,
+                200,
+                {
+                    "message": (
+                        "Document uploaded. Embedding has started."
+                        if trigger_result.get("started")
+                        else "Document staged, but embedding could not be started automatically. Use Sync to retry."
+                    ),
+                    "action": "staged_document_embedding",
+                    "type": "document",
+                    "created_by": created_by,
+                    "staged_data_source_ids": [data_source_id],
+                    "pending_ingestion_run_ids": [ingestion_run_id],
                 },
             )
 

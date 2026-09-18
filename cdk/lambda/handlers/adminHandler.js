@@ -229,8 +229,6 @@ exports.handler = async (event) => {
           "detective_phase_prompt",
           "suggestion_phase_prompt",
           "welcome_message",
-          "partial_hallucination_warning",
-          "full_hallucination_warning",
         ]);
 
         // Validate system_message_type
@@ -413,8 +411,6 @@ exports.handler = async (event) => {
           "detective_phase_prompt",
           "suggestion_phase_prompt",
           "welcome_message",
-          "partial_hallucination_warning",
-          "full_hallucination_warning",
         ]);
 
         // Validate path params
@@ -558,8 +554,6 @@ exports.handler = async (event) => {
           "detective_phase_prompt",
           "suggestion_phase_prompt",
           "welcome_message",
-          "partial_hallucination_warning",
-          "full_hallucination_warning",
         ]);
 
         // Validate path params

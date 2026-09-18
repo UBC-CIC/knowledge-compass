@@ -1,8 +1,8 @@
 """
 process_document_batch.py
 
-pgvector ingestion path for CSV/Markdown documents (the counterpart to
-process_crawler_batch.py, which only handles website/video).
+pgvector ingestion path for CSV/Markdown/single-document uploads (the
+counterpart to process_crawler_batch.py, which only handles website/video).
 
 API Gateway enforces a hard 29s integration timeout, but chunking + embedding
 a document can take much longer than that, so this module splits into two
@@ -10,16 +10,21 @@ halves:
 
 - trigger_document_batch(): called synchronously from start_ingestion_job.py
   (inside the API-Gateway-fronted request). It only marks the queued
-  csv/markdown/json runs 'running' and fires an asynchronous ("Event")
-  self-invocation of this same Lambda — both fast, well under 29s.
+  csv/markdown/json/document runs 'running' and fires an asynchronous
+  ("Event") self-invocation of this same Lambda — both fast, well under 29s.
+- trigger_uploaded_document(): the single-document counterpart, called
+  synchronously from stage_data_sources.py right after a document is staged,
+  so embedding starts immediately without an admin having to click Sync
+  (mirrors how video auto-starts transcription).
 - process_document_batch(): the actual worker. It runs OUTSIDE the API
   Gateway request lifecycle (invoked via the "task": "process_document_batch"
   branch in main.py), so it can take as long as the Lambda's configured
   timeout allows.
 
 State machine reused unchanged: stage_data_sources -> 'pending';
-start_ingestion_job promotes -> 'queued'; trigger_document_batch marks ->
-'running'; process_document_batch marks -> 'completed' | 'failed'.
+start_ingestion_job / trigger_uploaded_document promote/mark -> 'running'
+(via 'queued' for the multi-file sync path); process_document_batch marks ->
+'completed' | 'failed'.
 
 CSV/Markdown files have no enforced content schema (see
 Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — they are chunked as plain text:
@@ -27,6 +32,9 @@ Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — they are chunked as plain text:
   chunks with sentence-boundary overlap (mirrors the website crawler).
 - CSV: parsed with csv.DictReader (schema-agnostic), rows rendered as
   "column: value" lines and grouped into ~650-word chunks.
+- Document (PDF/DOCX/TXT): text is extracted (pypdf / python-docx / plain
+  decode) and split into ~650-word chunks with sentence-boundary overlap,
+  same as markdown but with no heading structure to key off of.
 
 The paired `{file}.metadata.json` sidecar (Bedrock KB convention) has no
 content of its own to embed; its own data_sources row is marked 'completed'
@@ -44,6 +52,8 @@ import os
 import re
 
 import boto3
+from docx import Document as DocxDocument
+from pypdf import PdfReader
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -188,6 +198,50 @@ def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
     return chunks
 
 
+def _extract_pdf_text(raw_bytes: bytes) -> str:
+    reader = PdfReader(io.BytesIO(raw_bytes))
+    return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _extract_docx_text(raw_bytes: bytes) -> str:
+    doc = DocxDocument(io.BytesIO(raw_bytes))
+    return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _extract_txt_text(raw_bytes: bytes) -> str:
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def _extract_document_text(file_name: str, raw_bytes: bytes) -> str:
+    lower_name = (file_name or "").lower()
+    if lower_name.endswith(".pdf"):
+        return _extract_pdf_text(raw_bytes)
+    if lower_name.endswith(".docx"):
+        return _extract_docx_text(raw_bytes)
+    if lower_name.endswith(".txt"):
+        return _extract_txt_text(raw_bytes)
+    raise RuntimeError(f"Unsupported document file type: {file_name}")
+
+
+def _chunk_document_text(text: str, doc_name: str, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
+    chunks = []
+    idx = 0
+    for body, part_suffix in _split_long(text, max_words, overlap_sentences=2):
+        if len(body.split()) < _MIN_CHUNK_WORDS:
+            continue
+        label = f"{doc_name}{part_suffix}"
+        chunks.append({
+            "heading_path": label,
+            "chunk_index": idx,
+            "text": f"{label}\n\n{body}",
+            "body": body,
+            "word_count": len(body.split()),
+            "content_hash": hashlib.sha256(body.strip().encode()).hexdigest()[:16],
+        })
+        idx += 1
+    return chunks
+
+
 # ── Embeddings ────────────────────────────────────────────────────────────────
 
 def _embed_texts(texts: list) -> list:
@@ -210,7 +264,7 @@ def _embed_texts(texts: list) -> list:
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _latest_queued_document_runs(connection) -> list:
-    """Latest 'queued' run per data source, for csv/markdown/json types."""
+    """Latest 'queued' run per data source, for csv/markdown/json/document types."""
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -228,7 +282,7 @@ def _latest_queued_document_runs(connection) -> list:
             JOIN data_sources ds ON ds.id = lr.data_source_id
             WHERE lr.rn = 1
               AND lr.status = 'queued'::ingestion_status
-              AND ds.type = ANY(ARRAY['csv', 'markdown', 'json']::data_source_type[])
+              AND ds.type = ANY(ARRAY['csv', 'markdown', 'json', 'document']::data_source_type[])
             ORDER BY ds.created_at ASC, ds.id ASC
             """
         )
@@ -247,7 +301,7 @@ def _running_document_runs(connection) -> list:
             FROM ingestion_runs ir
             JOIN data_sources ds ON ds.id = ir.data_source_id
             WHERE ir.status = 'running'::ingestion_status
-              AND ds.type = ANY(ARRAY['csv', 'markdown', 'json']::data_source_type[])
+              AND ds.type = ANY(ARRAY['csv', 'markdown', 'json', 'document']::data_source_type[])
               AND ir.metadata->>'backend' = 'pgvector_document'
             ORDER BY ds.created_at ASC, ds.id ASC
             """
@@ -423,6 +477,35 @@ def trigger_document_batch(event, connection, sync_session_id: str) -> dict:
     return {"started": True, "queued_count": len(queued), "run_ids": run_ids, "sync_session_id": sync_session_id}
 
 
+def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
+    """
+    Immediately mark a single freshly-staged document ingestion_runs row
+    'running' and fire the async chunk+embed worker, so a single-document
+    upload starts embedding right away instead of waiting for an admin to
+    click Sync (mirrors how video auto-starts transcription).
+    """
+    if not LAMBDA_FUNCTION_NAME:
+        logger.error("LAMBDA_FUNCTION_NAME not set; cannot start document ingestion")
+        return {"started": False, "reason": "document ingestion is not configured (missing LAMBDA_FUNCTION_NAME)"}
+
+    _mark_runs_running(connection, [ingestion_run_id], sync_session_id="single_upload")
+    connection.commit()
+
+    try:
+        lambda_client.invoke(
+            FunctionName=LAMBDA_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=json.dumps({"task": "process_document_batch"}).encode("utf-8"),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to invoke document batch worker: %s", e, exc_info=True)
+        _fail_runs(connection, [ingestion_run_id], f"Failed to start document ingestion: {e}")
+        connection.commit()
+        return {"started": False, "reason": "failed to invoke document batch worker"}
+
+    return {"started": True, "run_id": ingestion_run_id}
+
+
 def process_document_batch(event, connection) -> dict:
     """
     Worker: chunk + embed every csv/markdown run this module marked 'running',
@@ -462,16 +545,28 @@ def process_document_batch(event, connection) -> dict:
 
             if ds_type == "markdown":
                 chunks = _chunk_markdown(raw_bytes.decode("utf-8", errors="replace"))
+            elif ds_type == "document":
+                text = _extract_document_text(meta.get("document_file_name") or run["name"], raw_bytes)
+                chunks = _chunk_document_text(text, run["name"])
+                if not chunks:
+                    raise RuntimeError(
+                        "No extractable text found in this document. Scanned/image-only PDFs are not supported."
+                    )
             else:  # csv
                 chunks = _chunk_csv(raw_bytes)
 
-            companion_metadata = _load_companion_metadata(meta)
             source_url = f"s3://{bucket}/{key}"
+            if ds_type == "document":
+                source_metadata = {"document_file_name": meta.get("document_file_name")}
+            else:
+                companion_metadata = _load_companion_metadata(meta)
+                source_metadata = {"document_metadata": companion_metadata} if companion_metadata else {}
+
             source_id = _upsert_source(
                 connection,
                 url=source_url,
                 name=run["name"],
-                metadata={"document_metadata": companion_metadata} if companion_metadata else {},
+                metadata=source_metadata,
             )
 
             existing_hashes = _existing_chunk_hashes(connection, source_id)
