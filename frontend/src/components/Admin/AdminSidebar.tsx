@@ -1,8 +1,6 @@
 type AdminSidebarProps = {
-  activeView: "dashboard" | "analytics" | "system-settings" | "chat-history";
-  onViewChange: (
-    view: "dashboard" | "analytics" | "system-settings" | "chat-history"
-  ) => void;
+  activeView: "dashboard" | "analytics" | "system-settings";
+  onViewChange: (view: "dashboard" | "analytics" | "system-settings") => void;
 };
 
 const NAV_ITEMS: Array<{
@@ -13,7 +11,6 @@ const NAV_ITEMS: Array<{
   { key: "dashboard", label: "Overview", hint: "Usage and data sources" },
   { key: "analytics", label: "Analytics", hint: "Trends over time" },
   { key: "system-settings", label: "Assistant settings", hint: "Limits and wording" },
-  { key: "chat-history", label: "Conversation review", hint: "Read transcripts" },
 ];
 
 export default function AdminSidebar({

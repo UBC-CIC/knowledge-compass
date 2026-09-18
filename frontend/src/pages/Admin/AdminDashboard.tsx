@@ -7,13 +7,12 @@ import AdminSidebar from "@/components/Admin/AdminSidebar";
 import DataSourceManagement from "@/components/Admin/DataSourceManagement";
 import Analytics from "@/components/Admin/Analytics";
 import SystemSettings from "@/components/Admin/SystemSettings";
-import ChatHistory from "@/components/Admin/ChatHistory";
 import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeView, setActiveView] = useState<
-    "dashboard" | "analytics" | "system-settings" | "chat-history"
+    "dashboard" | "analytics" | "system-settings"
   >("dashboard");
   const [adminEmail, setAdminEmail] = useState("Administrator");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -80,7 +79,6 @@ export default function AdminDashboard() {
                 ["dashboard", "Overview"],
                 ["analytics", "Analytics"],
                 ["system-settings", "Settings"],
-                ["chat-history", "Review"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -100,7 +98,6 @@ export default function AdminDashboard() {
           {activeView === "dashboard" && <DataSourceManagement />}
           {activeView === "analytics" && <Analytics />}
           {activeView === "system-settings" && <SystemSettings />}
-          {activeView === "chat-history" && <ChatHistory />}
         </main>
       </div>
     </div>
