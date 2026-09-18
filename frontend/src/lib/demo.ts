@@ -75,12 +75,28 @@ type ProgressMessage = {
   text?: string;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
   showGuidance?: boolean;
+  isTyping?: boolean;
 };
 
 export function getUserAnswers(messages: ProgressMessage[]): string[] {
-  return messages
-    .filter((m) => m.sender === "user" && typeof m.text === "string" && m.text.trim())
-    .map((m) => m.text!.trim());
+  const answers: string[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.sender !== "user" || typeof m.text !== "string" || !m.text.trim()) {
+      continue;
+    }
+    // A user message only counts as an answered question once the bot has
+    // actually finished replying to it — otherwise the progress bar jumps
+    // ahead of what's on screen (e.g. to "Question 2" while the bot is still
+    // typing its response to question 1), which reads as skipping a step.
+    const next = messages[i + 1];
+    const answered = Boolean(next && next.sender === "bot" && !next.isTyping);
+    if (!answered) {
+      break;
+    }
+    answers.push(m.text.trim());
+  }
+  return answers;
 }
 
 export function resolveConversationFacts(
