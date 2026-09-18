@@ -1238,19 +1238,13 @@ export class ApiGatewayStack extends cdk.Stack {
       functionName: `${id}-lambdaKnowledgeBase`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "main.handler",
-      // Bundled (Docker) so pypdf/python-docx (helpers/process_document_batch.py's
-      // PDF/DOCX text extraction) are installed at synth/deploy time; boto3 is
-      // provided by the runtime and psycopg2 comes from psycopgLayer, so only the
-      // document-parsing libraries need to be pip-installed here.
-      code: lambda.Code.fromAsset("lambda/knowledgeBase", {
-        bundling: {
-          image: lambda.Runtime.PYTHON_3_12.bundlingImage,
-          command: [
-            "bash", "-c",
-            "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
-          ],
-        },
-      }),
+      // pypdf/python-docx (helpers/process_document_batch.py's PDF/DOCX text
+      // extraction) are vendored directly into lambda/knowledgeBase/ as prebuilt
+      // manylinux wheels (see requirements.txt) rather than pip-installed via
+      // Docker bundling, so deploying this stack has no Docker dependency —
+      // consistent with the rest of this zip-asset Lambda (boto3 from the
+      // runtime, psycopg2 from psycopgLayer).
+      code: lambda.Code.fromAsset("lambda/knowledgeBase"),
       // 600s (vs. the previous 300s): the pgvector document-ingestion worker
       // (helpers/process_document_batch.py) runs via an async self-invocation,
       // not behind API Gateway's 29s limit, so it needs headroom to chunk +

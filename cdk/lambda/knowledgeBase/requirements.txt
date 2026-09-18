@@ -1,2 +1,17 @@
-pypdf>=4.0.0
-python-docx>=1.1.0
+# These are NOT installed at deploy time — lambdaKnowledgeBase is a plain zip
+# asset (see cdk/lib/api-stack.ts) with no Docker bundling step. Instead, the
+# packages below are vendored directly into this directory (pypdf/, docx/,
+# lxml/, typing_extensions.py, and matching *.dist-info folders) as prebuilt
+# manylinux wheels, so deploying KC-Api never requires Docker.
+#
+# To refresh after bumping a version here, re-run from the repo root (works on
+# any OS — these are precompiled wheels, nothing is locally compiled):
+#
+#   pip install --platform manylinux2014_x86_64 --implementation cp \
+#     --python-version 3.12 --abi cp312 --only-binary=:all: --no-compile \
+#     --target cdk/lambda/knowledgeBase <package>==<version>
+#
+# then commit the resulting package dirs + *.dist-info folders (and delete the
+# old version's dist-info if the version changed).
+pypdf==6.19.0
+python-docx==1.2.0
