@@ -588,12 +588,6 @@ export default function AIChatPage({
       setStreamingMessageId(botMsg.id);
       setIsStreaming(true);
       setMessage("");
-      demoFactsRef.current = facts;
-      setConversationFacts(facts);
-
-      if (asked === 0 && facts.situation) {
-        updateChatSessionName(sessionId, facts.situation.slice(0, 80));
-      }
 
       window.setTimeout(() => {
         const finished: Message = {
@@ -605,6 +599,17 @@ export default function AIChatPage({
           phase: reply.phase,
           isTyping: false,
         };
+
+        // Advance facts/progress here, in step with the bot's next question
+        // actually appearing — advancing them at send time (before the bot's
+        // typing delay finishes) made the progress bar jump ahead of what's
+        // on screen, looking like it skipped a question.
+        demoFactsRef.current = facts;
+        setConversationFacts(facts);
+
+        if (asked === 0 && facts.situation) {
+          updateChatSessionName(sessionId, facts.situation.slice(0, 80));
+        }
 
         setMessages((prev) => {
           const next = prev.map((msg) => (msg.id === botMsg.id ? finished : msg));
