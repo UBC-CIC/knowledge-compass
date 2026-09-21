@@ -383,6 +383,7 @@ def stage_data_sources(event, body, connection):
             file_name = body.get("document_file_name")
             s3_bucket = body.get("document_s3_bucket")
             s3_key = body.get("document_s3_key")
+            document_url = (body.get("document_url") or "").strip()
             display_name = (body.get("name") or file_name or "").strip()
 
             if not file_name or not s3_bucket or not s3_key:
@@ -392,6 +393,12 @@ def stage_data_sources(event, body, connection):
                     event,
                     400,
                     {"error": "document_file_name must end with .pdf, .docx, or .txt"},
+                )
+            if document_url and not is_http_url(document_url):
+                return _response(
+                    event,
+                    400,
+                    {"error": "document_url must be a public http(s) URL used for citations"},
                 )
 
             try:
@@ -418,6 +425,7 @@ def stage_data_sources(event, body, connection):
                 "s3_bucket": s3_bucket,
                 "s3_key": s3_key,
                 "document_file_name": file_name,
+                "document_url": document_url,
             }
 
             data_source_id = _insert_data_source_row(

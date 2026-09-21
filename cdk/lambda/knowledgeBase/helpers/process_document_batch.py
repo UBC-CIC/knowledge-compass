@@ -557,6 +557,9 @@ def process_document_batch(event, connection) -> dict:
 
             source_url = f"s3://{bucket}/{key}"
             if ds_type == "document":
+                document_url = (meta.get("document_url") or "").strip()
+                if document_url:
+                    source_url = document_url
                 source_metadata = {"document_file_name": meta.get("document_file_name")}
             else:
                 companion_metadata = _load_companion_metadata(meta)

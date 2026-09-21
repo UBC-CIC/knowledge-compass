@@ -349,6 +349,7 @@ export default function DataSourceManagement() {
   const [videoTitle, setVideoTitle] = useState("");
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentTitle, setDocumentTitle] = useState("");
+  const [documentUrl, setDocumentUrl] = useState("");
 
   // Zip upload state
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -884,6 +885,7 @@ export default function DataSourceManagement() {
     setVideoTitle("");
     setDocumentFile(null);
     setDocumentTitle("");
+    setDocumentUrl("");
   };
 
   const handleZipSelect = async (file: File) => {
@@ -1345,6 +1347,13 @@ export default function DataSourceManagement() {
       setUploadStatus({ type: "error", message: "Choose a PDF, DOCX, or TXT file." });
       return;
     }
+    if (documentUrl.trim() && !/^https?:\/\//i.test(documentUrl.trim())) {
+      setUploadStatus({
+        type: "error",
+        message: "Document link must start with http:// or https://.",
+      });
+      return;
+    }
     if (!adminEmail) {
       setUploadStatus({
         type: "error",
@@ -1374,6 +1383,7 @@ export default function DataSourceManagement() {
             document_file_name: documentFile.name,
             document_s3_bucket: upload.bucket,
             document_s3_key: upload.key,
+            document_url: documentUrl.trim(),
             name: documentTitle.trim() || documentFile.name,
             created_by: adminEmail,
           }),
@@ -2127,6 +2137,20 @@ export default function DataSourceManagement() {
                         onChange={(e) => setDocumentTitle(e.target.value)}
                         placeholder="Family rights handbook"
                       />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-900" htmlFor="document-url">
+                        Link (optional)
+                      </label>
+                      <Input
+                        id="document-url"
+                        value={documentUrl}
+                        onChange={(e) => setDocumentUrl(e.target.value)}
+                        placeholder="https://example.com/handbook.pdf"
+                      />
+                      <p className="text-xs text-gray-500">
+                        Used in citations. If left blank, this document won't have a clickable source link.
+                      </p>
                     </div>
                     {uploadStatus.message && uploadTab === "document" ? (
                       <div

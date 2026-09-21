@@ -427,6 +427,9 @@ paths:
                 document_s3_key:
                   type: string
                   example: uploads/document/1712345678_family-rights-handbook.pdf
+                document_url:
+                  type: string
+                  example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
           description: Data source(s) staged successfully
