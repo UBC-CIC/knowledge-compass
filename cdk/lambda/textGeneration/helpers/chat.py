@@ -4,7 +4,8 @@ import re
 from typing import Dict, Any, Optional, List, Tuple
 
 from helpers.crud import (
-    fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session
+    fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
+    get_exchange_count, get_session_title, update_session_title
 )
 from helpers.logic import get_current_prompt
 from helpers.bedrock import format_context_for_prompt
@@ -73,6 +74,54 @@ Output ONLY the search query. Do not include explanations, preambles, or quotes.
     except Exception as e:
         logger.warning(f"Query rewrite failed, using raw query: {e}")
         return raw_query
+
+def _generate_session_title(
+    query: str,
+    answer_text: str,
+    llm_region: str,
+    haiku_model_arn: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+) -> Optional[str]:
+    """
+    Uses a fast, low-cost LLM call to generate a short, descriptive title for a
+    chat session from its first exchange. Falls back to None on any error.
+    """
+    title_system_prompt = """
+<instructions>
+You write short titles for a chat sidebar, similar to how ChatGPT titles conversations.
+Read the first exchange between a family and a support assistant about inclusive
+education and school accommodation issues in Canada, then produce a concise,
+specific title (3-6 words) that captures the family's situation or question,
+for example "Sent Home Early Repeatedly" or "Requesting an EA Support Plan".
+Do not use quotes, a trailing period, or generic titles like "Chat" or "New Conversation".
+Output ONLY the title text.
+</instructions>
+"""
+    user_message = f"""
+<user_message>
+{query}
+</user_message>
+
+<assistant_response>
+{answer_text[:1000]}
+</assistant_response>
+"""
+    try:
+        bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
+        response = bedrock_runtime.converse(
+            modelId=haiku_model_arn,
+            messages=[{"role": "user", "content": [{"text": user_message}]}],
+            system=[{"text": title_system_prompt}],
+            inferenceConfig={
+                "maxTokens": 20,
+                "temperature": 0.0
+            }
+        )
+        title = response["output"]["message"]["content"][0]["text"].strip()
+        title = title.strip("\"' ").strip()
+        return title[:80] if title else None
+    except Exception as e:
+        logger.warning(f"Session title generation failed: {e}")
+        return None
 
 def _prepare_conversation(
     query: str,
@@ -433,6 +482,20 @@ def get_response(
         warning_text
     )
 
+    generated_title = None
+    if final_answer_text and not final_answer_text.startswith("I encountered an error"):
+        try:
+            current_title = get_session_title(db_connection, chat_session_id)
+            is_untitled = current_title is None or current_title.strip() in ("", "New Session")
+            if is_untitled and get_exchange_count(chat_session_id, db_connection) == 1:
+                generated_title = _generate_session_title(query, final_answer_text, llm_region)
+                if generated_title:
+                    update_session_title(db_connection, chat_session_id, generated_title)
+                    db_connection.commit()
+        except Exception as e:
+            db_connection.rollback()
+            logger.warning(f"Failed to auto-title session: {e}")
+
     return {
         "response": final_answer_text,
         "raw_response": answer_text,
@@ -443,4 +506,5 @@ def get_response(
         "warning": warning_text,
         "intervention": intervention_result,
         "phase": phase_name,
+        "session_name": generated_title,
     }

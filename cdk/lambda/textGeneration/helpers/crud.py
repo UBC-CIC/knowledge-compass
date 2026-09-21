@@ -121,6 +121,23 @@ def update_last_active_session(db_connection, chat_session_id: str) -> None:
     except Exception as e:
         logger.error(f"update_last_active_session failed: {e}")
 
+def get_session_title(db_connection, chat_session_id: str) -> Optional[str]:
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute("SELECT title FROM chat_sessions WHERE id = %s", (chat_session_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        logger.error(f"get_session_title failed: {e}")
+        return None
+
+def update_session_title(db_connection, chat_session_id: str, title: str) -> None:
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "UPDATE chat_sessions SET title = %s WHERE id = %s",
+            (title, chat_session_id)
+        )
+
 def fetch_system_config(db_connection) -> Dict[str, Any]:
     """
     Fetches system_messages (latest active version per type) and system_settings.

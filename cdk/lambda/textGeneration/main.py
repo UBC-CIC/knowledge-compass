@@ -130,6 +130,7 @@ def handler(event, context=None):
             "chat_session_id": response_data.get("sessionId"),
             "token_usage": response_data.get("token_usage", {}),
             "phase": response_data.get("phase"),
+            "session_name": response_data.get("session_name"),
         }
         
         status_code = 200
@@ -164,6 +165,7 @@ def handler(event, context=None):
                         'chat_session_id': response_body['chat_session_id'],
                         'token_usage': response_body.get('token_usage', {}),
                         'phase': response_body.get('phase'),
+                        'session_name': response_body.get('session_name'),
                     }
                     apigw_management.post_to_connection(
                         ConnectionId=connection_id,
