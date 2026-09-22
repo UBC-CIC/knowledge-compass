@@ -2,7 +2,6 @@ import * as cdk from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as appsync from "aws-cdk-lib/aws-appsync";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
@@ -47,12 +46,10 @@ export class ApiGatewayStack extends cdk.Stack {
   private readonly layerList: { [key: string]: lambda.ILayerVersion };
   public readonly stageARN_APIGW: string;
   public readonly apiGW_basedURL: string;
-  private eventApi: appsync.GraphqlApi;
   public readonly secret: secretsmanager.ISecret;
   public readonly allowedOriginsParamName: string;
   public getEndpointUrl = () => this.api.url;
   public getUserPoolId = () => this.userPool.userPoolId;
-  public getEventApiUrl = () => this.eventApi.graphqlUrl;
   public getUserPoolClientId = () => this.appClient.userPoolClientId;
   public getIdentityPoolId = () => this.identityPool.ref;
   public addLayer = (name: string, layer: lambda.ILayerVersion) =>
@@ -1208,20 +1205,11 @@ export class ApiGatewayStack extends cdk.Stack {
         "bedrock:ConverseStream",
       ],
       resources: [
-        `arn:aws:bedrock:${this.region}::foundation-model/meta.llama3-70b-instruct-v1:0`,
         `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-english-v3`,
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
-        `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-v4:0`,
-        // Mistral Large
-        `arn:aws:bedrock:${this.region}::foundation-model/mistral.mistral-large-2402-v1:0`,
-        // Claude Sonnet 3 (Direct Foundation Models)
-        `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0`,
         // Claude Sonnet 4.6 (Converse currently resolves this model in us-west-2)
         `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6`,
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6`,
-        // Claude Sonnet 4.5 (Direct Foundation Models)
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0`,
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0`,
         // Claude Haiku 4.5 (Converse currently resolves this model in us-west-2)
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
         `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
