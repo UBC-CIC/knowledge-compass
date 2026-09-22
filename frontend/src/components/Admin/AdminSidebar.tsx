@@ -44,13 +44,6 @@ export default function AdminSidebar({
           );
         })}
       </div>
-
-      <div className="mt-auto rounded-[11px] border border-foreground/10 bg-muted px-3 py-3.5">
-        <div className="text-[12.5px] font-bold">Knowledge base</div>
-        <div className="mt-1 text-xs leading-snug text-foreground/80">
-          Staged items only go live after a sync.
-        </div>
-      </div>
     </nav>
   );
 }
