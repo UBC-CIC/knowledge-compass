@@ -8,7 +8,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(isDemoMode ? DEMO_USER_ID : null);
   const [isLoading, setIsLoading] = useState(!isDemoMode);
   const [error, setError] = useState<Error | null>(null);
-  const LOCAL_KEY = "specEx_user_session";
+  const LOCAL_KEY = "knowledgeCompass_user_session";
 
   useEffect(() => {
     if (isDemoMode) {

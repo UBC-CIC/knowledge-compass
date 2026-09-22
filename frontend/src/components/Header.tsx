@@ -10,7 +10,7 @@ import { Menu, X } from "lucide-react";
 import { useSidebar } from "@/providers/sidebar";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useUser } from "@/providers/user";
-import logoImage from "@/assets/SpecEx-logo.png";
+import logoImage from "@/assets/app-logo.png";
 
 type Mode = "student" | "admin";
 type UserRole = "student" | "admin" | null;
