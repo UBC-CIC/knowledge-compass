@@ -64,6 +64,9 @@ except ImportError:
 REGION = db_config.get_region()
 EMBED_MODEL_ID = db_config.get_embed_model_id()
 EMBED_BATCH_SIZE = db_config.get_embed_batch_size()  # Cohere API limit is 96 per call
+# ~300 words of web text (~6 chars/word) plus the heading label stays under the
+# 2048-char Cohere input cap in embed_texts, so the whole chunk is embedded.
+MAX_WORDS_PER_CHUNK = 300
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -520,7 +523,7 @@ def extract_content(html: str) -> dict:
 _MIN_CHUNK_WORDS = 30
 
 
-def chunk_content(xml_str, source_url: str, max_words: int = 650,
+def chunk_content(xml_str, source_url: str, max_words: int = MAX_WORDS_PER_CHUNK,
                   use_semantic: bool = False, semantic_threshold: float = 0.6) -> list:
     if not xml_str:
         return []
@@ -750,7 +753,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Crawl + chunk + embed + write to pgvector DB")
     parser.add_argument("seed_url", nargs="?", default=env_seed, help="Starting URL (or SEED_URL env)")
     parser.add_argument("--max-pages", type=int, default=int(env_max_pages) if env_max_pages else 50)
-    parser.add_argument("--max-words", type=int, default=650, help="Max words per chunk before splitting")
+    parser.add_argument("--max-words", type=int, default=MAX_WORDS_PER_CHUNK, help="Max words per chunk before splitting")
     # /tmp: the ECS image runs as a non-root user with a read-only $CWD (/app),
     # so a relative default here would crash every containerized run.
     parser.add_argument("--output",   default="/tmp/crawl_output.json")

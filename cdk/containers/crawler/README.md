@@ -67,7 +67,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 | Flag | Default | Description |
 |---|---|---|
 | `--max-pages` | 50 | Maximum pages to crawl (BFS order) |
-| `--max-words` | 650 | Max words per chunk before splitting |
+| `--max-words` | 300 | Max words per chunk before splitting |
 | `--write-db` | false | Embed and write to DB |
 | `--semantic` | false | Use semantic chunking (embeds sentences to detect topic boundaries) |
 | `--semantic-threshold` | 0.6 | Cosine similarity threshold for topic boundary detection |
