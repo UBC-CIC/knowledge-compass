@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
   title: KC API
-  description: Specialization Explorer API
+  description: Knowledge Compass API
   version: 1.0.0
 tags:
   - name: User
@@ -926,17 +926,15 @@ paths:
                         type: string
                         description: System message type
                         enum:
-                          - disclaimer
-                          - guardrails
                           - system_role
-                          - system_checklist
-                          - system_instructions
-                          - initial_prompt
+                          - guardrails
+                          - language_guidelines
                           - detective_phase_prompt
                           - suggestion_phase_prompt
+                          - output_format_detective
+                          - output_format_suggestion
                           - welcome_message
-                          - partial_hallucination_warning
-                          - full_hallucination_warning
+                          - disclaimer
                       content:
                         type: string
                         description: Message content
@@ -1028,17 +1026,15 @@ paths:
           schema:
             type: string
             enum:
-              - disclaimer
-              - guardrails
               - system_role
-              - system_checklist
-              - system_instructions
-              - initial_prompt
+              - guardrails
+              - language_guidelines
               - detective_phase_prompt
               - suggestion_phase_prompt
+              - output_format_detective
+              - output_format_suggestion
               - welcome_message
-              - partial_hallucination_warning
-              - full_hallucination_warning
+              - disclaimer
       requestBody:
         required: true
         content:
@@ -1139,17 +1135,15 @@ paths:
           schema:
             type: string
             enum:
-              - disclaimer
-              - guardrails
               - system_role
-              - system_checklist
-              - system_instructions
-              - initial_prompt
+              - guardrails
+              - language_guidelines
               - detective_phase_prompt
               - suggestion_phase_prompt
+              - output_format_detective
+              - output_format_suggestion
               - welcome_message
-              - partial_hallucination_warning
-              - full_hallucination_warning
+              - disclaimer
         - name: version_id
           in: path
           required: true
@@ -1198,17 +1192,15 @@ paths:
                       type:
                         type: string
                         enum:
-                          - disclaimer
-                          - guardrails
                           - system_role
-                          - system_checklist
-                          - system_instructions
-                          - initial_prompt
+                          - guardrails
+                          - language_guidelines
                           - detective_phase_prompt
                           - suggestion_phase_prompt
+                          - output_format_detective
+                          - output_format_suggestion
                           - welcome_message
-                          - partial_hallucination_warning
-                          - full_hallucination_warning
+                          - disclaimer
                       version:
                         type: integer
                         minimum: 1
@@ -1254,17 +1246,15 @@ paths:
           schema:
             type: string
             enum:
-              - disclaimer
-              - guardrails
               - system_role
-              - system_checklist
-              - system_instructions
-              - initial_prompt
+              - guardrails
+              - language_guidelines
               - detective_phase_prompt
               - suggestion_phase_prompt
+              - output_format_detective
+              - output_format_suggestion
               - welcome_message
-              - partial_hallucination_warning
-              - full_hallucination_warning
+              - disclaimer
         - name: version_id
           in: path
           required: true
@@ -1325,15 +1315,15 @@ paths:
                       type:
                         type: string
                         enum:
-                          - disclaimer
-                          - guardrails
                           - system_role
-                          - system_checklist
-                          - system_instructions
-                          - initial_prompt
+                          - guardrails
+                          - language_guidelines
                           - detective_phase_prompt
                           - suggestion_phase_prompt
+                          - output_format_detective
+                          - output_format_suggestion
                           - welcome_message
+                          - disclaimer
                       content:
                         type: string
                       character_limit:
@@ -1485,13 +1475,6 @@ paths:
             type: string
             enum:
               - disclaimer
-              - guardrails
-              - system_role
-              - system_checklist
-              - system_instructions
-              - initial_prompt
-              - detective_phase_prompt
-              - suggestion_phase_prompt
               - welcome_message
       responses:
         "200":

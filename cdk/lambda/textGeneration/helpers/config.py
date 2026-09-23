@@ -120,8 +120,6 @@ Once you send that, wait 5–7 business days. If you don't hear back, we can tal
 <cited_indices>[1, 2]</cited_indices>
 """.strip()
 
-INITIAL_PROMPT = "Introduce yourself as the Inclusion Canada education guide and invite the family to share what is happening with their child's schooling." # Fallback
-
 WELCOME_MESSAGE = """
 Hi, I'm here to help you navigate your child's education. Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone. Tell me what's been happening. What's going on with your child's schooling right now?
 """.strip()
@@ -139,7 +137,7 @@ def load_config(db_connection):
     global _CONFIG_LOADED
     global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_AI_MESSAGE, TEMPERATURE, TOP_P, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
     global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
-    global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, INITIAL_PROMPT, WELCOME_MESSAGE
+    global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, WELCOME_MESSAGE
     global HAIKU_ARN, SONNET_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
 
@@ -206,7 +204,6 @@ def load_config(db_connection):
         SUGGESTION_PHASE_PROMPT = msgs.get('suggestion_phase_prompt', SUGGESTION_PHASE_PROMPT)
         OUTPUT_FORMAT_DETECTIVE = msgs.get('output_format_detective', OUTPUT_FORMAT_DETECTIVE)
         OUTPUT_FORMAT_SUGGESTION = msgs.get('output_format_suggestion', OUTPUT_FORMAT_SUGGESTION)
-        INITIAL_PROMPT = msgs.get('initial_prompt', INITIAL_PROMPT)
         WELCOME_MESSAGE = msgs.get('welcome_message', WELCOME_MESSAGE)
 
     _CONFIG_LOADED = True

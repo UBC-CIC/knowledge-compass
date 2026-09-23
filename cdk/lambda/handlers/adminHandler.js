@@ -18,6 +18,36 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 
+// Editable system_messages types. Must match the types read by
+// textGeneration/helpers/config.py plus the UI-only welcome_message/disclaimer.
+const SYSTEM_MESSAGE_TYPES = new Set([
+  "system_role",
+  "guardrails",
+  "language_guidelines",
+  "detective_phase_prompt",
+  "suggestion_phase_prompt",
+  "output_format_detective",
+  "output_format_suggestion",
+  "welcome_message",
+  "disclaimer",
+]);
+
+const UI_ONLY_SYSTEM_MESSAGE_TYPES = new Set(["welcome_message", "disclaimer"]);
+
+// Used only when a type has no existing row to inherit character_limit from.
+// Mirrors the limits seeded in migrations 002/004/010.
+const DEFAULT_CHARACTER_LIMITS = {
+  system_role: 2000,
+  guardrails: 2000,
+  language_guidelines: 6000,
+  detective_phase_prompt: 4000,
+  suggestion_phase_prompt: 6000,
+  output_format_detective: 1000,
+  output_format_suggestion: 3500,
+  welcome_message: 2000,
+  disclaimer: 700,
+};
+
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
 
@@ -219,17 +249,7 @@ exports.handler = async (event) => {
 
         const messageType = event?.pathParameters?.system_message_type;
 
-        const allowedTypes = new Set([
-          "disclaimer",
-          "guardrails",
-          "system_role",
-          "system_checklist",
-          "system_instructions",
-          "initial_prompt",
-          "detective_phase_prompt",
-          "suggestion_phase_prompt",
-          "welcome_message",
-        ]);
+        const allowedTypes = SYSTEM_MESSAGE_TYPES;
 
         // Validate system_message_type
         if (!messageType || typeof messageType !== "string" || !allowedTypes.has(messageType)) {
@@ -296,9 +316,7 @@ exports.handler = async (event) => {
             `;
 
             const defaultCharacterLimit =
-              messageType === "guardrails" || messageType === "system_instructions"
-                ? 1000
-                : 700;
+              DEFAULT_CHARACTER_LIMITS[messageType] ?? 700;
 
             const characterLimit =
               limitRows.length > 0 && typeof limitRows[0].character_limit === "number"
@@ -327,6 +345,7 @@ exports.handler = async (event) => {
                 character_limit,
                 version,
                 is_active,
+                affects_text_generation,
                 created_by,
                 created_at
               )
@@ -336,6 +355,7 @@ exports.handler = async (event) => {
                 ${characterLimit},
                 ${next_version},
                 true,
+                ${!UI_ONLY_SYSTEM_MESSAGE_TYPES.has(messageType)},
                 ${createdByUserId},
                 NOW()
               )
@@ -401,17 +421,7 @@ exports.handler = async (event) => {
         const messageType = event?.pathParameters?.system_message_type;
         const versionId = event?.pathParameters?.version_id;
 
-        const allowedTypes = new Set([
-          "disclaimer",
-          "guardrails",
-          "system_role",
-          "system_checklist",
-          "system_instructions",
-          "initial_prompt",
-          "detective_phase_prompt",
-          "suggestion_phase_prompt",
-          "welcome_message",
-        ]);
+        const allowedTypes = SYSTEM_MESSAGE_TYPES;
 
         // Validate path params
         if (!messageType || typeof messageType !== "string" || !allowedTypes.has(messageType)) {
@@ -544,17 +554,7 @@ exports.handler = async (event) => {
         const messageType = event?.pathParameters?.system_message_type;
         const versionId = event?.pathParameters?.version_id;
 
-        const allowedTypes = new Set([
-          "disclaimer",
-          "guardrails",
-          "system_role",
-          "system_checklist",
-          "system_instructions",
-          "initial_prompt",
-          "detective_phase_prompt",
-          "suggestion_phase_prompt",
-          "welcome_message",
-        ]);
+        const allowedTypes = SYSTEM_MESSAGE_TYPES;
 
         // Validate path params
         if (!messageType || typeof messageType !== "string" || !allowedTypes.has(messageType)) {

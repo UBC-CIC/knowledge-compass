@@ -28,24 +28,24 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
 export type SystemMessageType =
-  | "disclaimer"
-  | "guardrails"
   | "system_role"
-  | "system_checklist"
-  | "system_instructions"
-  | "initial_prompt"
+  | "guardrails"
+  | "language_guidelines"
   | "detective_phase_prompt"
   | "suggestion_phase_prompt"
-  | "welcome_message";
+  | "output_format_detective"
+  | "output_format_suggestion"
+  | "welcome_message"
+  | "disclaimer";
 
 export type MessagePlacement =
-  | "initial_prompt"
   | "role"
+  | "guardrails"
+  | "language_guidelines"
   | "phase_detective"
   | "phase_suggestion"
-  | "checklist"
-  | "instructions"
-  | "guardrails"
+  | "output_format_detective"
+  | "output_format_suggestion"
   | "ui_only";
 
 export type SystemMessageVersion = {
@@ -79,49 +79,57 @@ type Props = {
 
 type PromptPhase = "DETECTIVE" | "SUGGESTION";
 
+// Mirrors textGeneration/helpers/logic.py + chat.py: a static system block,
+// then the phase-specific block, then the retrieved knowledge base context.
 const STACK_ROWS: Array<{
   key: string;
-  title: string;
+  title: (selectedPhase: PromptPhase) => string;
   isActive: (placement: MessagePlacement, selectedPhase: PromptPhase) => boolean;
 }> = [
   {
-    key: "initial_prompt",
-    title: "Initial Prompt",
-    isActive: (placement) => placement === "initial_prompt",
-  },
-  {
     key: "role",
-    title: "System Role",
+    title: () => "System Role",
     isActive: (placement) => placement === "role",
   },
   {
+    key: "guardrails",
+    title: () => "Guardrails",
+    isActive: (placement) => placement === "guardrails",
+  },
+  {
+    key: "language_guidelines",
+    title: () => "Language Guidelines",
+    isActive: (placement) => placement === "language_guidelines",
+  },
+  {
     key: "phase",
-    title: "Phase Prompt",
+    title: (selectedPhase) =>
+      selectedPhase === "DETECTIVE" ? "Detective Phase Prompt" : "Suggestion Phase Prompt",
     isActive: (placement, selectedPhase) =>
       (placement === "phase_detective" && selectedPhase === "DETECTIVE") ||
       (placement === "phase_suggestion" && selectedPhase === "SUGGESTION"),
   },
   {
-    key: "checklist",
-    title: "System Checklist",
-    isActive: (placement) => placement === "checklist",
+    key: "output_format",
+    title: (selectedPhase) =>
+      selectedPhase === "DETECTIVE" ? "Detective Output Format" : "Suggestion Output Format",
+    isActive: (placement, selectedPhase) =>
+      (placement === "output_format_detective" && selectedPhase === "DETECTIVE") ||
+      (placement === "output_format_suggestion" && selectedPhase === "SUGGESTION"),
   },
   {
-    key: "instructions",
-    title: "System Instructions",
-    isActive: (placement) => placement === "instructions",
-  },
-  {
-    key: "allowed_specializations",
-    title: "Allowed Specializations",
+    key: "retrieved_context",
+    title: () => "Retrieved Knowledge Base Context",
     isActive: () => false,
   },
-  {
-    key: "guardrails",
-    title: "Guardrails",
-    isActive: (placement) => placement === "guardrails",
-  },
 ];
+
+const PHASE_ONLY_PLACEMENTS: Partial<Record<MessagePlacement, PromptPhase>> = {
+  phase_detective: "DETECTIVE",
+  output_format_detective: "DETECTIVE",
+  phase_suggestion: "SUGGESTION",
+  output_format_suggestion: "SUGGESTION",
+};
 
 function formatDate(iso?: string) {
   if (!iso) return "—";
@@ -155,14 +163,7 @@ function PlacementStack({
   return (
     <div className="space-y-2">
       {STACK_ROWS.map((row, index) => {
-        const isPhaseRow = row.key === "phase";
-        const title =
-          isPhaseRow
-            ? selectedPhase === "DETECTIVE"
-              ? "Detective Phase Prompt"
-              : "Suggestion Phase Prompt"
-            : row.title;
-
+        const title = row.title(selectedPhase);
         const active = row.isActive(placement, selectedPhase);
 
         return (
@@ -239,8 +240,9 @@ export default function SystemMessageEditor({
   const [activating, setActivating] = useState(false);
 
   const [placementOpen, setPlacementOpen] = useState(false);
+  const onlyPhase = PHASE_ONLY_PLACEMENTS[placement];
   const [placementPhase, setPlacementPhase] = useState<PromptPhase>(
-    placement === "phase_suggestion" ? "SUGGESTION" : "DETECTIVE"
+    onlyPhase ?? "DETECTIVE"
   );
 
   // character limit
@@ -257,12 +259,8 @@ export default function SystemMessageEditor({
   }, [idx, current?.id]);
 
   useEffect(() => {
-    if (placement === "phase_suggestion") {
-      setPlacementPhase("SUGGESTION");
-    } else if (placement === "phase_detective") {
-      setPlacementPhase("DETECTIVE");
-    }
-  }, [placement]);
+    if (onlyPhase) setPlacementPhase(onlyPhase);
+  }, [onlyPhase]);
 
   const canPrev = idx > 0;
   const canNext = idx < sorted.length - 1;
@@ -655,12 +653,11 @@ export default function SystemMessageEditor({
                   </div>
                 </div>
 
-                {((placement === "phase_detective" && placementPhase === "SUGGESTION") ||
-                  (placement === "phase_suggestion" && placementPhase === "DETECTIVE")) && (
+                {onlyPhase && onlyPhase !== placementPhase && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                     This message is only used in the{" "}
                     <span className="font-medium">
-                      {placement === "phase_detective" ? "Detective" : "Suggestion"}
+                      {onlyPhase === "DETECTIVE" ? "Detective" : "Suggestion"}
                     </span>{" "}
                     phase.
                   </div>

@@ -76,15 +76,9 @@ exports.handler = async (event) => {
                     break;
                 }
 
+                // Only UI-facing messages are public; prompt content stays admin-only.
                 const allowed = new Set([
                     "disclaimer",
-                    "guardrails",
-                    "system_role",
-                    "system_checklist",
-                    "system_instructions",
-                    "initial_prompt",
-                    "detective_phase_prompt",
-                    "suggestion_phase_prompt",
                     "welcome_message",
                 ]);
 
