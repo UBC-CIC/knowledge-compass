@@ -94,10 +94,8 @@ def _delete_s3_uri(uri: str | None, warnings: list[str]):
 def _delete_matching_source(connection, *, source_type: str, url: str | None, warnings: list[str]):
     """
     Best-effort cleanup of the pgvector-backend `sources` row (and its cascaded
-    `chunks`) for a website or video data source. Websites and videos are the
-    only types embedded through the crawler/transcriber containers; there is
-    no matching `sources` row for csv/markdown/json under the Bedrock KB
-    backend, so a miss here is expected and not an error.
+    `chunks`) for an embedded data source. A miss is not an error: the source
+    may never have been embedded (e.g. deleted before ingestion ran).
     """
     if not url:
         return
@@ -110,6 +108,24 @@ def _delete_matching_source(connection, *, source_type: str, url: str | None, wa
     except Exception as e:
         logger.warning("Failed to delete matching sources row for %s: %s", url, e)
         warnings.append("Could not clean up the associated search index entry")
+
+
+def _document_source_url(data_source: dict) -> str | None:
+    """
+    The `sources.url` process_document_batch.py keyed a csv/markdown/document
+    upload's chunks under: the citation `document_url` for documents when set,
+    otherwise the uploaded file's s3:// URI.
+    """
+    metadata = data_source["metadata"]
+    if data_source["type"] == "document":
+        document_url = (metadata.get("document_url") or "").strip()
+        if document_url:
+            return document_url
+    bucket = metadata.get("s3_bucket")
+    key = metadata.get("s3_key")
+    if not bucket or not key:
+        return None
+    return f"s3://{bucket}/{key}"
 
 
 def delete_data_source(event, body, connection, data_source_id: str):
@@ -185,6 +201,17 @@ def delete_data_source(event, body, connection, data_source_id: str):
             url=row["name"],
             warnings=warnings,
         )
+
+    # csv/markdown/document chunks (the json sidecar has none of its own; if
+    # the sidecar row was the one deleted, its primary is in `targets`).
+    for target in targets:
+        if target["type"] in ("csv", "markdown", "document"):
+            _delete_matching_source(
+                connection,
+                source_type="document",
+                url=_document_source_url(target),
+                warnings=warnings,
+            )
     connection.commit()
 
     return _response(

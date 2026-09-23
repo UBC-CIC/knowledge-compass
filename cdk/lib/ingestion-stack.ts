@@ -124,6 +124,16 @@ export class IngestionStack extends Stack {
       versioned: true,
       serverAccessLogsBucket: accessLogsBucket,
       serverAccessLogsPrefix: "ingest-access-logs/",
+      // Versioning keeps deleted/overwritten uploads as noncurrent versions;
+      // expire them so admin deletes actually free storage.
+      lifecycleRules: [
+        {
+          id: "ExpireNoncurrentVersions",
+          noncurrentVersionExpiration: Duration.days(3),
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: Duration.days(3),
+        },
+      ],
     });
 
     // ── Shared task/execution role setup ───────────────────────────────────────
