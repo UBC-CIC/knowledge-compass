@@ -768,8 +768,8 @@ exports.handler = async (event) => {
         // If timeRange is NOT provided, return all-time totals only (no timeSeries)
         const timeRangeProvided = typeof qs.timeRange === "string" && qs.timeRange.trim().length > 0;
 
-        // Helper: compute totals (either all-time or since startDate)
-        const fetchTotals = async (startDateIso /* string | null */) => {
+        // Helper: compute totals (either all-time or between startDate and endDate)
+        const fetchTotals = async (startDateIso /* string | null */, endDateIso /* string | null */) => {
           if (!startDateIso) {
             const totalsRows = await sqlConnection`
               SELECT
@@ -785,26 +785,30 @@ exports.handler = async (event) => {
             SELECT
               (SELECT COUNT(DISTINCT cs.user_id)::int
               FROM chat_sessions cs
-              WHERE cs.created_at >= ${startDateIso}) AS users,
+              WHERE cs.created_at >= ${startDateIso}
+                AND cs.created_at < ${endDateIso}) AS users,
 
               (SELECT COUNT(cs.id)::int
               FROM chat_sessions cs
-              WHERE cs.created_at >= ${startDateIso}) AS chat_sessions,
-
-              (SELECT COUNT(cm.id)::int
-              FROM chat_messages cm
-              WHERE cm.created_at >= ${startDateIso}) AS messages,
+              WHERE cs.created_at >= ${startDateIso}
+                AND cs.created_at < ${endDateIso}) AS chat_sessions,
 
               (SELECT COUNT(cm.id)::int
               FROM chat_messages cm
               WHERE cm.created_at >= ${startDateIso}
+                AND cm.created_at < ${endDateIso}) AS messages,
+
+              (SELECT COUNT(cm.id)::int
+              FROM chat_messages cm
+              WHERE cm.created_at >= ${startDateIso}
+                AND cm.created_at < ${endDateIso}
                 AND cm.sender = 'user') AS questions
           `;
           return totalsRows[0];
         };
 
         if (!timeRangeProvided) {
-          const totals = await fetchTotals(null);
+          const totals = await fetchTotals(null, null);
 
           response.statusCode = 200;
           response.body = JSON.stringify({ totals });
@@ -829,11 +833,24 @@ exports.handler = async (event) => {
         startDate.setDate(startDate.getDate() - daysBack);
         const startDateIso = startDate.toISOString();
 
+        // Optional end of window, in days ago (e.g. timeRange=10d&endDaysAgo=4 → 10 to 4 days ago).
+        // The end day is inclusive; 0 (default) means up to now.
+        let endDaysAgo = parseInt(qs.endDaysAgo ?? "0", 10);
+        if (isNaN(endDaysAgo)) endDaysAgo = 0;
+        endDaysAgo = Math.min(Math.max(0, endDaysAgo), daysBack - 1);
+
+        const endDate = new Date();
+        if (endDaysAgo > 0) {
+          endDate.setUTCDate(endDate.getUTCDate() - endDaysAgo + 1);
+          endDate.setUTCHours(0, 0, 0, 0);
+        }
+        const endDateIso = endDate.toISOString();
+
         const timeSeries = await sqlConnection`
           WITH date_series AS (
             SELECT generate_series(
               DATE_TRUNC('day', ${startDateIso}::timestamp),
-              DATE_TRUNC('day', NOW()),
+              DATE_TRUNC('day', ${endDateIso}::timestamp - INTERVAL '1 second'),
               '1 day'::interval
             )::date AS date
           ),
@@ -844,6 +861,7 @@ exports.handler = async (event) => {
               COUNT(DISTINCT cs.user_id)::int AS session_users
             FROM chat_sessions cs
             WHERE cs.created_at >= ${startDateIso}
+              AND cs.created_at < ${endDateIso}
             GROUP BY DATE_TRUNC('day', cs.created_at)::date
           ),
           daily_questions AS (
@@ -854,6 +872,7 @@ exports.handler = async (event) => {
             FROM chat_messages cm
             JOIN chat_sessions cs ON cs.id = cm.chat_session_id
             WHERE cm.created_at >= ${startDateIso}
+              AND cm.created_at < ${endDateIso}
               AND cm.sender = 'user'
             GROUP BY DATE_TRUNC('day', cm.created_at)::date
           )
@@ -868,7 +887,7 @@ exports.handler = async (event) => {
           ORDER BY ds.date ASC
         `;
 
-        const totals = await fetchTotals(startDateIso);
+        const totals = await fetchTotals(startDateIso, endDateIso);
 
         response.statusCode = 200;
         response.body = JSON.stringify({ timeSeries, totals });

@@ -982,6 +982,7 @@ Get usage analytics time series and totals.
 **Query Parameters:**
 
 - `timeRange` (string, optional): Time range — `7d`, `30d`, `90d`, `6m`, `1y` (default: `90d`)
+- `endDaysAgo` (integer, optional): End of the window in days ago, inclusive — e.g. `timeRange=10d&endDaysAgo=4` covers 10 to 4 days ago (default: `0`, i.e. up to now)
 
 **Response:**
 

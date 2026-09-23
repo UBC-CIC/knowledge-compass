@@ -1423,6 +1423,13 @@ paths:
           schema:
             type: string
             default: "90d"
+        - name: endDaysAgo
+          in: query
+          required: false
+          description: End of the window in days ago, inclusive (e.g., timeRange=10d&endDaysAgo=4 covers 10 to 4 days ago)
+          schema:
+            type: integer
+            default: 0
       responses:
         "200":
           description: Analytics time series and totals

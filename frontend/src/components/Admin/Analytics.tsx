@@ -77,17 +77,32 @@ function CustomTooltip({ active, payload, label }: any) {
   return null;
 }
 
+const MAX_DAYS = 365;
+
+const clampDays = (val: number, min: number) =>
+  Math.min(Math.max(min, val), MAX_DAYS);
+
 export default function Analytics() {
-  const [timeRange, setTimeRange] = useState("90d");
+  const [rangeMode, setRangeMode] = useState<"last" | "between">("last");
+  const [lastDays, setLastDays] = useState(90);
+  const [fromDaysAgo, setFromDaysAgo] = useState(10);
+  const [toDaysAgo, setToDaysAgo] = useState(4);
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData>({
     timeSeries: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const rangeInvalid = rangeMode === "between" && toDaysAgo >= fromDaysAgo;
+  const query =
+    rangeMode === "last"
+      ? `timeRange=${lastDays}d`
+      : `timeRange=${fromDaysAgo}d&endDaysAgo=${toDaysAgo}`;
+
   useEffect(() => {
+    if (rangeInvalid) return;
     fetchAnalytics();
-  }, [timeRange]);
+  }, [query, rangeInvalid]);
 
   const fetchAnalytics = async () => {
     if (isDemoMode) {
@@ -102,7 +117,7 @@ export default function Analytics() {
 
       const token = await AuthService.getAdminIdToken();
 
-      const analyticsUrl = `${import.meta.env.VITE_API_ENDPOINT}/admin/analytics?timeRange=${timeRange}`;
+      const analyticsUrl = `${import.meta.env.VITE_API_ENDPOINT}/admin/analytics?${query}`;
 
       const res = await fetch(analyticsUrl, {
         headers: {
@@ -134,23 +149,80 @@ export default function Analytics() {
             Volume over time. No conversation content is shown here.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-[10px] border border-foreground/14 bg-white px-3 py-1.5">
-          <span className="text-[13.5px] font-semibold">Last</span>
-          <Input
-            type="number"
-            min={7}
-            max={365}
-            className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
-            defaultValue={90}
-            onChange={(e) => {
-              const val = parseInt(e.target.value);
-              if (!isNaN(val) && val > 0) {
-                const days = Math.min(Math.max(1, val), 365);
-                setTimeRange(`${days}d`);
-              }
-            }}
-          />
-          <span className="text-[13.5px] font-semibold">days</span>
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <div className="flex rounded-[10px] border border-foreground/14 bg-white p-1 text-[13px] font-semibold">
+            {(
+              [
+                ["last", "Last N days"],
+                ["between", "Date range"],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setRangeMode(mode)}
+                className={`rounded-md px-3 py-1 transition-colors ${
+                  rangeMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-foreground/70 hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 rounded-[10px] border border-foreground/14 bg-white px-3 py-1.5">
+            {rangeMode === "last" ? (
+              <>
+                <span className="text-[13.5px] font-semibold">Last</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={MAX_DAYS}
+                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
+                  defaultValue={lastDays}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val) && val > 0) setLastDays(clampDays(val, 1));
+                  }}
+                />
+                <span className="text-[13.5px] font-semibold">days</span>
+              </>
+            ) : (
+              <>
+                <span className="text-[13.5px] font-semibold">From</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={MAX_DAYS}
+                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
+                  defaultValue={fromDaysAgo}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val) && val > 0) setFromDaysAgo(clampDays(val, 1));
+                  }}
+                />
+                <span className="text-[13.5px] font-semibold">to</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={MAX_DAYS}
+                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
+                  defaultValue={toDaysAgo}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val) && val >= 0) setToDaysAgo(clampDays(val, 0));
+                  }}
+                />
+                <span className="text-[13.5px] font-semibold">days ago</span>
+              </>
+            )}
+          </div>
+          {rangeInvalid && (
+            <p className="text-[12.5px] text-red-700">
+              "From" must be further back than "to".
+            </p>
+          )}
         </div>
       </div>
 
