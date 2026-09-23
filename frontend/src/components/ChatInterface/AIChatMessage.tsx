@@ -1,5 +1,6 @@
+import type { ComponentProps } from "react";
 import { ExternalLink } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
@@ -99,15 +100,22 @@ const markdownComponents = {
     <strong className="font-semibold text-foreground" {...props} />
   ),
   em: ({ ...props }) => <em className="font-serif italic" {...props} />,
-  a: ({ ...props }) => (
-    <a
-      {...props}
-      href={props.href && isSafeUrl(props.href) ? props.href : "#"}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="font-semibold text-primary hover:underline"
-    />
-  ),
+  a: ({ href, children, ...props }: ComponentProps<"a"> & ExtraProps) =>
+    href && isSafeUrl(href) ? (
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-semibold text-primary hover:underline"
+      >
+        {children}
+      </a>
+    ) : (
+      // Non-web links (e.g. s3:// document URIs) aren't clickable; the
+      // document is listed under "More resources" instead.
+      <span className="font-semibold">{children}</span>
+    ),
   blockquote: ({ ...props }) => (
     <blockquote
       className="my-3 rounded-[9px] bg-muted px-3.5 py-3 font-serif text-[15.5px] leading-relaxed"
@@ -150,6 +158,11 @@ function isHttpSource(source: SourceItem | string) {
   return isSafeUrl(url);
 }
 
+// Uploaded documents without a public URL (s3:// URIs) still get a card.
+function isResourceSource(source: SourceItem | string) {
+  return isHttpSource(source) || sourceLabel(source).type === "document";
+}
+
 function withResourceLinks(text: string, sources: (SourceItem | string)[]) {
   const links = sources.map(sourceLabel).filter((item) => isSafeUrl(item.url));
   if (links.length === 0) return text;
@@ -173,10 +186,10 @@ export default function AIChatMessage({
 }: AIChatMessageProps) {
   const body = displayGuideText(text);
   const suggestion = isSuggestionPhase(phase, sources, body);
-  const resourceSources = sources.filter(isHttpSource);
+  const resourceSources = sources.filter(isResourceSource);
   const displayBody =
     !isTyping && resourceSources.length > 0
-      ? withResourceLinks(body, resourceSources)
+      ? withResourceLinks(body, resourceSources.filter(isHttpSource))
       : body;
 
   const sourcesBlock =
@@ -190,14 +203,11 @@ export default function AIChatMessage({
             const { title, url, type, preview } = sourceLabel(source);
             const timestamp = getVideoTimestamp(source);
             const href = timestamp ? withStartTime(url, timestamp.start) : url;
-            return (
-              <a
-                key={`${url}-${index}`}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-start gap-2.5 rounded-[10px] border border-foreground/14 px-4 py-3 hover:border-primary hover:bg-accent"
-              >
+            const linkable = isSafeUrl(href);
+            const cardClass =
+              "flex items-start gap-2.5 rounded-[10px] border border-foreground/14 px-4 py-3";
+            const cardBody = (
+              <>
                 <span className="mt-0.5 shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-bold text-foreground/80">
                   {index + 1}
                 </span>
@@ -207,10 +217,16 @@ export default function AIChatMessage({
                       {type}
                     </span>
                   ) : null}
-                  <span className="mt-0.5 flex items-start gap-1.5 text-[14.5px] font-semibold leading-snug text-primary">
-                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span className="break-words">{title}</span>
-                  </span>
+                  {linkable ? (
+                    <span className="mt-0.5 flex items-start gap-1.5 text-[14.5px] font-semibold leading-snug text-primary">
+                      <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span className="break-words">{title}</span>
+                    </span>
+                  ) : (
+                    <span className="mt-0.5 block break-words text-[14.5px] font-semibold leading-snug text-foreground">
+                      {title}
+                    </span>
+                  )}
                   {timestamp ? (
                     <span className="mt-1 block font-mono text-[12px] font-semibold text-foreground/70">
                       [{timestamp.start} - {timestamp.end}]
@@ -223,7 +239,22 @@ export default function AIChatMessage({
                     </span>
                   ) : null}
                 </span>
+              </>
+            );
+            return linkable ? (
+              <a
+                key={`${url}-${index}`}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${cardClass} hover:border-primary hover:bg-accent`}
+              >
+                {cardBody}
               </a>
+            ) : (
+              <div key={`${url}-${index}`} className={cardClass}>
+                {cardBody}
+              </div>
             );
           })}
         </div>

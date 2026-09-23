@@ -28,12 +28,12 @@ start_ingestion_job / trigger_uploaded_document promote/mark -> 'running'
 
 CSV/Markdown files have no enforced content schema (see
 Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — they are chunked as plain text:
-- Markdown: split into sections by heading (#/##/###), then into ~650-word
+- Markdown: split into sections by heading (#/##/###), then into ~300-word
   chunks with sentence-boundary overlap (mirrors the website crawler).
 - CSV: parsed with csv.DictReader (schema-agnostic), rows rendered as
-  "column: value" lines and grouped into ~650-word chunks.
+  "column: value" lines and grouped into ~300-word chunks.
 - Document (PDF/DOCX/TXT): text is extracted (pypdf / python-docx / plain
-  decode) and split into ~650-word chunks with sentence-boundary overlap,
+  decode) and split into ~300-word chunks with sentence-boundary overlap,
   same as markdown but with no heading structure to key off of.
 
 The paired `{file}.metadata.json` sidecar (Bedrock KB convention) has no
@@ -67,7 +67,9 @@ EMBED_BATCH_SIZE = 96
 LAMBDA_FUNCTION_NAME = os.environ.get("LAMBDA_FUNCTION_NAME", "")
 
 _MIN_CHUNK_WORDS = 20
-_MAX_WORDS_PER_CHUNK = 650
+# ~300 words of written text (~6 chars/word) plus the chunk label stays under
+# the 2048-char Cohere input cap in _embed_texts, so the whole chunk is embedded.
+_MAX_WORDS_PER_CHUNK = 300
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 s3_client = boto3.client("s3", region_name=REGION)
