@@ -9,7 +9,6 @@ import AIChatPage from "@/pages/ChatInterface/ChatInterface";
 import {
   DEMO_USER_ID,
   deleteDemoSessionState,
-  getConversationProgress,
   isDemoMode,
   seedDemoHistory,
   setDemoSessionState,
@@ -291,13 +290,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
     }
   };
 
-  const conversationProgress = getConversationProgress({
-    storedFacts: conversationFacts,
-    messages: currentMessages,
-    hasSession: Boolean(activeChatSessionId),
-    sessionName: activeChatName,
-  });
-
   if (isLoadingUser || isLoadingChatSessions) {
     return (
       <div className="flex h-full items-center justify-center bg-background">
@@ -348,15 +340,6 @@ const normalizeChatSession = (session: any): ChatSession => ({
                   <Menu className="h-5 w-5" />
                 )}
               </button>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-foreground/12">
-                <div
-                  className="h-full rounded-[3px] bg-primary transition-[width] duration-500 ease-[cubic-bezier(0.2,0.7,0.3,1)]"
-                  style={{ width: `${conversationProgress.percent}%` }}
-                />
-              </div>
-              <div className="shrink-0 text-[12.5px] font-semibold text-foreground/80">
-                {conversationProgress.label}
-              </div>
             </div>
 
             <main className="flex min-h-0 flex-1 flex-col">
