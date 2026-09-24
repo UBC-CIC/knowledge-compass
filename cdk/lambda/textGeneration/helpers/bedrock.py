@@ -19,5 +19,14 @@ def format_context_for_prompt(sources: List[Dict[str, Any]]) -> str:
             header += f"\n    URL: {url}"
         if source_type:
             header += f"\n    Type: {source_type}"
+        # Pages/PDFs linked from a CSV carry the linking rows' other columns.
+        csv_rows = (source.get("metadata") or {}).get("csv_rows") or []
+        if csv_rows:
+            described = "; ".join(
+                ", ".join(f"{k}: {v}" for k, v in (row.get("columns") or {}).items())
+                for row in csv_rows[:3]
+            )
+            if described:
+                header += f"\n    Linked from CSV row(s): {described[:500]}"
         parts.append(f"<source_{i}>\n{header}\n    Content: {content}\n</source_{i}>")
     return "\n\n".join(parts)

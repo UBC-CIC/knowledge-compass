@@ -35,6 +35,11 @@ Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — they are chunked as plain text:
   with content-defined boundaries (see _chunk_csv) so editing, adding or
   removing a row only changes the chunk(s) around it.
 
+A CSV staged with a url_column also has the pages/PDFs its rows link to
+fetched and indexed (see csv_links.py / process_csv_links.py): after its own
+chunks are committed the run is handed to that link phase, which finalizes
+it. Without url_column the CSV path is unchanged.
+
 Re-ingesting a source re-embeds only chunks whose text is new to it: a chunk
 already stored at any index (e.g. shifted by an inserted row) is moved with
 its stored embedding instead of being sent to Bedrock again.
@@ -61,6 +66,7 @@ import boto3
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
+from helpers.csv_links import start_link_phase
 from helpers.upload_identity import source_url_for
 
 logger = logging.getLogger()
@@ -333,21 +339,32 @@ def _latest_queued_document_runs(connection) -> list:
 
 
 def _running_document_runs(connection) -> list:
-    """Runs this module marked 'running' that still need to be finalized."""
+    """
+    Runs this module marked 'running' that still need to be finalized. CSV
+    runs whose link crawl is in progress belong to process_csv_links.
+    """
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT ir.id, ir.data_source_id, ds.name, ds.type, ds.metadata
+            SELECT ir.id, ir.data_source_id, ds.name, ds.type, ds.metadata, ir.metadata
             FROM ingestion_runs ir
             JOIN data_sources ds ON ds.id = ir.data_source_id
             WHERE ir.status = 'running'::ingestion_status
               AND ds.type = ANY(ARRAY['csv', 'markdown', 'json', 'document']::data_source_type[])
               AND ir.metadata->>'backend' = 'pgvector_document'
+              AND COALESCE(ir.metadata->>'link_phase', '') <> 'running'
             ORDER BY ds.created_at ASC, ds.id ASC
             """
         )
         return [
-            {"ingestion_run_id": str(r[0]), "data_source_id": str(r[1]), "name": r[2], "type": r[3], "metadata": r[4] or {}}
+            {
+                "ingestion_run_id": str(r[0]),
+                "data_source_id": str(r[1]),
+                "name": r[2],
+                "type": r[3],
+                "metadata": r[4] or {},
+                "run_metadata": r[5] or {},
+            }
             for r in cursor.fetchall()
         ]
 
@@ -366,7 +383,8 @@ def _mark_runs_running(connection, run_ids: list, sync_session_id: str):
         )
 
 
-def _finish_run(connection, run_id: str, status: str, *, chunks_upserted=0, chunks_deleted=0, error_message=None):
+def _finish_run(connection, run_id: str, status: str, *, chunks_upserted=0, chunks_deleted=0, error_message=None,
+                metadata: dict | None = None):
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -377,10 +395,11 @@ def _finish_run(connection, run_id: str, status: str, *, chunks_upserted=0, chun
                 pages_crawled = 1,
                 error_message = %s,
                 finished_at = now(),
-                completed_at = now()
+                completed_at = now(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
             WHERE id = %s::uuid
             """,
-            (status, chunks_upserted, chunks_deleted, error_message, run_id),
+            (status, chunks_upserted, chunks_deleted, error_message, json.dumps(metadata or {}), run_id),
         )
 
 
@@ -508,6 +527,43 @@ def _delete_stale_chunks(connection, source_id: str, current_indices: list) -> i
             (source_id, current_indices),
         )
         return cursor.rowcount
+
+
+def write_chunks(connection, source_id: str, chunks: list) -> dict:
+    """
+    Store `chunks` as the source's full chunk set. Only chunks whose text is
+    new to this source are embedded; ones that just moved index (or only
+    changed heading_path) reuse theirs. Returns {"written", "embedded", "deleted"}.
+    """
+    existing_states = _existing_chunk_states(connection, source_id)
+    changed = [c for c in chunks if existing_states.get(c["chunk_index"]) != _chunk_state(c)]
+    reusable = _reusable_embeddings(connection, source_id, changed)
+    to_embed = [c for c in changed if (c["content_hash"], _embed_text_md5(c)) not in reusable]
+
+    fresh = dict(zip((c["chunk_index"] for c in to_embed), _embed_texts([c["text"] for c in to_embed]))) \
+        if to_embed else {}
+    for chunk in changed:
+        embedding = fresh.get(chunk["chunk_index"]) or reusable[(chunk["content_hash"], _embed_text_md5(chunk))]
+        _upsert_chunk(connection, source_id, chunk, embedding)
+
+    deleted = _delete_stale_chunks(connection, source_id, [c["chunk_index"] for c in chunks])
+    return {"written": len(changed), "embedded": len(to_embed), "deleted": deleted}
+
+
+def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> dict:
+    """Links never fail the CSV run: a link-phase error is recorded on the run instead."""
+    try:
+        return start_link_phase(
+            connection,
+            run=run,
+            raw_bytes=raw_bytes,
+            chunks_upserted=counts["written"],
+            chunks_deleted=counts["deleted"],
+        )
+    except Exception as e:  # noqa: BLE001
+        connection.rollback()
+        logger.error("Link phase failed for run %s: %s", run["ingestion_run_id"], e, exc_info=True)
+        return {"deferred": False, "metadata": {"link_error": f"link crawl failed: {e}"[:500]}}
 
 
 def _load_companion_metadata(meta: dict) -> dict:
@@ -658,28 +714,29 @@ def process_document_batch(event, connection) -> dict:
                 metadata=source_metadata,
             )
 
-            # Only chunks whose text is new to this source are embedded; ones
-            # that just moved index (or only changed heading_path) reuse theirs.
-            existing_states = _existing_chunk_states(connection, source_id)
-            changed = [c for c in chunks if existing_states.get(c["chunk_index"]) != _chunk_state(c)]
-            reusable = _reusable_embeddings(connection, source_id, changed)
-            to_embed = [c for c in changed if (c["content_hash"], _embed_text_md5(c)) not in reusable]
+            counts = write_chunks(connection, source_id, chunks)
+            logger.info(
+                "Document run %s: %d chunk(s) written (%d embedded, %d reused), %d deleted",
+                run_id, counts["written"], counts["embedded"], counts["written"] - counts["embedded"], counts["deleted"],
+            )
 
-            fresh = dict(zip((c["chunk_index"] for c in to_embed), _embed_texts([c["text"] for c in to_embed]))) \
-                if to_embed else {}
-            for chunk in changed:
-                embedding = fresh.get(chunk["chunk_index"]) or reusable[(chunk["content_hash"], _embed_text_md5(chunk))]
-                _upsert_chunk(connection, source_id, chunk, embedding)
+            run_metadata = {}
+            if ds_type == "csv":
+                # The CSV's own rows stay indexed whatever happens to its links.
+                connection.commit()
+                link = _start_link_phase(connection, run, raw_bytes, counts)
+                if link["deferred"]:
+                    completed.append(run_id)
+                    logger.info("Document run %s: link crawl started; it will finalize the run", run_id)
+                    continue
+                run_metadata = link["metadata"]
 
-            deleted = _delete_stale_chunks(connection, source_id, [c["chunk_index"] for c in chunks])
-
-            _finish_run(connection, run_id, "completed", chunks_upserted=len(changed), chunks_deleted=deleted)
+            _finish_run(
+                connection, run_id, "completed",
+                chunks_upserted=counts["written"], chunks_deleted=counts["deleted"], metadata=run_metadata,
+            )
             connection.commit()
             completed.append(run_id)
-            logger.info(
-                "Document run %s completed: %d chunk(s) written (%d embedded, %d reused), %d deleted",
-                run_id, len(changed), len(to_embed), len(changed) - len(to_embed), deleted,
-            )
 
         except Exception as e:  # noqa: BLE001
             connection.rollback()

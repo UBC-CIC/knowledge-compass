@@ -388,6 +388,42 @@ If validation passes, it inserts:
 3. A `pending` `ingestion_runs` row for the primary file
 4. A `pending` `ingestion_runs` row for the metadata JSON file
 
+### Crawling links from a CSV column
+
+A CSV can opt in to having the web pages and PDFs its rows link to fetched and indexed. The CSV's own rows are indexed exactly as before either way.
+
+| Field           | Description                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| `url_column`    | Optional. Column holding one http(s) link per row. Omit it and no links are crawled.                            |
+| `row_id_column` | Optional, needs `url_column`. Identifies a row across re-uploads; by default a row is identified by its content. |
+
+Both are checked against the CSV header (case-insensitively) when staging. Without `url_column`, the staging response carries `suggested_url_column`: a column where more than 80% of the sampled values are http(s) URLs. It is a hint only. The single-file upload dialog offers the same suggestion.
+
+On Sync, once the CSV's rows are embedded, the run stays `running` while a background worker (`helpers/process_csv_links.py`) fetches each distinct URL once:
+
+* **Content:** HTML pages and PDFs only. JavaScript is not rendered and only the linked page is fetched, with no crawling beyond redirects. Anything else fails with a reason.
+* **Indexing:** one `sources` row per normalized URL (`csvlink://<url>`, `source_type = 'csv_link'`) is shared by every row in every CSV that links to it. The real URL is its citation. The linking rows' other columns are attached as `sources.metadata.rows` and `chunks.metadata.csv_rows`, and are shown to the model with the retrieved passage.
+* **Safety:** only http/https; the host's resolved addresses, and those of every redirect hop, must all be public (no private, loopback, link-local or metadata addresses), and the connection goes to the vetted address. robots.txt is honoured for `KnowledgeCompassBot`, including `Crawl-delay`.
+* **Failures:** a bad link only fails its own rows. A permanent failure (404/410, blocked, disallowed, unsupported, no text) removes content previously indexed for that URL. A transient one (timeout, 5xx) keeps it.
+* **Re-uploads:** rows removed from the CSV, or edited so they no longer match, lose their link record. Pages no row links to any more are deleted. Deleting the CSV deletes them too.
+
+Per-row status (`pending` / `success` / `failed` / `skipped` plus the reason) is available from `GET /admin/data_sources/{id}/links?status=&limit=&offset=`. The run's metadata gets a `link_summary`, or a `link_error` if link crawling could not run.
+
+Limits (environment variables on the knowledge base Lambda):
+
+| Variable                        | Default  | Meaning                                                                  |
+| ------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `LINK_MAX_URLS_PER_CSV`         | 500      | Distinct URLs crawled per CSV; rows past the cap are `skipped`.           |
+| `LINK_REQUEST_TIMEOUT_SECONDS`  | 15       | Per connect/read.                                                        |
+| `LINK_TOTAL_TIMEOUT_SECONDS`    | 45       | Whole fetch of one URL, redirects included.                              |
+| `LINK_MAX_CONTENT_BYTES`        | 10485760 | Largest page/PDF (after decompression).                                  |
+| `LINK_MAX_REDIRECTS`            | 5        |                                                                          |
+| `LINK_CONCURRENCY`              | 8        | Parallel fetches per worker.                                             |
+| `LINK_PER_DOMAIN_CONCURRENCY`   | 2        | Parallel requests to one host.                                           |
+| `LINK_PER_DOMAIN_DELAY_SECONDS` | 1        | Minimum gap between requests to one host (a larger robots delay wins).   |
+| `LINK_MAX_CRAWL_DELAY_SECONDS`  | 10       | Cap on a robots.txt `Crawl-delay`.                                       |
+| `LINK_MAX_CONTINUATIONS`        | 20       | Times the worker re-invokes itself when out of time before giving up.    |
+
 ## Sync Sessions
 
 A sync session starts when an admin calls:

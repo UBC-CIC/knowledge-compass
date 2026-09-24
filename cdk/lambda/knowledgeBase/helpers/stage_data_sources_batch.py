@@ -116,6 +116,8 @@ def stage_data_sources_batch(event, body, connection):
                     metadata_file_name=metadata_file_name,
                     metadata_s3_bucket=metadata_s3_bucket,
                     metadata_s3_key=metadata_s3_key,
+                    url_column=item.get("url_column"),
+                    row_id_column=item.get("row_id_column"),
                 )
             except StageRejected as rejected:
                 reason = rejected.body.get("error")
@@ -127,6 +129,8 @@ def stage_data_sources_batch(event, body, connection):
 
             s3_cleanup.extend(result["s3_cleanup"])
             entry = {"index": i, "file": primary_file_name, "data_source_ids": result["data_source_ids"]}
+            if result["suggested_url_column"]:
+                entry["suggested_url_column"] = result["suggested_url_column"]
             if result["action"] == "replaced":
                 replaced.append(entry)
             elif result["action"] == "unchanged":

@@ -15,6 +15,8 @@ from helpers.process_crawler_batch import handle_ecs_task_stopped
 from helpers.retry_ingestion_run import retry_ingestion_run
 from helpers.delete_data_source import delete_data_source
 from helpers.process_document_batch import process_document_batch
+from helpers.process_csv_links import process_csv_links
+from helpers.csv_links import get_data_source_links
 
 # Set up logging
 logger = logging.getLogger()
@@ -134,6 +136,16 @@ def handler(event, context=None):
                 return {"error": "Error connecting to database"}
             return process_document_batch(event=event, connection=connection)
 
+        # Async link phase of a CSV run (see helpers/process_csv_links.py);
+        # fired by csv_links.start_link_phase and by itself to continue.
+        if event.get("task") == "process_csv_links":
+            try:
+                connection = _connect_to_db()
+            except Exception as e:
+                logger.error(f"Error connecting to database: {e}")
+                return {"error": "Error connecting to database"}
+            return process_csv_links(event=event, connection=connection, context=context)
+
         # API Gateway path
         method = event.get("httpMethod", "")
         resource = event.get("resource", "")
@@ -197,6 +209,16 @@ def handler(event, context=None):
                 connection=connection,
                 data_source_id=data_source_id,
             )
+
+        # Route: GET /admin/data_sources/{id}/links
+        if method == "GET" and (
+            resource == "/admin/data_sources/{id}/links"
+            or (path.startswith("/admin/data_sources/") and path.endswith("/links"))
+        ):
+            data_source_id = (event.get("pathParameters") or {}).get("id")
+            if not data_source_id:
+                return _response(event, 400, {"error": "Missing data source id"})
+            return get_data_source_links(event=event, connection=connection, data_source_id=data_source_id)
 
         # Route: DELETE /admin/data_sources/{id}
         if method == "DELETE" and (

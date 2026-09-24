@@ -13,15 +13,15 @@ Output contract
 `format_context_for_prompt` and the rest of `chat.py`:
 
     {
-        "type":        "WEB" | "VIDEO" | "DOCUMENT",  # legacy key (uppercased)
+        "type":        "WEB" | "VIDEO" | "DOCUMENT" | "CSV_LINK",  # legacy key (uppercased)
         "uri":         <canonical url>,               # legacy key
         "url":         <canonical url>,               # legacy key
         "content":     <chunk body>,                  # legacy key used by format_context
         "score":       <cosine similarity 0..1>,      # legacy key
         # richer fields for later use (frontend rebuild / video timestamps):
         "title":       <source name or url>,
-        "source_type": "web" | "video" | "document",
-        "metadata":    { ... },
+        "source_type": "web" | "video" | "document" | "csv_link",
+        "metadata":    { ... },                       # csv_link chunks: csv_rows (linking rows' columns)
     }
 """
 

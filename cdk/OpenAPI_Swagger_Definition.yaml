@@ -407,6 +407,19 @@ paths:
                 metadata_s3_key:
                   type: string
                   example: uploads/json/1712345678_alumni_data_final.csv.metadata.json
+                url_column:
+                  type: string
+                  description: >-
+                    CSV only. Column whose http(s) links are fetched (HTML/PDF) and
+                    indexed with the row's other columns as metadata. Omit to ingest
+                    the CSV without crawling links.
+                  example: website
+                row_id_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Column that identifies a row across
+                    re-uploads; defaults to a hash of the whole row.
+                  example: id
                 video_file_name:
                   type: string
                   example: family-rights-webinar.mp4
@@ -455,6 +468,13 @@ paths:
                     type: array
                     items:
                       type: string
+                  suggested_url_column:
+                    type: string
+                    nullable: true
+                    description: >-
+                      CSV only: a column where more than 80% of sampled values are
+                      http(s) URLs. A hint for setting url_column; nothing is crawled
+                      unless url_column is set.
         "400":
           description: Invalid request
         "404":
@@ -668,6 +688,8 @@ paths:
                       metadata_file_name: { type: string }
                       metadata_s3_bucket: { type: string }
                       metadata_s3_key: { type: string }
+                      url_column: { type: string }
+                      row_id_column: { type: string }
       responses:
         "200":
           description: Batch staging complete
@@ -752,6 +774,95 @@ paths:
           description: Data source not found
         "409":
           description: Latest ingestion run for this data source did not fail
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/data_sources/{id}/links:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Per-row crawl status of the links in a CSV data source's url_column
+      operationId: get_data_source_links
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, success, failed, skipped]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Link status summary and one entry per CSV row with a link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data_source_id: { type: string }
+                  url_column: { type: string, nullable: true }
+                  row_id_column: { type: string, nullable: true }
+                  summary:
+                    type: object
+                    properties:
+                      pending: { type: integer }
+                      success: { type: integer }
+                      failed: { type: integer }
+                      skipped: { type: integer }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row_key: { type: string }
+                        row_number: { type: integer }
+                        url: { type: string }
+                        normalized_url: { type: string, nullable: true }
+                        status:
+                          type: string
+                          enum: [pending, success, failed, skipped]
+                        reason: { type: string, nullable: true }
+                        http_status: { type: integer, nullable: true }
+                        content_type: { type: string, nullable: true }
+                        fetched_at: { type: string, nullable: true }
+                        row_metadata:
+                          type: object
+                          additionalProperties: true
+        "400":
+          description: Invalid request, or the data source is not a CSV
+        "404":
+          description: Data source not found
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

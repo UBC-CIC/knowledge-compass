@@ -9,6 +9,7 @@ from helpers.admin_user import (
 from helpers.cors import get_cors_headers
 from helpers.video_transcription import is_http_url, start_transcription_job
 from helpers.process_document_batch import trigger_uploaded_document
+from helpers.csv_links import inspect_uploaded_csv, resolve_column
 from helpers.data_source_cleanup import supersede_duplicates
 from helpers.upload_identity import (
     delete_s3_objects,
@@ -219,6 +220,45 @@ def _reject_if_not_replaceable(existing: dict | None, *, s3_key: str, file_name:
         )
 
 
+def _link_config(
+    source_type: str, bucket: str, key: str, url_column: str | None, row_id_column: str | None
+) -> dict:
+    """
+    Validate a CSV's url_column / row_id_column against its header (resolving
+    them to the header's exact spelling) and suggest a URL column when none is
+    given. Raises StageRejected.
+    """
+    url_column = (url_column or "").strip() or None
+    row_id_column = (row_id_column or "").strip() or None
+    if source_type != "csv":
+        if url_column or row_id_column:
+            raise StageRejected(400, {"error": "url_column and row_id_column are only supported for CSV files"})
+        return {"url_column": None, "row_id_column": None, "suggested_url_column": None}
+    if row_id_column and not url_column:
+        raise StageRejected(400, {"error": "row_id_column requires url_column"})
+
+    try:
+        info = inspect_uploaded_csv(bucket, key)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not read CSV header of s3://%s/%s: %s", bucket, key, e)
+        if url_column:
+            raise StageRejected(400, {"error": "Could not read the CSV header to check url_column"})
+        return {"url_column": None, "row_id_column": None, "suggested_url_column": None}
+
+    config = {"url_column": None, "row_id_column": None, "suggested_url_column": info["suggested_url_column"]}
+    for field, requested in (("url_column", url_column), ("row_id_column", row_id_column)):
+        if not requested:
+            continue
+        resolved = resolve_column(info["columns"], requested)
+        if not resolved:
+            raise StageRejected(400, {
+                "error": f"{field} '{requested}' is not a column of this CSV",
+                "columns": info["columns"],
+            })
+        config[field] = resolved
+    return config
+
+
 def _content_unchanged(existing: dict, etag: str) -> bool:
     """
     True when a re-upload is byte-identical to the current version. A source
@@ -243,15 +283,21 @@ def stage_file_pair(
     metadata_file_name: str,
     metadata_s3_bucket: str,
     metadata_s3_key: str,
+    url_column: str | None = None,
+    row_id_column: str | None = None,
 ) -> dict:
     """
     Stage a CSV/Markdown file and its metadata JSON sidecar, replacing the
     existing pair uploaded under the same file name if there is one.
 
+    For a CSV, url_column (optional row_id_column) opts its rows' links into
+    crawling (see csv_links.py); leaving it out keeps plain CSV ingestion.
+
     Returns {"action": "staged" | "replaced" | "unchanged", "data_source_ids",
-    "ingestion_run_ids", "s3_cleanup"}. The caller commits, then deletes the
-    s3_cleanup objects (superseded or discarded uploads). Raises StageRejected
-    before any write when the pair cannot be staged.
+    "ingestion_run_ids", "s3_cleanup", "suggested_url_column"}. The caller
+    commits, then deletes the s3_cleanup objects (superseded or discarded
+    uploads). Raises StageRejected before any write when the pair cannot be
+    staged.
     """
     primary_label = source_type  # "csv" or "markdown"
 
@@ -266,6 +312,9 @@ def stage_file_pair(
         logger.error("Uploaded file not found in S3: %s", e, exc_info=True)
         raise StageRejected(400, {"error": "One or both uploaded files do not exist in S3"})
 
+    links = _link_config(source_type, primary_s3_bucket, primary_s3_key, url_column, row_id_column)
+    link_metadata = {k: links[k] for k in ("url_column", "row_id_column") if links[k]}
+
     source_key = upload_source_key(source_type, primary_file_name)
     new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
 
@@ -274,7 +323,10 @@ def stage_file_pair(
     )
     _reject_if_not_replaceable(existing, s3_key=primary_s3_key, file_name=primary_file_name)
 
-    if existing and _content_unchanged(existing, primary_etag):
+    same_link_config = existing and all(
+        existing["metadata"].get(k) == link_metadata.get(k) for k in ("url_column", "row_id_column")
+    )
+    if existing and same_link_config and _content_unchanged(existing, primary_etag):
         old_metadata_etag = stored_etag(
             existing["metadata"],
             etag_field="companion_etag",
@@ -290,6 +342,7 @@ def stage_file_pair(
                 "data_source_ids": [existing["id"]],
                 "ingestion_run_ids": [],
                 "s3_cleanup": new_uploads + superseded,
+                "suggested_url_column": links["suggested_url_column"],
             }
 
     primary_metadata = {
@@ -304,6 +357,7 @@ def stage_file_pair(
         "companion_s3_bucket": metadata_s3_bucket,
         "companion_s3_key": metadata_s3_key,
         "companion_etag": metadata_etag,
+        **link_metadata,
     }
     json_metadata = {
         "source": "staged_s3_file",
@@ -374,6 +428,7 @@ def stage_file_pair(
             "data_source_ids": [primary_ds_id, json_ds_id],
             "ingestion_run_ids": [primary_run_id, json_run_id],
             "s3_cleanup": [obj for obj in superseded if obj not in new_uploads],
+            "suggested_url_column": links["suggested_url_column"],
         }
 
     primary_ds_id = _insert_data_source_row(
@@ -401,6 +456,7 @@ def stage_file_pair(
         "data_source_ids": [primary_ds_id, json_ds_id],
         "ingestion_run_ids": [primary_run_id, json_run_id],
         "s3_cleanup": [],
+        "suggested_url_column": links["suggested_url_column"],
     }
 
 
@@ -805,6 +861,8 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
             metadata_file_name=metadata_file_name,
             metadata_s3_bucket=metadata_s3_bucket,
             metadata_s3_key=metadata_s3_key,
+            url_column=body.get("url_column"),
+            row_id_column=body.get("row_id_column"),
         )
     except StageRejected as rejected:
         return _response(event, rejected.status_code, rejected.body)
@@ -830,6 +888,7 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
             "created_by": created_by,
             "staged_data_source_ids": [] if result["action"] == "unchanged" else result["data_source_ids"],
             "pending_ingestion_run_ids": result["ingestion_run_ids"],
+            "suggested_url_column": result["suggested_url_column"],
         },
     )
 
