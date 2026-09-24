@@ -1,7 +1,5 @@
-import os
 import json
 import logging
-import boto3
 
 from helpers.admin_user import (
     admin_email_from_request,
@@ -11,15 +9,35 @@ from helpers.admin_user import (
 from helpers.cors import get_cors_headers
 from helpers.video_transcription import is_http_url, start_transcription_job
 from helpers.process_document_batch import trigger_uploaded_document
+from helpers.data_source_cleanup import supersede_duplicates
+from helpers.upload_identity import (
+    delete_s3_objects,
+    ensure_pending_run,
+    find_existing_upload,
+    head_etag,
+    is_ingestion_in_flight,
+    parse_s3_uri,
+    rename_source,
+    rename_source_url,
+    source_url_for,
+    stored_etag,
+    update_data_source,
+    upload_source_key,
+)
 
 DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt")
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-REGION = os.environ["REGION"]
 
-s3_client = boto3.client("s3", region_name=REGION)
+class StageRejected(Exception):
+    """A staging request that cannot proceed; carries the HTTP status and body."""
+
+    def __init__(self, status_code: int, body: dict):
+        super().__init__(body.get("error"))
+        self.status_code = status_code
+        self.body = body
 
 
 def _response(event, status_code: int, body: dict):
@@ -65,11 +83,6 @@ def _validate_file_pair(source_type: str, file_name: str, metadata_file_name: st
         )
 
     return None
-
-
-def _assert_s3_object_exists(bucket: str, key: str):
-    """Verify that an uploaded file already exists in S3 before staging it"""
-    s3_client.head_object(Bucket=bucket, Key=key)
 
 
 def _existing_website_row_id(connection, *, name: str) -> str | None:
@@ -181,13 +194,648 @@ def _insert_ingestion_run_row(
         return str(row[0])
 
 
+def _reject_if_not_replaceable(existing: dict | None, *, s3_key: str, file_name: str):
+    """A re-upload may replace an existing source, but not mid-ingestion or twice with the same object."""
+    if not existing:
+        return
+    if existing["metadata"].get("s3_key") == s3_key:
+        raise StageRejected(
+            409,
+            {
+                "error": f"{file_name} is already staged",
+                "existing_data_source_id": existing["id"],
+                "file_name": file_name,
+            },
+        )
+    if is_ingestion_in_flight(existing):
+        raise StageRejected(
+            409,
+            {
+                "error": f"{file_name} is currently being ingested. Upload it again once that finishes.",
+                "existing_data_source_id": existing["id"],
+                "file_name": file_name,
+            },
+        )
+
+
+def _content_unchanged(existing: dict, etag: str) -> bool:
+    """
+    True when a re-upload is byte-identical to the current version. A source
+    whose last run failed is always re-processed, so re-uploading it retries.
+    """
+    if existing["latest_run_status"] == "failed":
+        return False
+    old_etag = stored_etag(
+        existing["metadata"], etag_field="content_etag", bucket_field="s3_bucket", key_field="s3_key"
+    )
+    return old_etag == etag
+
+
+def stage_file_pair(
+    connection,
+    *,
+    created_by_user_id: str,
+    source_type: str,
+    primary_file_name: str,
+    primary_s3_bucket: str,
+    primary_s3_key: str,
+    metadata_file_name: str,
+    metadata_s3_bucket: str,
+    metadata_s3_key: str,
+) -> dict:
+    """
+    Stage a CSV/Markdown file and its metadata JSON sidecar, replacing the
+    existing pair uploaded under the same file name if there is one.
+
+    Returns {"action": "staged" | "replaced" | "unchanged", "data_source_ids",
+    "ingestion_run_ids", "s3_cleanup"}. The caller commits, then deletes the
+    s3_cleanup objects (superseded or discarded uploads). Raises StageRejected
+    before any write when the pair cannot be staged.
+    """
+    primary_label = source_type  # "csv" or "markdown"
+
+    pair_error = _validate_file_pair(source_type, primary_file_name, metadata_file_name)
+    if pair_error:
+        raise StageRejected(400, {"error": pair_error})
+
+    try:
+        primary_etag = head_etag(primary_s3_bucket, primary_s3_key)
+        metadata_etag = head_etag(metadata_s3_bucket, metadata_s3_key)
+    except Exception as e:
+        logger.error("Uploaded file not found in S3: %s", e, exc_info=True)
+        raise StageRejected(400, {"error": "One or both uploaded files do not exist in S3"})
+
+    source_key = upload_source_key(source_type, primary_file_name)
+    new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
+
+    existing = find_existing_upload(
+        connection, data_source_type=source_type, source_key=source_key, file_name=primary_file_name
+    )
+    _reject_if_not_replaceable(existing, s3_key=primary_s3_key, file_name=primary_file_name)
+
+    if existing and _content_unchanged(existing, primary_etag):
+        old_metadata_etag = stored_etag(
+            existing["metadata"],
+            etag_field="companion_etag",
+            bucket_field="companion_s3_bucket",
+            key_field="companion_s3_key",
+        )
+        if old_metadata_etag == metadata_etag:
+            superseded = supersede_duplicates(
+                connection, existing, survivor_url=source_url_for(source_type, existing["metadata"])
+            )
+            return {
+                "action": "unchanged",
+                "data_source_ids": [existing["id"]],
+                "ingestion_run_ids": [],
+                "s3_cleanup": new_uploads + superseded,
+            }
+
+    primary_metadata = {
+        "source": "staged_s3_file",
+        "action": "staged_for_future_sync",
+        "s3_bucket": primary_s3_bucket,
+        "s3_key": primary_s3_key,
+        "content_etag": primary_etag,
+        "source_key": source_key,
+        "source_url": source_key,
+        "companion_file_name": metadata_file_name,
+        "companion_s3_bucket": metadata_s3_bucket,
+        "companion_s3_key": metadata_s3_key,
+        "companion_etag": metadata_etag,
+    }
+    json_metadata = {
+        "source": "staged_s3_file",
+        "action": "staged_for_future_sync",
+        "s3_bucket": metadata_s3_bucket,
+        "s3_key": metadata_s3_key,
+        "content_etag": metadata_etag,
+        "companion_file_name": primary_file_name,
+        "companion_s3_bucket": primary_s3_bucket,
+        "companion_s3_key": primary_s3_key,
+    }
+    primary_run_metadata = {
+        "source": f"staged_{primary_label}_file",
+        "action": "awaiting_sync",
+        "s3_bucket": primary_s3_bucket,
+        "s3_key": primary_s3_key,
+    }
+    json_run_metadata = {
+        "source": "staged_json_file",
+        "action": "awaiting_sync",
+        "s3_bucket": metadata_s3_bucket,
+        "s3_key": metadata_s3_key,
+    }
+
+    if existing:
+        old = existing["metadata"]
+        primary_ds_id = existing["id"]
+        json_ds_id = None
+        if old.get("companion_s3_bucket") and old.get("companion_s3_key"):
+            json_ds_id = _existing_file_row_id(
+                connection, s3_bucket=old["companion_s3_bucket"], s3_key=old["companion_s3_key"]
+            )
+
+        update_data_source(
+            connection, data_source_id=primary_ds_id, name=primary_file_name, metadata=primary_metadata
+        )
+        rename_source_url(
+            connection, old_url=source_url_for(source_type, old), new_url=primary_metadata["source_url"]
+        )
+        if json_ds_id:
+            update_data_source(
+                connection, data_source_id=json_ds_id, name=metadata_file_name, metadata=json_metadata
+            )
+        else:
+            json_ds_id = _insert_data_source_row(
+                connection,
+                name=metadata_file_name,
+                data_source_type="json",
+                created_by_user_id=created_by_user_id,
+                metadata=json_metadata,
+            )
+
+        primary_run_id = ensure_pending_run(
+            connection, data_source_id=primary_ds_id, metadata={**primary_run_metadata, "replaced_upload": True}
+        )
+        json_run_id = ensure_pending_run(
+            connection, data_source_id=json_ds_id, metadata={**json_run_metadata, "replaced_upload": True}
+        )
+        superseded = [
+            (old.get("s3_bucket"), old.get("s3_key")),
+            (old.get("companion_s3_bucket"), old.get("companion_s3_key")),
+        ]
+        superseded += supersede_duplicates(
+            connection, existing, survivor_url=primary_metadata["source_url"]
+        )
+        return {
+            "action": "replaced",
+            "data_source_ids": [primary_ds_id, json_ds_id],
+            "ingestion_run_ids": [primary_run_id, json_run_id],
+            "s3_cleanup": [obj for obj in superseded if obj not in new_uploads],
+        }
+
+    primary_ds_id = _insert_data_source_row(
+        connection,
+        name=primary_file_name,
+        data_source_type=source_type,
+        created_by_user_id=created_by_user_id,
+        metadata=primary_metadata,
+    )
+    json_ds_id = _insert_data_source_row(
+        connection,
+        name=metadata_file_name,
+        data_source_type="json",
+        created_by_user_id=created_by_user_id,
+        metadata=json_metadata,
+    )
+    primary_run_id = _insert_ingestion_run_row(
+        connection, data_source_row_id=primary_ds_id, status="pending", metadata=primary_run_metadata
+    )
+    json_run_id = _insert_ingestion_run_row(
+        connection, data_source_row_id=json_ds_id, status="pending", metadata=json_run_metadata
+    )
+    return {
+        "action": "staged",
+        "data_source_ids": [primary_ds_id, json_ds_id],
+        "ingestion_run_ids": [primary_run_id, json_run_id],
+        "s3_cleanup": [],
+    }
+
+
+def _stage_website(event, body, connection, *, created_by: str, created_by_user_id: str):
+    name = body.get("name")
+    include_patterns = body.get("include_patterns", [])
+    exclude_patterns = body.get("exclude_patterns", [])
+
+    if not name:
+        return _response(event, 400, {"error": "Missing name of the website"})
+
+    if not isinstance(include_patterns, list):
+        return _response(event, 400, {"error": "include_patterns must be an array"})
+
+    if not isinstance(exclude_patterns, list):
+        return _response(event, 400, {"error": "exclude_patterns must be an array"})
+
+    existing_id = _existing_website_row_id(connection, name=name)
+    if existing_id:
+        return _response(
+            event,
+            409,
+            {
+                "error": "Website already exists in data_sources",
+                "existing_data_source_id": existing_id,
+                "name": name,
+            },
+        )
+
+    data_source_metadata = {
+        "source": "staged_website",
+        "action": "staged_for_future_sync",
+    }
+
+    data_source_id = _insert_data_source_row(
+        connection,
+        name=name,
+        data_source_type="website",
+        created_by_user_id=created_by_user_id,
+        metadata=data_source_metadata,
+        include_patterns=include_patterns if include_patterns else None,
+        exclude_patterns=exclude_patterns if exclude_patterns else None,
+    )
+
+    ingestion_run_id = _insert_ingestion_run_row(
+        connection,
+        data_source_row_id=data_source_id,
+        status="pending",
+        metadata={
+            "source": "staged_website",
+            "action": "awaiting_sync",
+        },
+    )
+
+    connection.commit()
+
+    return _response(
+        event,
+        200,
+        {
+            "message": "Website staged successfully.",
+            "action": "staged_website",
+            "type": "website",
+            "created_by": created_by,
+            "staged_data_source_ids": [data_source_id],
+            "pending_ingestion_run_ids": [ingestion_run_id],
+        },
+    )
+
+
+def _apply_details_without_reprocessing(
+    connection, existing: dict, *, name: str, details: dict, source_url: str
+) -> list[tuple[str, str]]:
+    """
+    For a byte-identical re-upload: keep the current object and chunks, but
+    apply any title/link changes so they show up without re-embedding, and
+    drop any older duplicates. Returns their S3 objects to delete after commit.
+    """
+    old = existing["metadata"]
+    metadata = {**old, **details, "source_url": source_url}
+    update_data_source(connection, data_source_id=existing["id"], name=name, metadata=metadata)
+    rename_source_url(connection, old_url=source_url_for(existing["type"], old), new_url=source_url)
+    superseded = supersede_duplicates(connection, existing, survivor_url=source_url)
+    rename_source(connection, url=source_url, name=name)
+    return superseded
+
+
+def _stage_video(event, body, connection, *, created_by: str, created_by_user_id: str):
+    file_name = body.get("video_file_name")
+    s3_bucket = body.get("video_s3_bucket")
+    s3_key = body.get("video_s3_key")
+    video_url = (body.get("video_url") or "").strip()
+    display_name = (body.get("name") or file_name or "").strip()
+
+    if not file_name or not s3_bucket or not s3_key:
+        return _response(event, 400, {"error": "Missing video file details"})
+    if not video_url or not is_http_url(video_url):
+        return _response(
+            event,
+            400,
+            {"error": "video_url must be a public http(s) URL used for citations and deep-links"},
+        )
+
+    try:
+        etag = head_etag(s3_bucket, s3_key)
+    except Exception as e:
+        logger.error("Uploaded video not found in S3: %s", e, exc_info=True)
+        return _response(event, 400, {"error": "Uploaded video does not exist in S3"})
+
+    source_key = upload_source_key("video", file_name)
+    existing = find_existing_upload(
+        connection, data_source_type="video", source_key=source_key, file_name=file_name
+    )
+    _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+
+    if existing and _content_unchanged(existing, etag):
+        superseded = _apply_details_without_reprocessing(
+            connection,
+            existing,
+            name=display_name,
+            details={"video_url": video_url, "source_key": source_key, "content_etag": etag},
+            source_url=video_url,
+        )
+        connection.commit()
+        delete_s3_objects([(s3_bucket, s3_key), *superseded])
+        return _response(
+            event,
+            200,
+            {
+                "message": "This video is identical to the one already uploaded, so transcription was skipped. Title and link were updated.",
+                "action": "unchanged",
+                "type": "video",
+                "created_by": created_by,
+                "existing_data_source_id": existing["id"],
+                "staged_data_source_ids": [],
+                "pending_ingestion_run_ids": [],
+            },
+        )
+
+    try:
+        transcribe_info = start_transcription_job(
+            bucket=s3_bucket,
+            key=s3_key,
+            file_name=file_name,
+        )
+    except Exception as e:
+        logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
+        detail = str(e).strip().replace("\n", " ")[:400]
+        return _response(
+            event,
+            500,
+            {
+                "error": "Failed to start transcription. Check the file format and try again.",
+                "detail": detail,
+            },
+        )
+
+    data_source_metadata = {
+        "source": "staged_video",
+        "action": "transcribing",
+        "s3_bucket": s3_bucket,
+        "s3_key": s3_key,
+        "content_etag": etag,
+        "source_key": source_key,
+        "source_url": video_url,
+        "video_url": video_url,
+        "video_file_name": file_name,
+        "transcribe_job_name": transcribe_info["transcribe_job_name"],
+        "transcribe_status": "IN_PROGRESS",
+        "transcribe_output_s3_uri": transcribe_info["transcript_s3_uri"],
+        "media_format": transcribe_info["media_format"],
+    }
+    run_metadata = {
+        "source": "staged_video",
+        "action": "awaiting_transcription",
+        "transcribe_job_name": transcribe_info["transcribe_job_name"],
+    }
+
+    superseded: list[tuple[str, str]] = []
+    if existing:
+        old = existing["metadata"]
+        data_source_id = existing["id"]
+        # Fresh metadata (not a merge) so the old transcript_s3_uri cannot be
+        # picked up before the new transcription finishes.
+        update_data_source(
+            connection, data_source_id=data_source_id, name=display_name, metadata=data_source_metadata
+        )
+        rename_source_url(connection, old_url=source_url_for("video", old), new_url=video_url)
+        superseded += supersede_duplicates(connection, existing, survivor_url=video_url)
+        ingestion_run_id = ensure_pending_run(
+            connection, data_source_id=data_source_id, metadata={**run_metadata, "replaced_upload": True}
+        )
+        superseded.append((old.get("s3_bucket"), old.get("s3_key")))
+        for uri in {old.get("transcribe_output_s3_uri"), old.get("transcript_s3_uri")}:
+            parsed = parse_s3_uri(uri)
+            if parsed:
+                superseded.append(parsed)
+        action = "replaced_video_transcription"
+        message = "Video replaced. Transcription has started; only changed transcript chunks will be re-embedded."
+    else:
+        data_source_id = _insert_data_source_row(
+            connection,
+            name=display_name,
+            data_source_type="video",
+            created_by_user_id=created_by_user_id,
+            metadata=data_source_metadata,
+        )
+        ingestion_run_id = _insert_ingestion_run_row(
+            connection,
+            data_source_row_id=data_source_id,
+            status="pending",
+            metadata=run_metadata,
+        )
+        action = "staged_video_transcription"
+        message = "Video uploaded. Transcription has started; embedding will run automatically when it finishes."
+
+    connection.commit()
+    delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
+
+    return _response(
+        event,
+        200,
+        {
+            "message": message,
+            "action": action,
+            "type": "video",
+            "created_by": created_by,
+            "staged_data_source_ids": [data_source_id],
+            "pending_ingestion_run_ids": [ingestion_run_id],
+            "transcribe_job_name": transcribe_info["transcribe_job_name"],
+        },
+    )
+
+
+def _stage_document(event, body, connection, *, created_by: str, created_by_user_id: str):
+    file_name = body.get("document_file_name")
+    s3_bucket = body.get("document_s3_bucket")
+    s3_key = body.get("document_s3_key")
+    document_url = (body.get("document_url") or "").strip()
+    display_name = (body.get("name") or file_name or "").strip()
+
+    if not file_name or not s3_bucket or not s3_key:
+        return _response(event, 400, {"error": "Missing document file details"})
+    if not file_name.lower().endswith(DOCUMENT_EXTENSIONS):
+        return _response(
+            event,
+            400,
+            {"error": "document_file_name must end with .pdf, .docx, or .txt"},
+        )
+    if document_url and not is_http_url(document_url):
+        return _response(
+            event,
+            400,
+            {"error": "document_url must be a public http(s) URL used for citations"},
+        )
+
+    try:
+        etag = head_etag(s3_bucket, s3_key)
+    except Exception as e:
+        logger.error("Uploaded document not found in S3: %s", e, exc_info=True)
+        return _response(event, 400, {"error": "Uploaded document does not exist in S3"})
+
+    source_key = upload_source_key("document", file_name)
+    # The citation link when there is one, so retrieval can still link to it.
+    source_url = document_url or source_key
+    existing = find_existing_upload(
+        connection, data_source_type="document", source_key=source_key, file_name=file_name
+    )
+    _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+
+    if existing and _content_unchanged(existing, etag):
+        superseded = _apply_details_without_reprocessing(
+            connection,
+            existing,
+            name=display_name,
+            details={"document_url": document_url, "source_key": source_key, "content_etag": etag},
+            source_url=source_url,
+        )
+        connection.commit()
+        delete_s3_objects([(s3_bucket, s3_key), *superseded])
+        return _response(
+            event,
+            200,
+            {
+                "message": "This document is identical to the one already uploaded, so it was not re-embedded. Title and link were updated.",
+                "action": "unchanged",
+                "type": "document",
+                "created_by": created_by,
+                "existing_data_source_id": existing["id"],
+                "staged_data_source_ids": [],
+                "pending_ingestion_run_ids": [],
+            },
+        )
+
+    data_source_metadata = {
+        "source": "staged_document",
+        "action": "processing",
+        "s3_bucket": s3_bucket,
+        "s3_key": s3_key,
+        "content_etag": etag,
+        "source_key": source_key,
+        "source_url": source_url,
+        "document_file_name": file_name,
+        "document_url": document_url,
+    }
+    run_metadata = {
+        "source": "staged_document",
+        "action": "awaiting_embedding",
+    }
+
+    superseded: list[tuple[str, str]] = []
+    if existing:
+        old = existing["metadata"]
+        data_source_id = existing["id"]
+        update_data_source(
+            connection, data_source_id=data_source_id, name=display_name, metadata=data_source_metadata
+        )
+        rename_source_url(connection, old_url=source_url_for("document", old), new_url=source_url)
+        superseded += supersede_duplicates(connection, existing, survivor_url=source_url)
+        ingestion_run_id = ensure_pending_run(
+            connection, data_source_id=data_source_id, metadata={**run_metadata, "replaced_upload": True}
+        )
+        superseded.append((old.get("s3_bucket"), old.get("s3_key")))
+        replaced = True
+    else:
+        data_source_id = _insert_data_source_row(
+            connection,
+            name=display_name,
+            data_source_type="document",
+            created_by_user_id=created_by_user_id,
+            metadata=data_source_metadata,
+        )
+        ingestion_run_id = _insert_ingestion_run_row(
+            connection,
+            data_source_row_id=data_source_id,
+            status="pending",
+            metadata=run_metadata,
+        )
+        replaced = False
+
+    connection.commit()
+    delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
+
+    trigger_result = trigger_uploaded_document(connection, ingestion_run_id)
+
+    if not trigger_result.get("started"):
+        message = "Document staged, but embedding could not be started automatically. Use Sync to retry."
+    elif replaced:
+        message = "Document replaced. Only changed sections will be re-embedded."
+    else:
+        message = "Document uploaded. Embedding has started."
+
+    return _response(
+        event,
+        200,
+        {
+            "message": message,
+            "action": "replaced_document_embedding" if replaced else "staged_document_embedding",
+            "type": "document",
+            "created_by": created_by,
+            "staged_data_source_ids": [data_source_id],
+            "pending_ingestion_run_ids": [ingestion_run_id],
+        },
+    )
+
+
+def _stage_pair(event, body, connection, *, source_type: str, created_by: str, created_by_user_id: str):
+    if source_type == "csv":
+        primary_file_name = body.get("csv_file_name")
+        primary_s3_bucket = body.get("csv_s3_bucket")
+        primary_s3_key = body.get("csv_s3_key")
+    else:
+        primary_file_name = body.get("markdown_file_name")
+        primary_s3_bucket = body.get("markdown_s3_bucket")
+        primary_s3_key = body.get("markdown_s3_key")
+    primary_source_label = source_type
+
+    metadata_file_name = body.get("metadata_file_name")
+    metadata_s3_bucket = body.get("metadata_s3_bucket")
+    metadata_s3_key = body.get("metadata_s3_key")
+
+    if not primary_file_name or not primary_s3_bucket or not primary_s3_key:
+        return _response(event, 400, {"error": f"Missing {primary_source_label} file details"})
+
+    if not metadata_file_name or not metadata_s3_bucket or not metadata_s3_key:
+        return _response(event, 400, {"error": "Missing metadata JSON file details"})
+
+    try:
+        result = stage_file_pair(
+            connection,
+            created_by_user_id=created_by_user_id,
+            source_type=source_type,
+            primary_file_name=primary_file_name,
+            primary_s3_bucket=primary_s3_bucket,
+            primary_s3_key=primary_s3_key,
+            metadata_file_name=metadata_file_name,
+            metadata_s3_bucket=metadata_s3_bucket,
+            metadata_s3_key=metadata_s3_key,
+        )
+    except StageRejected as rejected:
+        return _response(event, rejected.status_code, rejected.body)
+
+    connection.commit()
+    delete_s3_objects(result["s3_cleanup"])
+
+    label = primary_source_label.capitalize()
+    if result["action"] == "unchanged":
+        message = f"{primary_file_name} is identical to the version already uploaded, so nothing was re-staged."
+    elif result["action"] == "replaced":
+        message = f"{label} and metadata JSON replaced the existing {primary_file_name}. Click Sync now; only changed chunks will be re-embedded."
+    else:
+        message = f"{label} and metadata JSON staged successfully."
+
+    return _response(
+        event,
+        200,
+        {
+            "message": message,
+            "action": f"{result['action']}_{primary_source_label}_and_metadata",
+            "type": source_type,
+            "created_by": created_by,
+            "staged_data_source_ids": [] if result["action"] == "unchanged" else result["data_source_ids"],
+            "pending_ingestion_run_ids": result["ingestion_run_ids"],
+        },
+    )
+
+
 def stage_data_sources(event, body, connection):
     """
     Stage either a website, CSV/JSON pair, or markdown/JSON pair for future syncing
 
     This method:
     - validates the request
-    - inserts the appropriate data_sources row(s)
+    - inserts the appropriate data_sources row(s), or for a file uploaded again
+      under the same name, replaces the existing row(s) in place (see
+      upload_identity.py) so its chunks are re-embedded only where changed
     - creates matching ingestion_runs row(s) with status 'pending'
     - does NOT start ingestion or create schedulers
 
@@ -212,398 +860,19 @@ def stage_data_sources(event, body, connection):
         return _response(event, 400, {"error": "Admin user not found in database"})
     connection.commit()
 
+    kwargs = {"created_by": created_by, "created_by_user_id": created_by_user_id}
     try:
         if source_type == "website":
-            name = body.get("name")
-            include_patterns = body.get("include_patterns", [])
-            exclude_patterns = body.get("exclude_patterns", [])
-
-            if not name:
-                return _response(event, 400, {"error": "Missing name of the website"})
-
-            if not isinstance(include_patterns, list):
-                return _response(event, 400, {"error": "include_patterns must be an array"})
-
-            if not isinstance(exclude_patterns, list):
-                return _response(event, 400, {"error": "exclude_patterns must be an array"})
-
-            existing_id = _existing_website_row_id(connection, name=name)
-            if existing_id:
-                return _response(
-                    event,
-                    409,
-                    {
-                        "error": "Website already exists in data_sources",
-                        "existing_data_source_id": existing_id,
-                        "name": name,
-                    },
-                )
-
-            data_source_metadata = {
-                "source": "staged_website",
-                "action": "staged_for_future_sync",
-            }
-
-            data_source_id = _insert_data_source_row(
-                connection,
-                name=name,
-                data_source_type="website",
-                created_by_user_id=created_by_user_id,
-                metadata=data_source_metadata,
-                include_patterns=include_patterns if include_patterns else None,
-                exclude_patterns=exclude_patterns if exclude_patterns else None,
-            )
-
-            ingestion_run_id = _insert_ingestion_run_row(
-                connection,
-                data_source_row_id=data_source_id,
-                status="pending",
-                metadata={
-                    "source": "staged_website",
-                    "action": "awaiting_sync",
-                },
-            )
-
-            connection.commit()
-
-            return _response(
-                event,
-                200,
-                {
-                    "message": "Website staged successfully.",
-                    "action": "staged_website",
-                    "type": "website",
-                    "created_by": created_by,
-                    "staged_data_source_ids": [data_source_id],
-                    "pending_ingestion_run_ids": [ingestion_run_id],
-                },
-            )
-
+            return _stage_website(event, body, connection, **kwargs)
         if source_type == "video":
-            file_name = body.get("video_file_name")
-            s3_bucket = body.get("video_s3_bucket")
-            s3_key = body.get("video_s3_key")
-            video_url = (body.get("video_url") or "").strip()
-            display_name = (body.get("name") or file_name or "").strip()
-
-            if not file_name or not s3_bucket or not s3_key:
-                return _response(event, 400, {"error": "Missing video file details"})
-            if not video_url or not is_http_url(video_url):
-                return _response(
-                    event,
-                    400,
-                    {"error": "video_url must be a public http(s) URL used for citations and deep-links"},
-                )
-
-            try:
-                _assert_s3_object_exists(s3_bucket, s3_key)
-            except Exception as e:
-                logger.error("Uploaded video not found in S3: %s", e, exc_info=True)
-                return _response(event, 400, {"error": "Uploaded video does not exist in S3"})
-
-            existing_id = _existing_file_row_id(connection, s3_bucket=s3_bucket, s3_key=s3_key)
-            if existing_id:
-                return _response(
-                    event,
-                    409,
-                    {
-                        "error": "Video file already exists in data_sources",
-                        "existing_data_source_id": existing_id,
-                        "file_name": file_name,
-                    },
-                )
-
-            try:
-                transcribe_info = start_transcription_job(
-                    bucket=s3_bucket,
-                    key=s3_key,
-                    file_name=file_name,
-                )
-            except Exception as e:
-                logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
-                detail = str(e).strip().replace("\n", " ")[:400]
-                return _response(
-                    event,
-                    500,
-                    {
-                        "error": "Failed to start transcription. Check the file format and try again.",
-                        "detail": detail,
-                    },
-                )
-
-            data_source_metadata = {
-                "source": "staged_video",
-                "action": "transcribing",
-                "s3_bucket": s3_bucket,
-                "s3_key": s3_key,
-                "video_url": video_url,
-                "video_file_name": file_name,
-                "transcribe_job_name": transcribe_info["transcribe_job_name"],
-                "transcribe_status": "IN_PROGRESS",
-                "transcribe_output_s3_uri": transcribe_info["transcript_s3_uri"],
-                "media_format": transcribe_info["media_format"],
-            }
-
-            data_source_id = _insert_data_source_row(
-                connection,
-                name=display_name,
-                data_source_type="video",
-                created_by_user_id=created_by_user_id,
-                metadata=data_source_metadata,
-            )
-
-            ingestion_run_id = _insert_ingestion_run_row(
-                connection,
-                data_source_row_id=data_source_id,
-                status="pending",
-                metadata={
-                    "source": "staged_video",
-                    "action": "awaiting_transcription",
-                    "transcribe_job_name": transcribe_info["transcribe_job_name"],
-                },
-            )
-
-            connection.commit()
-
-            return _response(
-                event,
-                200,
-                {
-                    "message": "Video uploaded. Transcription has started; embedding will run automatically when it finishes.",
-                    "action": "staged_video_transcription",
-                    "type": "video",
-                    "created_by": created_by,
-                    "staged_data_source_ids": [data_source_id],
-                    "pending_ingestion_run_ids": [ingestion_run_id],
-                    "transcribe_job_name": transcribe_info["transcribe_job_name"],
-                },
-            )
-
+            return _stage_video(event, body, connection, **kwargs)
         if source_type == "document":
-            file_name = body.get("document_file_name")
-            s3_bucket = body.get("document_s3_bucket")
-            s3_key = body.get("document_s3_key")
-            document_url = (body.get("document_url") or "").strip()
-            display_name = (body.get("name") or file_name or "").strip()
+            return _stage_document(event, body, connection, **kwargs)
+        return _stage_pair(event, body, connection, source_type=source_type, **kwargs)
 
-            if not file_name or not s3_bucket or not s3_key:
-                return _response(event, 400, {"error": "Missing document file details"})
-            if not file_name.lower().endswith(DOCUMENT_EXTENSIONS):
-                return _response(
-                    event,
-                    400,
-                    {"error": "document_file_name must end with .pdf, .docx, or .txt"},
-                )
-            if document_url and not is_http_url(document_url):
-                return _response(
-                    event,
-                    400,
-                    {"error": "document_url must be a public http(s) URL used for citations"},
-                )
-
-            try:
-                _assert_s3_object_exists(s3_bucket, s3_key)
-            except Exception as e:
-                logger.error("Uploaded document not found in S3: %s", e, exc_info=True)
-                return _response(event, 400, {"error": "Uploaded document does not exist in S3"})
-
-            existing_id = _existing_file_row_id(connection, s3_bucket=s3_bucket, s3_key=s3_key)
-            if existing_id:
-                return _response(
-                    event,
-                    409,
-                    {
-                        "error": "Document file already exists in data_sources",
-                        "existing_data_source_id": existing_id,
-                        "file_name": file_name,
-                    },
-                )
-
-            data_source_metadata = {
-                "source": "staged_document",
-                "action": "processing",
-                "s3_bucket": s3_bucket,
-                "s3_key": s3_key,
-                "document_file_name": file_name,
-                "document_url": document_url,
-            }
-
-            data_source_id = _insert_data_source_row(
-                connection,
-                name=display_name,
-                data_source_type="document",
-                created_by_user_id=created_by_user_id,
-                metadata=data_source_metadata,
-            )
-
-            ingestion_run_id = _insert_ingestion_run_row(
-                connection,
-                data_source_row_id=data_source_id,
-                status="pending",
-                metadata={
-                    "source": "staged_document",
-                    "action": "awaiting_embedding",
-                },
-            )
-
-            connection.commit()
-
-            trigger_result = trigger_uploaded_document(connection, ingestion_run_id)
-
-            return _response(
-                event,
-                200,
-                {
-                    "message": (
-                        "Document uploaded. Embedding has started."
-                        if trigger_result.get("started")
-                        else "Document staged, but embedding could not be started automatically. Use Sync to retry."
-                    ),
-                    "action": "staged_document_embedding",
-                    "type": "document",
-                    "created_by": created_by,
-                    "staged_data_source_ids": [data_source_id],
-                    "pending_ingestion_run_ids": [ingestion_run_id],
-                },
-            )
-
-        if source_type == "csv":
-            primary_file_name = body.get("csv_file_name")
-            primary_s3_bucket = body.get("csv_s3_bucket")
-            primary_s3_key = body.get("csv_s3_key")
-            primary_data_source_type = "csv"
-            primary_source_label = "csv"
-        else:
-            primary_file_name = body.get("markdown_file_name")
-            primary_s3_bucket = body.get("markdown_s3_bucket")
-            primary_s3_key = body.get("markdown_s3_key")
-            primary_data_source_type = "markdown"
-            primary_source_label = "markdown"
-
-        metadata_file_name = body.get("metadata_file_name")
-        metadata_s3_bucket = body.get("metadata_s3_bucket")
-        metadata_s3_key = body.get("metadata_s3_key")
-
-        if not primary_file_name or not primary_s3_bucket or not primary_s3_key:
-            return _response(event, 400, {"error": f"Missing {primary_source_label} file details"})
-
-        if not metadata_file_name or not metadata_s3_bucket or not metadata_s3_key:
-            return _response(event, 400, {"error": "Missing metadata JSON file details"})
-
-        pair_error = _validate_file_pair(source_type, primary_file_name, metadata_file_name)
-        if pair_error:
-            return _response(event, 400, {"error": pair_error})
-
-        try:
-            _assert_s3_object_exists(primary_s3_bucket, primary_s3_key)
-            _assert_s3_object_exists(metadata_s3_bucket, metadata_s3_key)
-        except Exception as e:
-            logger.error("Uploaded file not found in S3: %s", e, exc_info=True)
-            return _response(event, 400, {"error": "One or both uploaded files do not exist in S3"})
-
-        existing_primary_id = _existing_file_row_id(
-            connection, s3_bucket=primary_s3_bucket, s3_key=primary_s3_key
-        )
-        if existing_primary_id:
-            return _response(
-                event,
-                409,
-                {
-                    "error": f"{primary_source_label.capitalize()} file already exists in data_sources",
-                    "existing_data_source_id": existing_primary_id,
-                    "file_name": primary_file_name,
-                },
-            )
-
-        existing_json_id = _existing_file_row_id(
-            connection, s3_bucket=metadata_s3_bucket, s3_key=metadata_s3_key
-        )
-        if existing_json_id:
-            return _response(
-                event,
-                409,
-                {
-                    "error": "Metadata JSON file already exists in data_sources",
-                    "existing_data_source_id": existing_json_id,
-                    "metadata_file_name": metadata_file_name,
-                },
-            )
-
-        primary_data_source_metadata = {
-            "source": "staged_s3_file",
-            "action": "staged_for_future_sync",
-            "s3_bucket": primary_s3_bucket,
-            "s3_key": primary_s3_key,
-            "companion_file_name": metadata_file_name,
-            "companion_s3_bucket": metadata_s3_bucket,
-            "companion_s3_key": metadata_s3_key,
-        }
-
-        json_data_source_metadata = {
-            "source": "staged_s3_file",
-            "action": "staged_for_future_sync",
-            "s3_bucket": metadata_s3_bucket,
-            "s3_key": metadata_s3_key,
-            "companion_file_name": primary_file_name,
-            "companion_s3_bucket": primary_s3_bucket,
-            "companion_s3_key": primary_s3_key,
-        }
-
-        primary_data_source_id = _insert_data_source_row(
-            connection,
-            name=primary_file_name,
-            data_source_type=primary_data_source_type,
-            created_by_user_id=created_by_user_id,
-            metadata=primary_data_source_metadata,
-        )
-
-        json_data_source_id = _insert_data_source_row(
-            connection,
-            name=metadata_file_name,
-            data_source_type="json",
-            created_by_user_id=created_by_user_id,
-            metadata=json_data_source_metadata,
-        )
-
-        primary_ingestion_run_id = _insert_ingestion_run_row(
-            connection,
-            data_source_row_id=primary_data_source_id,
-            status="pending",
-            metadata={
-                "source": f"staged_{primary_source_label}_file",
-                "action": "awaiting_sync",
-                "s3_bucket": primary_s3_bucket,
-                "s3_key": primary_s3_key,
-            },
-        )
-
-        json_ingestion_run_id = _insert_ingestion_run_row(
-            connection,
-            data_source_row_id=json_data_source_id,
-            status="pending",
-            metadata={
-                "source": "staged_json_file",
-                "action": "awaiting_sync",
-                "s3_bucket": metadata_s3_bucket,
-                "s3_key": metadata_s3_key,
-            },
-        )
-
-        connection.commit()
-
-        return _response(
-            event,
-            200,
-            {
-                "message": f"{primary_source_label.capitalize()} and metadata JSON staged successfully.",
-                "action": f"staged_{primary_source_label}_and_metadata",
-                "type": source_type,
-                "created_by": created_by,
-                "staged_data_source_ids": [primary_data_source_id, json_data_source_id],
-                "pending_ingestion_run_ids": [primary_ingestion_run_id, json_ingestion_run_id],
-            },
-        )
-
+    except StageRejected as rejected:
+        connection.rollback()
+        return _response(event, rejected.status_code, rejected.body)
     except Exception as e:
         connection.rollback()
         logger.error("Failed to stage data sources: %s", e, exc_info=True)

@@ -55,6 +55,8 @@ import boto3
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
+from helpers.upload_identity import source_url_for
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -557,11 +559,10 @@ def process_document_batch(event, connection) -> dict:
             else:  # csv
                 chunks = _chunk_csv(raw_bytes)
 
-            source_url = f"s3://{bucket}/{key}"
+            # Stable across re-uploads of the same file (see upload_identity.py),
+            # so the content_hash check below only re-embeds changed chunks.
+            source_url = source_url_for(ds_type, meta)
             if ds_type == "document":
-                document_url = (meta.get("document_url") or "").strip()
-                if document_url:
-                    source_url = document_url
                 source_metadata = {"document_file_name": meta.get("document_file_name")}
             else:
                 companion_metadata = _load_companion_metadata(meta)

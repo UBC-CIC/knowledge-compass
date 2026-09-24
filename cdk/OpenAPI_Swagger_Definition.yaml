@@ -432,7 +432,11 @@ paths:
                   example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
-          description: Data source(s) staged successfully
+          description: >-
+            Data source(s) staged successfully. A csv/markdown/document/video file
+            uploaded under the same name as an existing source replaces it in place
+            (action starts with "replaced_"); a byte-identical re-upload is not
+            re-processed (action "unchanged" or "unchanged_*").
           content:
             application/json:
               schema:
@@ -444,7 +448,7 @@ paths:
                     type: string
                   type:
                     type: string
-                    enum: [website, csv, markdown, video]
+                    enum: [website, csv, markdown, video, document]
                   created_by:
                     type: string
                   staged_data_source_ids:
@@ -456,7 +460,7 @@ paths:
         "404":
           description: Route not found
         "409":
-          description: Conflict
+          description: Conflict (website already exists, file already staged, or the source it would replace is still being ingested)
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -674,9 +678,17 @@ paths:
                 properties:
                   message: { type: string }
                   staged_count: { type: integer }
+                  replaced_count: { type: integer }
+                  unchanged_count: { type: integer }
                   skipped_count: { type: integer }
                   error_count: { type: integer }
                   staged:
+                    type: array
+                    items: { type: object }
+                  replaced:
+                    type: array
+                    items: { type: object }
+                  unchanged:
                     type: array
                     items: { type: object }
                   skipped:

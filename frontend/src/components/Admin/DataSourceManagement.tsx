@@ -257,6 +257,49 @@ function sanitizeUploadFileName(fileName: string): string {
   return `${cleanedStem}${cleanedExt}`.slice(0, 180);
 }
 
+type UploadSourceType = "csv" | "markdown" | "document" | "video";
+
+// Mirrors the backend's upload_identity.find_existing_upload: a file uploaded
+// again under the same name replaces that source instead of adding a new one.
+function findReplacedSource(
+  dataSources: DataSourceRow[],
+  type: UploadSourceType,
+  fileName: string
+): DataSourceRow | undefined {
+  const sourceKey = `upload://${type}/${sanitizeUploadFileName(fileName).toLowerCase()}`;
+  const lowerName = fileName.toLowerCase();
+  const legacyFileName = (ds: DataSourceRow) => {
+    const value =
+      type === "document"
+        ? ds.metadata?.document_file_name
+        : type === "video"
+        ? ds.metadata?.video_file_name
+        : ds.name;
+    return typeof value === "string" ? value.toLowerCase() : "";
+  };
+  return dataSources.find(
+    (ds) =>
+      ds.type === type &&
+      (ds.metadata?.source_key === sourceKey ||
+        (!ds.metadata?.source_key && legacyFileName(ds) === lowerName))
+  );
+}
+
+function ReplaceNotice({ existing }: { existing?: DataSourceRow }) {
+  if (!existing) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700" />
+      <div>
+        This will replace the existing source{" "}
+        <span className="font-medium">{existing.name}</span>. Only changed content is
+        re-processed, and an identical file is skipped entirely. Rename the file if it is a
+        different resource.
+      </div>
+    </div>
+  );
+}
+
 function displayedStatus(
   ds: DataSourceRow,
   run?: IngestionRunRow | null
@@ -1089,10 +1132,21 @@ export default function DataSourceManagement() {
         throw new Error(stageJson?.error || "Batch staging failed");
       }
 
-      const { staged_count, skipped_count, error_count } = stageJson;
+      const {
+        staged_count,
+        replaced_count = 0,
+        unchanged_count = 0,
+        skipped_count,
+        error_count,
+      } = stageJson;
       setZipStatus({
-        type: error_count > 0 && staged_count === 0 ? "error" : "success",
-        message: `Done. ${staged_count} staged, ${skipped_count} skipped (duplicates), ${error_count} failed.`,
+        type:
+          error_count > 0 && staged_count + replaced_count + unchanged_count === 0
+            ? "error"
+            : "success",
+        message:
+          `Done. ${staged_count} new, ${replaced_count} replaced, ${unchanged_count} unchanged (skipped), ` +
+          `${skipped_count} skipped (already staged or ingesting), ${error_count} failed.`,
       });
 
       await fetchAdminDataSources();
@@ -1441,6 +1495,19 @@ export default function DataSourceManagement() {
     }
     return map;
   })();
+
+  const singleReplaces = primaryFile
+    ? findReplacedSource(dataSources, getPrimaryFileType(primaryFile), primaryFile.name)
+    : undefined;
+  const videoReplaces = videoFile
+    ? findReplacedSource(dataSources, "video", videoFile.name)
+    : undefined;
+  const documentReplaces = documentFile
+    ? findReplacedSource(dataSources, "document", documentFile.name)
+    : undefined;
+  const zipReplaceCount = zipPairs.filter(
+    (p) => !p.error && findReplacedSource(dataSources, p.type, p.primaryFile.name)
+  ).length;
 
   // hide JSON rows from main table (they appear as subrow under CSV/markdown)
   const filteredDataSources = dataSources
@@ -1806,6 +1873,8 @@ export default function DataSourceManagement() {
                       </div>
                     )}
 
+                    <ReplaceNotice existing={singleReplaces} />
+
                     {uploadStatus.message && (
                       <div
                         className={`text-sm p-2 rounded ${
@@ -1886,7 +1955,8 @@ export default function DataSourceManagement() {
                     <div className="text-sm text-gray-600">
                       Zip CSV or Markdown guidance files together with a matching{" "}
                       <code className="bg-gray-100 px-1 rounded">{"<filename>.metadata.json"}</code>{" "}
-                      sidecar for each one. Duplicates are skipped automatically.
+                      sidecar for each one. Files with the same name as an existing source replace it;
+                      identical files are skipped.
                     </div>
 
                     {!zipFile ? (
@@ -1943,6 +2013,7 @@ export default function DataSourceManagement() {
                           <div className="border rounded-lg overflow-hidden">
                             <div className="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600 border-b">
                               {zipPairs.filter(p => !p.error).length} valid pair(s) · {zipPairs.filter(p => p.error).length} with errors
+                              {zipReplaceCount > 0 && ` · ${zipReplaceCount} will replace existing sources`}
                             </div>
                             <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
                               {zipPairs.map((pair, i) => (
@@ -1953,6 +2024,8 @@ export default function DataSourceManagement() {
                                   </div>
                                   {pair.error ? (
                                     <span className="text-red-600 ml-2 flex-shrink-0">{pair.error}</span>
+                                  ) : findReplacedSource(dataSources, pair.type, pair.primaryFile.name) ? (
+                                    <span className="text-amber-700 ml-2 flex-shrink-0">↻ replaces existing</span>
                                   ) : (
                                     <span className="text-green-600 ml-2 flex-shrink-0">✓ paired</span>
                                   )}
@@ -2033,6 +2106,7 @@ export default function DataSourceManagement() {
                         </div>
                       )}
                     </div>
+                    <ReplaceNotice existing={videoReplaces} />
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-gray-900" htmlFor="video-title">
                         Title
@@ -2127,6 +2201,7 @@ export default function DataSourceManagement() {
                         </div>
                       )}
                     </div>
+                    <ReplaceNotice existing={documentReplaces} />
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-gray-900" htmlFor="document-title">
                         Title

@@ -2,13 +2,8 @@ import json
 import logging
 from helpers.cors import get_cors_headers
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
-from helpers.stage_data_sources import (
-    _validate_file_pair,
-    _assert_s3_object_exists,
-    _existing_file_row_id,
-    _insert_data_source_row,
-    _insert_ingestion_run_row,
-)
+from helpers.stage_data_sources import StageRejected, stage_file_pair
+from helpers.upload_identity import delete_s3_objects
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,7 +20,11 @@ def _response(event, status_code: int, body: dict):
 def stage_data_sources_batch(event, body, connection):
     """
     Stage multiple CSV/Markdown + metadata JSON file pairs in a single request.
-    Duplicates (matched by s3_bucket + s3_key) are silently skipped.
+
+    Each pair goes through the same stage_file_pair as a single upload: a file
+    uploaded again under an existing name replaces that source in place
+    ("replaced"), a byte-identical re-upload is dropped ("unchanged"), and a
+    source that is mid-ingestion is left alone ("skipped").
 
     Request body:
     {
@@ -62,8 +61,11 @@ def stage_data_sources_batch(event, body, connection):
     connection.commit()
 
     staged = []
+    replaced = []
+    unchanged = []
     skipped = []
     errors = []
+    s3_cleanup = []
 
     try:
         for i, item in enumerate(items):
@@ -84,95 +86,57 @@ def stage_data_sources_batch(event, body, connection):
                 errors.append({"index": i, "file": primary_file_name, "error": "Missing required fields"})
                 continue
 
-            pair_error = _validate_file_pair(source_type, primary_file_name, metadata_file_name)
-            if pair_error:
-                errors.append({"index": i, "file": primary_file_name, "error": pair_error})
-                continue
-
-            # Check for duplicates — skip silently
-            if _existing_file_row_id(connection, s3_bucket=primary_s3_bucket, s3_key=primary_s3_key):
-                skipped.append({"index": i, "file": primary_file_name, "reason": "already_staged"})
-                continue
-
-            if _existing_file_row_id(connection, s3_bucket=metadata_s3_bucket, s3_key=metadata_s3_key):
-                skipped.append({"index": i, "file": metadata_file_name, "reason": "already_staged"})
-                continue
-
-            # Verify files exist in S3
             try:
-                _assert_s3_object_exists(primary_s3_bucket, primary_s3_key)
-                _assert_s3_object_exists(metadata_s3_bucket, metadata_s3_key)
-            except Exception as e:
-                logger.error("S3 object not found for item %d: %s", i, e)
-                errors.append({"index": i, "file": primary_file_name, "error": "File not found in S3"})
+                result = stage_file_pair(
+                    connection,
+                    created_by_user_id=created_by_user_id,
+                    source_type=source_type,
+                    primary_file_name=primary_file_name,
+                    primary_s3_bucket=primary_s3_bucket,
+                    primary_s3_key=primary_s3_key,
+                    metadata_file_name=metadata_file_name,
+                    metadata_s3_bucket=metadata_s3_bucket,
+                    metadata_s3_key=metadata_s3_key,
+                )
+            except StageRejected as rejected:
+                reason = rejected.body.get("error")
+                if rejected.status_code == 409:
+                    skipped.append({"index": i, "file": primary_file_name, "reason": reason})
+                else:
+                    errors.append({"index": i, "file": primary_file_name, "error": reason})
                 continue
 
-            primary_label = source_type  # "csv" or "markdown"
-
-            primary_ds_id = _insert_data_source_row(
-                connection,
-                name=primary_file_name,
-                data_source_type=source_type,
-                created_by_user_id=created_by_user_id,
-                metadata={
-                    "source": "staged_s3_file",
-                    "action": "staged_for_future_sync",
-                    "s3_bucket": primary_s3_bucket,
-                    "s3_key": primary_s3_key,
-                    "companion_file_name": metadata_file_name,
-                    "companion_s3_bucket": metadata_s3_bucket,
-                    "companion_s3_key": metadata_s3_key,
-                },
-            )
-
-            json_ds_id = _insert_data_source_row(
-                connection,
-                name=metadata_file_name,
-                data_source_type="json",
-                created_by_user_id=created_by_user_id,
-                metadata={
-                    "source": "staged_s3_file",
-                    "action": "staged_for_future_sync",
-                    "s3_bucket": metadata_s3_bucket,
-                    "s3_key": metadata_s3_key,
-                    "companion_file_name": primary_file_name,
-                    "companion_s3_bucket": primary_s3_bucket,
-                    "companion_s3_key": primary_s3_key,
-                },
-            )
-
-            _insert_ingestion_run_row(
-                connection,
-                data_source_row_id=primary_ds_id,
-                status="pending",
-                metadata={"source": f"staged_{primary_label}_file", "action": "awaiting_sync",
-                          "s3_bucket": primary_s3_bucket, "s3_key": primary_s3_key},
-            )
-
-            _insert_ingestion_run_row(
-                connection,
-                data_source_row_id=json_ds_id,
-                status="pending",
-                metadata={"source": "staged_json_file", "action": "awaiting_sync",
-                          "s3_bucket": metadata_s3_bucket, "s3_key": metadata_s3_key},
-            )
-
-            staged.append({"index": i, "file": primary_file_name,
-                           "data_source_ids": [primary_ds_id, json_ds_id]})
+            s3_cleanup.extend(result["s3_cleanup"])
+            entry = {"index": i, "file": primary_file_name, "data_source_ids": result["data_source_ids"]}
+            if result["action"] == "replaced":
+                replaced.append(entry)
+            elif result["action"] == "unchanged":
+                unchanged.append(entry)
+            else:
+                staged.append(entry)
 
         connection.commit()
-
-        return _response(event, 200, {
-            "message": f"Batch staging complete. {len(staged)} staged, {len(skipped)} skipped, {len(errors)} failed.",
-            "staged_count": len(staged),
-            "skipped_count": len(skipped),
-            "error_count": len(errors),
-            "staged": staged,
-            "skipped": skipped,
-            "errors": errors,
-        })
 
     except Exception as e:
         connection.rollback()
         logger.error("Batch staging failed: %s", e, exc_info=True)
         return _response(event, 500, {"error": "Batch staging failed"})
+
+    delete_s3_objects(s3_cleanup)
+
+    return _response(event, 200, {
+        "message": (
+            f"Batch staging complete. {len(staged)} new, {len(replaced)} replaced, "
+            f"{len(unchanged)} unchanged, {len(skipped)} skipped, {len(errors)} failed."
+        ),
+        "staged_count": len(staged),
+        "replaced_count": len(replaced),
+        "unchanged_count": len(unchanged),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+        "staged": staged,
+        "replaced": replaced,
+        "unchanged": unchanged,
+        "skipped": skipped,
+        "errors": errors,
+    })

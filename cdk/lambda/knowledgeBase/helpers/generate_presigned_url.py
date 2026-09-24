@@ -1,7 +1,7 @@
 import os
 import json
-import re
 from helpers.cors import get_cors_headers
+from helpers.upload_identity import sanitize_file_name
 import time
 import boto3
 import logging
@@ -93,15 +93,6 @@ def _response(event, status_code: int, body: dict):
         "body": json.dumps(body),
     }
 
-def _sanitize_file_name(file_name: str) -> str:
-    base = os.path.basename(file_name).strip()
-    stem, ext = os.path.splitext(base)
-    stem = re.sub(r"[^\w.\-]+", "_", stem, flags=re.UNICODE)
-    stem = re.sub(r"_+", "_", stem).strip("._") or "upload"
-    ext = re.sub(r"[^\w.]", "", ext.lower())
-    return f"{stem}{ext}"[:180]
-
-
 def _normalize_content_type(content_type: str) -> str:
     normalized = (content_type or "application/octet-stream").strip().lower()
     return normalized.split(";", 1)[0].strip() or "application/octet-stream"
@@ -167,7 +158,7 @@ def generate_presigned_url(event):
     if not file_name:
         return _response(event, 400, {"error": "Missing file_name parameter"})
 
-    file_name = _sanitize_file_name(file_name)
+    file_name = sanitize_file_name(file_name)
     if not file_name:
         return _response(event, 400, {"error": "Invalid file_name parameter"})
 
