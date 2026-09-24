@@ -57,9 +57,9 @@ class FailingConnection:
         raise RuntimeError("db down")
 
 
-def _row(body, url, title, source_type, score, metadata=None):
+def _row(body, url, title, source_type, score, metadata=None, source_id=None):
     """Build a row in the SELECT column order used by retrieve_from_pgvector."""
-    return (body, metadata or {}, url, title, source_type, score)
+    return (body, metadata or {}, url, title, source_type, score, source_id or url)
 
 
 # A fake 1024-dim embedding (values irrelevant; DB is mocked).
@@ -125,6 +125,29 @@ class RetrieveFromPgvectorTests(unittest.TestCase):
         # The first (highest-score) row for the duplicate URL wins.
         dup = next(r for r in results if r["url"] == "https://x/dup")
         self.assertEqual(dup["content"], "first")
+
+    def test_documents_sharing_a_citation_link_are_both_kept(self):
+        # Two uploaded documents with the same public link are separate sources.
+        rows = [
+            _row("handbook", "https://x/landing", "Handbook", "document", 0.90, source_id="s1"),
+            _row("faq", "https://x/landing", "FAQ", "document", 0.85, source_id="s2"),
+            _row("handbook again", "https://x/landing", "Handbook", "document", 0.80, source_id="s1"),
+        ]
+        conn = FakeConnection(rows)
+
+        results = retrieval.retrieve_from_pgvector("q", conn, region="r", num_results=5)
+
+        self.assertEqual([r["title"] for r in results], ["Handbook", "FAQ"])
+
+    def test_query_prefers_citation_url_over_internal_url(self):
+        conn = FakeConnection([])
+        cursor = FakeCursor([])
+        conn.cursor = lambda: cursor
+
+        retrieval.retrieve_from_pgvector("q", conn, region="r")
+
+        sql = cursor.executed[0][0]
+        self.assertIn("COALESCE(NULLIF(s.metadata->>'citation_url', ''), s.url) AS url", sql)
 
     def test_respects_num_results_cap(self):
         rows = [_row(f"b{i}", f"https://x/{i}", f"T{i}", "web", 0.9 - i * 0.01) for i in range(10)]

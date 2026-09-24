@@ -19,6 +19,7 @@ from helpers.upload_identity import (
     parse_s3_uri,
     rename_source,
     rename_source_url,
+    set_citation_url,
     source_url_for,
     stored_etag,
     update_data_source,
@@ -663,8 +664,11 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         return _response(event, 400, {"error": "Uploaded document does not exist in S3"})
 
     source_key = upload_source_key("document", file_name)
-    # The citation link when there is one, so retrieval can still link to it.
-    source_url = document_url or source_key
+    # Chunks are always stored under the internal key, never the optional link:
+    # the link may be blank, change between uploads, or be shared by two
+    # documents. The link is only shown in citations (sources citation_url).
+    source_url = source_key
+    citation_url = document_url or None
     existing = find_existing_upload(
         connection, data_source_type="document", source_key=source_key, file_name=file_name
     )
@@ -678,6 +682,7 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             details={"document_url": document_url, "source_key": source_key, "content_etag": etag},
             source_url=source_url,
         )
+        set_citation_url(connection, url=source_url, citation_url=citation_url)
         connection.commit()
         delete_s3_objects([(s3_bucket, s3_key), *superseded])
         return _response(
@@ -719,6 +724,8 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         )
         rename_source_url(connection, old_url=source_url_for("document", old), new_url=source_url)
         superseded += supersede_duplicates(connection, existing, survivor_url=source_url)
+        # Show the new link right away; re-ingestion rewrites it with the metadata.
+        set_citation_url(connection, url=source_url, citation_url=citation_url)
         ingestion_run_id = ensure_pending_run(
             connection, data_source_id=data_source_id, metadata={**run_metadata, "replaced_upload": True}
         )

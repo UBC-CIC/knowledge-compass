@@ -2225,6 +2225,8 @@ export default function DataSourceManagement() {
                       />
                       <p className="text-xs text-gray-500">
                         Used in citations. If left blank, this document won't have a clickable source link.
+                        Re-uploads are matched by file name, so the link can be added, changed, or shared
+                        with other documents at any time.
                       </p>
                     </div>
                     {uploadStatus.message && uploadTab === "document" ? (

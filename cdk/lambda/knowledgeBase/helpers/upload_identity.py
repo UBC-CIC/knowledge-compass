@@ -8,8 +8,12 @@ therefore carries, in data_sources.metadata:
 - source_key:   `upload://{type}/{normalized file name}`. Staging looks up the
                 existing data_sources row by this key, so a re-upload replaces
                 that row instead of inserting a duplicate.
-- source_url:   the `sources.url` its chunks are stored under: the citation
-                link (document_url / video_url) when set, otherwise source_key.
+- source_url:   the `sources.url` its chunks are stored under. For csv,
+                markdown and documents this is always source_key, never the
+                optional document_url: a link can be blank, change, or be shared
+                by two documents, none of which may move or merge their chunks.
+                (A document's link is display-only, in sources.metadata
+                citation_url.) Videos use their required public video_url.
                 It stays the same across re-uploads, so ON CONFLICT (url) reuses
                 the same sources row and the per-chunk content_hash check only
                 re-embeds chunks that actually changed.
@@ -59,7 +63,10 @@ def upload_source_key(data_source_type: str, file_name: str) -> str:
 
 
 def legacy_source_url(data_source_type: str, metadata: dict) -> str | None:
-    """The sources.url used for rows staged before source_url was stored."""
+    """
+    The sources.url used for rows staged before source_url was stored
+    (migration 014 gives every link-keyed document row a source_url).
+    """
     if data_source_type == "video":
         return (metadata.get("video_url") or "").strip() or None
     if data_source_type == "document":
@@ -248,6 +255,27 @@ def rename_source(connection, *, url: str | None, name: str):
             "UPDATE sources SET name = %s, updated_at = now() WHERE url = %s",
             (name, url),
         )
+
+
+def set_citation_url(connection, *, url: str | None, citation_url: str | None):
+    """Set (or clear) the public link retrieval shows for an uploaded document's source."""
+    if not url:
+        return
+    with connection.cursor() as cursor:
+        if citation_url:
+            cursor.execute(
+                """
+                UPDATE sources
+                SET metadata = metadata || jsonb_build_object('citation_url', %s::text), updated_at = now()
+                WHERE url = %s
+                """,
+                (citation_url, url),
+            )
+        else:
+            cursor.execute(
+                "UPDATE sources SET metadata = metadata - 'citation_url', updated_at = now() WHERE url = %s",
+                (url,),
+            )
 
 
 def ensure_pending_run(connection, *, data_source_id: str, metadata: dict) -> str:

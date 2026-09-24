@@ -564,6 +564,11 @@ def process_document_batch(event, connection) -> dict:
             source_url = source_url_for(ds_type, meta)
             if ds_type == "document":
                 source_metadata = {"document_file_name": meta.get("document_file_name")}
+                # The optional public link is display-only (retrieval shows it
+                # as the citation); it never keys where the chunks are stored.
+                citation_url = (meta.get("document_url") or "").strip()
+                if citation_url:
+                    source_metadata["citation_url"] = citation_url
             else:
                 companion_metadata = _load_companion_metadata(meta)
                 source_metadata = {"document_metadata": companion_metadata} if companion_metadata else {}
