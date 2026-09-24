@@ -65,7 +65,7 @@ def _is_markdown_file(file_name: str) -> bool:
 
 def _validate_file_pair(source_type: str, file_name: str, metadata_file_name: str) -> str | None:
     if source_type == "csv":
-        if not file_name.endswith(".csv"):
+        if not file_name.lower().endswith(".csv"):
             return "csv_file_name must end with .csv"
     elif source_type == "markdown":
         if not _is_markdown_file(file_name):

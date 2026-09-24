@@ -251,9 +251,10 @@ function sanitizeUploadFileName(fileName: string): string {
   const ext = lastDot >= 0 ? base.slice(lastDot).toLowerCase() : "";
   const stem = lastDot >= 0 ? base.slice(0, lastDot) : base;
   const cleanedStem =
-    stem.replace(/[^\w.\-]+/g, "_").replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "") ||
+    // \p{L}\p{N}_ = Python's Unicode \w, so non-ASCII names match the backend.
+    stem.replace(/[^\p{L}\p{N}_.\-]+/gu, "_").replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "") ||
     "upload";
-  const cleanedExt = ext.replace(/[^\w.]/g, "");
+  const cleanedExt = ext.replace(/[^\p{L}\p{N}_.]/gu, "");
   return `${cleanedStem}${cleanedExt}`.slice(0, 180);
 }
 
@@ -967,6 +968,9 @@ export default function DataSourceManagement() {
 
       const pairs: ZipFilePair[] = [];
       const seen = new Set<string>();
+      // Source identity (same rule as the backend's upload_source_key):
+      // "Data.csv" and "data.csv" are one source, so only one may be staged.
+      const claimedSourceKeys = new Map<string, string>();
 
       for (const [baseName, entry] of fileMap) {
         // Skip metadata files — they'll be matched from the primary side
@@ -1001,10 +1005,18 @@ export default function DataSourceManagement() {
         const metaBlob = await metaEntry.async("blob");
         const metaFileObj = new File([metaBlob], expectedMeta, { type: "application/json" });
 
+        const type = isCsv ? "csv" : "markdown";
+        const sourceKey = `${type}/${sanitizeUploadFileName(baseName).toLowerCase()}`;
+        const claimedBy = claimedSourceKeys.get(sourceKey);
+        if (!claimedBy) claimedSourceKeys.set(sourceKey, baseName);
+
         pairs.push({
           primaryFile: primaryFileObj,
           metadataFile: metaFileObj,
-          type: isCsv ? "csv" : "markdown",
+          type,
+          ...(claimedBy && {
+            error: `Same source as ${claimedBy} (names are matched ignoring case and punctuation) — rename one`,
+          }),
         });
       }
 
@@ -1077,36 +1089,33 @@ export default function DataSourceManagement() {
         presigned_urls: BatchPresignedUrlEntry[];
       };
 
-      // Build a lookup map by file_name
-      const urlMap = new Map<string, BatchPresignedUrlEntry>();
-      for (const entry of presigned_urls) {
-        urlMap.set(entry.file_name, entry);
+      // URLs come back in request order: [primary, metadata] per pair.
+      if (presigned_urls.length !== filesPayload.length) {
+        throw new Error("Presigned URL response did not match the files requested");
       }
+      const urlsFor = (pairIndex: number) => ({
+        primaryEntry: presigned_urls[pairIndex * 2],
+        metaEntry: presigned_urls[pairIndex * 2 + 1],
+      });
 
       // Step 2: Upload all files to S3 in parallel
+      const putFile = async (url: string, contentType: string, file: File) => {
+        const res = await fetch(url, { method: "PUT", headers: { "Content-Type": contentType }, body: file });
+        if (!res.ok) throw new Error(`Failed to upload ${file.name} (HTTP ${res.status})`);
+      };
       await Promise.all(
-        validPairs.flatMap((p) => {
-          const primaryEntry = urlMap.get(p.primaryFile.name)!;
-          const metaEntry = urlMap.get(p.metadataFile.name)!;
+        validPairs.flatMap((p, i) => {
+          const { primaryEntry, metaEntry } = urlsFor(i);
           return [
-            fetch(primaryEntry.presigned_url, {
-              method: "PUT",
-              headers: { "Content-Type": p.type === "csv" ? "text/csv" : "text/markdown" },
-              body: p.primaryFile,
-            }),
-            fetch(metaEntry.presigned_url, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: p.metadataFile,
-            }),
+            putFile(primaryEntry.presigned_url, p.type === "csv" ? "text/csv" : "text/markdown", p.primaryFile),
+            putFile(metaEntry.presigned_url, "application/json", p.metadataFile),
           ];
         })
       );
 
       // Step 3: Stage all pairs in one batch request
-      const stageItems = validPairs.map((p) => {
-        const primaryEntry = urlMap.get(p.primaryFile.name)!;
-        const metaEntry = urlMap.get(p.metadataFile.name)!;
+      const stageItems = validPairs.map((p, i) => {
+        const { primaryEntry, metaEntry } = urlsFor(i);
         return {
           type: p.type,
           primary_file_name: p.primaryFile.name,

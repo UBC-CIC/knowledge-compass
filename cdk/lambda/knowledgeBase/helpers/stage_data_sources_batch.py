@@ -3,7 +3,7 @@ import logging
 from helpers.cors import get_cors_headers
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.stage_data_sources import StageRejected, stage_file_pair
-from helpers.upload_identity import delete_s3_objects
+from helpers.upload_identity import delete_s3_objects, upload_source_key
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -67,6 +67,12 @@ def stage_data_sources_batch(event, body, connection):
     errors = []
     s3_cleanup = []
 
+    # source_key -> file name of the item that claimed it earlier in this batch.
+    # Two files whose names only differ by case/punctuation ("Data.csv",
+    # "data.csv") are the same source; without this the later one would
+    # silently replace the one staged a moment earlier in this same request.
+    batch_keys: dict[str, str] = {}
+
     try:
         for i, item in enumerate(items):
             source_type = item.get("type")
@@ -85,6 +91,19 @@ def stage_data_sources_batch(event, body, connection):
                         metadata_file_name, metadata_s3_bucket, metadata_s3_key]):
                 errors.append({"index": i, "file": primary_file_name, "error": "Missing required fields"})
                 continue
+
+            source_key = upload_source_key(source_type, primary_file_name)
+            if source_key in batch_keys:
+                errors.append({
+                    "index": i,
+                    "file": primary_file_name,
+                    "error": (
+                        f"{primary_file_name} is the same source as {batch_keys[source_key]} in this upload "
+                        "(file names are matched ignoring case and punctuation). Rename one of them."
+                    ),
+                })
+                continue
+            batch_keys[source_key] = primary_file_name
 
             try:
                 result = stage_file_pair(

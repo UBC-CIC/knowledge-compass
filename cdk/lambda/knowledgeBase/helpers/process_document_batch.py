@@ -31,7 +31,13 @@ Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — they are chunked as plain text:
 - Markdown: split into sections by heading (#/##/###), then into ~300-word
   chunks with sentence-boundary overlap (mirrors the website crawler).
 - CSV: parsed with csv.DictReader (schema-agnostic), rows rendered as
-  "column: value" lines and grouped into ~300-word chunks.
+  "column: value" lines and grouped into ~175-word chunks of whole rows,
+  with content-defined boundaries (see _chunk_csv) so editing, adding or
+  removing a row only changes the chunk(s) around it.
+
+Re-ingesting a source re-embeds only chunks whose text is new to it: a chunk
+already stored at any index (e.g. shifted by an inserted row) is moved with
+its stored embedding instead of being sent to Bedrock again.
 - Document (PDF/DOCX/TXT): text is extracted (pypdf / python-docx / plain
   decode) and split into ~300-word chunks with sentence-boundary overlap,
   same as markdown but with no heading structure to key off of.
@@ -72,6 +78,13 @@ _MIN_CHUNK_WORDS = 20
 # ~300 words of written text (~6 chars/word) plus the chunk label stays under
 # the 2048-char Cohere input cap in _embed_texts, so the whole chunk is embedded.
 _MAX_WORDS_PER_CHUNK = 300
+# CSV row groups: at least this many words, then each row closes the group with
+# probability ~ its words / _CSV_AVG_EXTRA_WORDS (~175 words on average). With
+# these values a single-row edit/insert/delete changes 1-2 chunks ~85% of the
+# time; the tail comes from forced cuts at _MAX_WORDS_PER_CHUNK re-balancing
+# the next group or two.
+_CSV_MIN_GROUP_WORDS = 100
+_CSV_AVG_EXTRA_WORDS = 100
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 s3_client = boto3.client("s3", region_name=REGION)
@@ -152,7 +165,24 @@ def _chunk_markdown(text: str, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
     return chunks
 
 
+def _row_ends_group(rendered: str, rendered_words: int) -> bool:
+    """
+    Whether a CSV row closes its chunk, decided by the row's own content only:
+    a hash-derived draw in [0, 1) against the row's share of
+    _CSV_AVG_EXTRA_WORDS. Boundaries therefore stay put when unrelated rows are
+    edited, inserted or deleted (content-defined chunking), so a one-row edit
+    re-embeds about one chunk instead of every chunk after it.
+    """
+    draw = int(hashlib.sha256(rendered.encode()).hexdigest()[:8], 16) / 0x100000000
+    return draw < rendered_words / _CSV_AVG_EXTRA_WORDS
+
+
 def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
+    """
+    Group whole rows into chunks of ~175 words (never splitting a row), with
+    boundaries chosen by _row_ends_group once a group has
+    _CSV_MIN_GROUP_WORDS, or forced before a row that would pass max_words.
+    """
     text = raw_bytes.decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     fieldnames = reader.fieldnames or []
@@ -162,6 +192,7 @@ def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
     buf_rows: list = []
     buf_words = 0
     row_start = 1
+    row_end = 0
     row_num = 0
 
     def render_row(row: dict) -> str:
@@ -169,9 +200,10 @@ def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
             f"{k}: {(row.get(k) or '').strip()}" for k in fieldnames if (row.get(k) or "").strip()
         )
 
-    def emit(row_end):
-        nonlocal idx
+    def emit():
+        nonlocal idx, buf_rows, buf_words
         body = "\n\n".join(buf_rows)
+        buf_rows, buf_words = [], 0
         if not body.strip():
             return
         chunks.append({
@@ -190,14 +222,18 @@ def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
         if not rendered:
             continue
         rendered_words = len(rendered.split())
-        if buf_words + rendered_words > max_words and buf_rows:
-            emit(row_num - 1)
-            buf_rows, buf_words, row_start = [], 0, row_num
+        if buf_rows and buf_words + rendered_words > max_words:
+            emit()
+        if not buf_rows:
+            row_start = row_num
         buf_rows.append(rendered)
         buf_words += rendered_words
+        row_end = row_num
+        if buf_words >= _CSV_MIN_GROUP_WORDS and _row_ends_group(rendered, rendered_words):
+            emit()
 
     if buf_rows:
-        emit(row_num)
+        emit()
 
     return chunks
 
@@ -381,17 +417,59 @@ def _upsert_source(connection, *, url: str, name: str, metadata: dict | None = N
         return str(cursor.fetchone()[0])
 
 
-def _existing_chunk_hashes(connection, source_id: str) -> dict:
+def _chunk_state(chunk: dict) -> tuple:
+    """What must match a stored chunk for it to be left untouched."""
+    return (chunk["content_hash"], _embed_text_md5(chunk), chunk.get("heading_path"))
+
+
+def _embed_text_md5(chunk: dict) -> str:
+    # Same digest as Postgres md5(embed_text), which is stored as chunk["text"].
+    return hashlib.md5(chunk["text"].encode()).hexdigest()
+
+
+def _existing_chunk_states(connection, source_id: str) -> dict:
+    """chunk_index -> _chunk_state of what is stored there."""
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT chunk_index, content_hash FROM chunks WHERE source_id = %s::uuid",
+            """
+            SELECT chunk_index, content_hash, md5(embed_text), metadata->>'heading_path'
+            FROM chunks
+            WHERE source_id = %s::uuid
+            """,
             (source_id,),
         )
-        return {row[0]: row[1] for row in cursor.fetchall()}
+        return {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
 
 
-def _upsert_chunk(connection, source_id: str, chunk: dict, embedding: list):
-    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+def _reusable_embeddings(connection, source_id: str, chunks: list) -> dict:
+    """
+    Stored embeddings (as pgvector text) for chunk texts this source already
+    holds at ANY index, keyed by (content_hash, md5(embed_text)). A row inserted
+    or deleted shifts every later chunk_index; this lets those shifted chunks
+    keep their embedding instead of being re-embedded. Read before any writes,
+    since the upserts below overwrite chunks by index.
+    """
+    hashes = sorted({c["content_hash"] for c in chunks})
+    if not hashes:
+        return {}
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (content_hash, md5(embed_text))
+                   content_hash, md5(embed_text), embedding::text
+            FROM chunks
+            WHERE source_id = %s::uuid
+              AND content_hash = ANY(%s)
+              AND embedding IS NOT NULL
+            """,
+            (source_id, hashes),
+        )
+        return {(row[0], row[1]): row[2] for row in cursor.fetchall()}
+
+
+def _upsert_chunk(connection, source_id: str, chunk: dict, embedding):
+    """`embedding` is a float list (fresh) or pgvector text (reused)."""
+    embedding_str = embedding if isinstance(embedding, str) else "[" + ",".join(str(x) for x in embedding) + "]"
     metadata = json.dumps({"heading_path": chunk.get("heading_path")})
     with connection.cursor() as cursor:
         cursor.execute(
@@ -580,21 +658,27 @@ def process_document_batch(event, connection) -> dict:
                 metadata=source_metadata,
             )
 
-            existing_hashes = _existing_chunk_hashes(connection, source_id)
-            to_embed = [c for c in chunks if existing_hashes.get(c["chunk_index"]) != c["content_hash"]]
+            # Only chunks whose text is new to this source are embedded; ones
+            # that just moved index (or only changed heading_path) reuse theirs.
+            existing_states = _existing_chunk_states(connection, source_id)
+            changed = [c for c in chunks if existing_states.get(c["chunk_index"]) != _chunk_state(c)]
+            reusable = _reusable_embeddings(connection, source_id, changed)
+            to_embed = [c for c in changed if (c["content_hash"], _embed_text_md5(c)) not in reusable]
 
-            if to_embed:
-                embeddings = _embed_texts([c["text"] for c in to_embed])
-                for chunk, embedding in zip(to_embed, embeddings):
-                    _upsert_chunk(connection, source_id, chunk, embedding)
+            fresh = dict(zip((c["chunk_index"] for c in to_embed), _embed_texts([c["text"] for c in to_embed]))) \
+                if to_embed else {}
+            for chunk in changed:
+                embedding = fresh.get(chunk["chunk_index"]) or reusable[(chunk["content_hash"], _embed_text_md5(chunk))]
+                _upsert_chunk(connection, source_id, chunk, embedding)
 
             deleted = _delete_stale_chunks(connection, source_id, [c["chunk_index"] for c in chunks])
 
-            _finish_run(connection, run_id, "completed", chunks_upserted=len(to_embed), chunks_deleted=deleted)
+            _finish_run(connection, run_id, "completed", chunks_upserted=len(changed), chunks_deleted=deleted)
             connection.commit()
             completed.append(run_id)
             logger.info(
-                "Document run %s completed: %d chunk(s) embedded, %d deleted", run_id, len(to_embed), deleted
+                "Document run %s completed: %d chunk(s) written (%d embedded, %d reused), %d deleted",
+                run_id, len(changed), len(to_embed), len(changed) - len(to_embed), deleted,
             )
 
         except Exception as e:  # noqa: BLE001
