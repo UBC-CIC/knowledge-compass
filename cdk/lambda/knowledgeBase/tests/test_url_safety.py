@@ -15,6 +15,7 @@ from helpers.url_safety import (  # noqa: E402
     BlockedURL,
     InvalidURL,
     is_public_ip,
+    normalize_citation_url,
     normalize_url,
     resolve_public_addresses,
 )
@@ -36,6 +37,16 @@ class NormalizeUrlTests(unittest.TestCase):
         )
         self.assertEqual(normalize_url("http://example.com"), "http://example.com/")
         self.assertEqual(normalize_url("http://example.com:8080/x"), "http://example.com:8080/x")
+
+    def test_citation_normalization_preserves_deep_links(self):
+        self.assertEqual(
+            normalize_citation_url(" HTTPS://Example.COM/Guide#page=12 "),
+            "https://example.com/Guide#page=12",
+        )
+        self.assertEqual(
+            normalize_citation_url("https://example.com/supports#transition planning"),
+            "https://example.com/supports#transition%20planning",
+        )
 
     def test_same_page_written_differently_dedupes(self):
         self.assertEqual(

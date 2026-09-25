@@ -41,8 +41,10 @@ DEFAULT_MIN_SCORE = 0.40
 DEFAULT_MIN_RESULTS = 2
 EMBED_MODEL_ID = "cohere.embed-english-v3"
 
-# Fetch more candidates than top_k so per-source de-duplication still yields top_k rows.
-CANDIDATE_MULTIPLIER = 3
+# Fetch extra candidates because per-source and canonical-content de-duplication
+# can collapse many row-specific variants of one fetched page.
+CANDIDATE_MULTIPLIER = 8
+MAX_CANDIDATE_PAGES = 20
 
 
 def embed_query(query: str, region: str, embed_model_id: str = EMBED_MODEL_ID) -> List[float]:
@@ -75,18 +77,44 @@ def _vector_literal(embedding: List[float]) -> str:
 def _row_to_source(body, metadata, url, title, source_type, score) -> Dict[str, Any]:
     """Map a DB row to the legacy-compatible source dict."""
     st = (source_type or "web")
+    public_url = url or ""
     return {
         # Legacy keys consumed by bedrock.format_context_for_prompt / chat.py
         "type": st.upper(),
-        "uri": url,
-        "url": url,
+        "uri": public_url,
+        "url": public_url,
         "content": body,
         "score": round(float(score), 4),
         # Richer fields for later use
-        "title": title or url,
+        "title": title or public_url or "Untitled resource",
         "source_type": st,
         "metadata": metadata or {},
     }
+
+
+def _canonical_content_key(metadata: dict | None) -> str | None:
+    """Identity shared by row variants of the same canonical fetched chunk."""
+    value = (metadata or {}).get("canonical_content_key")
+    return str(value) if value else None
+
+
+def _distinct_candidate_count(rows: list) -> int:
+    """Count results that survive source and canonical-content de-duplication."""
+    seen_sources = set()
+    seen_canonical_content = set()
+    count = 0
+    for row in rows:
+        metadata, source_id = row[1], row[6]
+        canonical_key = _canonical_content_key(metadata)
+        if source_id in seen_sources:
+            continue
+        if canonical_key and canonical_key in seen_canonical_content:
+            continue
+        seen_sources.add(source_id)
+        if canonical_key:
+            seen_canonical_content.add(canonical_key)
+        count += 1
+    return count
 
 
 def retrieve_from_pgvector(
@@ -121,48 +149,81 @@ def retrieve_from_pgvector(
 
     try:
         with db_connection.cursor() as cur:
-            # Uploaded documents are stored under an internal upload:// url;
-            # their public link (if any) is sources.metadata.citation_url.
-            cur.execute(
-                """
-                SELECT c.body, c.metadata,
-                       COALESCE(NULLIF(s.metadata->>'citation_url', ''), s.url) AS url,
-                       s.name AS title, s.source_type,
-                       1 - (c.embedding <=> %s::vector) AS score,
-                       s.id AS source_id
-                FROM chunks c
-                JOIN sources s ON s.id = c.source_id
-                WHERE c.embedding IS NOT NULL
-                ORDER BY c.embedding <=> %s::vector
-                LIMIT %s
-                """,
-                (embedding_str, embedding_str, num_results * CANDIDATE_MULTIPLIER),
-            )
-            rows = cur.fetchall()
+            # Row-resource citations live on the matched chunk/source. Internal
+            # csvrow:// identities are never exposed as public links, and the
+            # canonical csvlink cache is hidden once row variants are available.
+            page_size = max(num_results * CANDIDATE_MULTIPLIER, min_results)
+            rows = []
+            for page_number in range(MAX_CANDIDATE_PAGES):
+                cur.execute(
+                    """
+                    SELECT c.body, c.metadata,
+                           COALESCE(
+                             NULLIF(c.metadata->>'citation_url', ''),
+                             NULLIF(s.metadata->>'citation_url', ''),
+                             CASE
+                               WHEN s.source_type = 'csv_row'::source_type THEN NULL
+                               ELSE s.url
+                             END
+                           ) AS url,
+                           s.name AS title, s.source_type,
+                           1 - (c.embedding <=> %s::vector) AS score,
+                           s.id AS source_id
+                    FROM chunks c
+                    JOIN sources s ON s.id = c.source_id
+                    WHERE c.embedding IS NOT NULL
+                      AND COALESCE(s.metadata->>'retrieval_hidden', 'false') <> 'true'
+                      AND (
+                        s.source_type <> 'csv_row'::source_type
+                        OR EXISTS (
+                          SELECT 1
+                          FROM csv_row_links l
+                          WHERE l.row_source_id = s.id AND l.row_indexed = true
+                        )
+                      )
+                    ORDER BY c.embedding <=> %s::vector
+                    LIMIT %s OFFSET %s
+                    """,
+                    (embedding_str, embedding_str, page_size, page_number * page_size),
+                )
+                page = cur.fetchall()
+                rows.extend(page)
+                if len(page) < page_size or _distinct_candidate_count(rows) >= num_results:
+                    break
     except Exception as e:  # noqa: BLE001
         logger.error(f"pgvector retrieval query failed: {e}")
         return []
 
-    # One result per source, not per url: two documents may share a citation link.
+    # Keep one chunk per row/source and one row variant per canonical fetched
+    # chunk. Standalone row chunks have no canonical key and remain discrete.
     seen_sources = set()
+    seen_canonical_content = set()
     results: List[Dict[str, Any]] = []
-    for body, metadata, url, title, source_type, score, source_id in rows:
-        if float(score) < min_score:
-            continue
+
+    def append_row(row) -> bool:
+        body, metadata, url, title, source_type, score, source_id = row
+        canonical_key = _canonical_content_key(metadata)
         if source_id in seen_sources:
-            continue
+            return False
+        if canonical_key and canonical_key in seen_canonical_content:
+            return False
         seen_sources.add(source_id)
+        if canonical_key:
+            seen_canonical_content.add(canonical_key)
         results.append(_row_to_source(body, metadata, url, title, source_type, score))
+        return True
+
+    for row in rows:
+        if float(row[5]) < min_score:
+            continue
+        append_row(row)
         if len(results) >= num_results:
             break
 
     # Backfill so the model always has at least min_results of context.
     if len(results) < min_results:
-        for body, metadata, url, title, source_type, score, source_id in rows:
-            if source_id in seen_sources:
-                continue
-            seen_sources.add(source_id)
-            results.append(_row_to_source(body, metadata, url, title, source_type, score))
+        for row in rows:
+            append_row(row)
             if len(results) >= min_results:
                 break
 

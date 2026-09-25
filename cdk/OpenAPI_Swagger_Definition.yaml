@@ -420,6 +420,22 @@ paths:
                     CSV only, with url_column. Column that identifies a row across
                     re-uploads; defaults to a hash of the whole row.
                   example: id
+                title_column:
+                  type: string
+                  description: CSV only, with url_column. Human-readable resource title column.
+                  example: title
+                description_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Resource description column; prepended
+                    to fetched content for row-specific retrieval.
+                  example: description
+                citation_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Public http(s) URL shown in citations;
+                    invalid or blank values safely fall back to the fetched URL.
+                  example: public_url
                 video_file_name:
                   type: string
                   example: family-rights-webinar.mp4
@@ -690,6 +706,9 @@ paths:
                       metadata_s3_key: { type: string }
                       url_column: { type: string }
                       row_id_column: { type: string }
+                      title_column: { type: string }
+                      description_column: { type: string }
+                      citation_column: { type: string }
       responses:
         "200":
           description: Batch staging complete
@@ -821,7 +840,7 @@ paths:
             default: 0
       responses:
         "200":
-          description: Link status summary and one entry per CSV row with a link
+          description: Link and row-indexing status summary with one entry per CSV row
           content:
             application/json:
               schema:
@@ -830,6 +849,9 @@ paths:
                   data_source_id: { type: string }
                   url_column: { type: string, nullable: true }
                   row_id_column: { type: string, nullable: true }
+                  title_column: { type: string, nullable: true }
+                  description_column: { type: string, nullable: true }
+                  citation_column: { type: string, nullable: true }
                   summary:
                     type: object
                     properties:
@@ -856,6 +878,15 @@ paths:
                         http_status: { type: integer, nullable: true }
                         content_type: { type: string, nullable: true }
                         fetched_at: { type: string, nullable: true }
+                        raw_citation_url: { type: string, nullable: true }
+                        citation_url: { type: string, nullable: true }
+                        citation_warning: { type: string, nullable: true }
+                        title: { type: string, nullable: true }
+                        description: { type: string, nullable: true }
+                        row_indexed: { type: boolean }
+                        fetched_content_indexed: { type: boolean }
+                        indexing_reason: { type: string, nullable: true }
+                        indexed_at: { type: string, nullable: true }
                         row_metadata:
                           type: object
                           additionalProperties: true

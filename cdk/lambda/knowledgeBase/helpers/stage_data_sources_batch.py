@@ -118,6 +118,9 @@ def stage_data_sources_batch(event, body, connection):
                     metadata_s3_key=metadata_s3_key,
                     url_column=item.get("url_column"),
                     row_id_column=item.get("row_id_column"),
+                    title_column=item.get("title_column"),
+                    description_column=item.get("description_column"),
+                    citation_column=item.get("citation_column"),
                 )
             except StageRejected as rejected:
                 reason = rejected.body.get("error")

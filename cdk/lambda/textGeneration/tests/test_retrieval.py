@@ -44,6 +44,18 @@ class FakeCursor:
         return self._rows
 
 
+class PagingCursor(FakeCursor):
+    """Cursor that honors LIMIT/OFFSET parameters over an in-memory row list."""
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        limit, offset = params[-2], params[-1]
+        self._page = self._rows[offset: offset + limit]
+
+    def fetchall(self):
+        return self._page
+
+
 class FakeConnection:
     def __init__(self, rows):
         self._rows = rows
@@ -139,7 +151,7 @@ class RetrieveFromPgvectorTests(unittest.TestCase):
 
         self.assertEqual([r["title"] for r in results], ["Handbook", "FAQ"])
 
-    def test_query_prefers_citation_url_over_internal_url(self):
+    def test_query_prefers_chunk_then_source_citation_and_hides_cache(self):
         conn = FakeConnection([])
         cursor = FakeCursor([])
         conn.cursor = lambda: cursor
@@ -147,7 +159,52 @@ class RetrieveFromPgvectorTests(unittest.TestCase):
         retrieval.retrieve_from_pgvector("q", conn, region="r")
 
         sql = cursor.executed[0][0]
-        self.assertIn("COALESCE(NULLIF(s.metadata->>'citation_url', ''), s.url) AS url", sql)
+        self.assertIn("NULLIF(c.metadata->>'citation_url', '')", sql)
+        self.assertIn("NULLIF(s.metadata->>'citation_url', '')", sql)
+        self.assertIn("s.source_type = 'csv_row'::source_type", sql)
+        self.assertIn("retrieval_hidden", sql)
+        self.assertIn("l.row_source_id = s.id AND l.row_indexed = true", sql)
+
+    def test_row_resource_without_url_remains_a_titled_source(self):
+        rows = [_row("row body", None, "Row title", "csv_row", 0.9, source_id="row-1")]
+        results = retrieval.retrieve_from_pgvector("q", FakeConnection(rows), region="r")
+        self.assertEqual(results[0]["title"], "Row title")
+        self.assertEqual(results[0]["url"], "")
+        self.assertEqual(results[0]["uri"], "")
+
+    def test_collapses_row_variants_of_same_canonical_chunk(self):
+        shared = "csvlink://https://fetch.example#0:hash"
+        rows = [
+            _row("row one", "https://public.example/one", "One", "csv_row", 0.92,
+                 {"canonical_content_key": shared}, source_id="row-1"),
+            _row("row two", "https://public.example/two", "Two", "csv_row", 0.90,
+                 {"canonical_content_key": shared}, source_id="row-2"),
+            _row("standalone", "https://public.example/two", "Two", "csv_row", 0.85,
+                 {"chunk_kind": "csv_row"}, source_id="row-2"),
+        ]
+        results = retrieval.retrieve_from_pgvector(
+            "q", FakeConnection(rows), region="r", num_results=5, min_results=2
+        )
+        self.assertEqual([result["content"] for result in results], ["row one", "standalone"])
+
+    def test_pages_past_duplicate_variants_to_find_distinct_sources(self):
+        shared = "csvlink://https://fetch.example#0:hash"
+        duplicates = [
+            _row(f"variant {index}", f"https://public.example/{index}", f"Row {index}", "csv_row", 0.99,
+                 {"canonical_content_key": shared}, source_id=f"row-{index}")
+            for index in range(56)
+        ]
+        rows = duplicates + [_row("distinct", "https://other.example", "Other", "web", 0.8)]
+        cursor = PagingCursor(rows)
+        connection = FakeConnection([])
+        connection.cursor = lambda: cursor
+
+        results = retrieval.retrieve_from_pgvector(
+            "q", connection, region="r", num_results=7, min_results=2
+        )
+
+        self.assertEqual([result["content"] for result in results], ["variant 0", "distinct"])
+        self.assertEqual(len(cursor.executed), 2)
 
     def test_respects_num_results_cap(self):
         rows = [_row(f"b{i}", f"https://x/{i}", f"T{i}", "web", 0.9 - i * 0.01) for i in range(10)]

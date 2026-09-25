@@ -80,6 +80,27 @@ def normalize_url(raw: str) -> str:
     return url
 
 
+def normalize_citation_url(raw: str) -> str:
+    """
+    Normalize a public HTTP(S) citation while preserving its fragment/deep link.
+
+    Fetch identity deliberately drops fragments because they are not sent to
+    servers. Citation identity keeps them so two rows can link users to
+    different sections or PDF pages of the same fetched resource.
+    """
+    value = (raw or "").strip()
+    try:
+        parts = urlsplit(value)
+    except ValueError as error:
+        raise InvalidURL(f"malformed URL: {error}") from error
+    normalized = normalize_url(value)
+    fragment = quote(parts.fragment, safe=_QUERY_SAFE)
+    citation = f"{normalized}#{fragment}" if fragment else normalized
+    if len(citation) > MAX_URL_LENGTH:
+        raise InvalidURL(f"URL is longer than {MAX_URL_LENGTH} characters")
+    return citation
+
+
 def _ip_or_none(value: str):
     try:
         return ipaddress.ip_address(value.split("%", 1)[0])

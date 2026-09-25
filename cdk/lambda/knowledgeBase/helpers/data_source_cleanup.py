@@ -9,7 +9,7 @@ Everything here runs inside the caller's transaction. S3 objects cannot be
 rolled back, so they are returned for the caller to delete after commit.
 """
 
-from helpers.csv_links import delete_unreferenced_link_sources
+from helpers.csv_links import delete_unreferenced_link_sources, delete_unreferenced_row_sources
 from helpers.upload_identity import (
     delete_unreferenced_source,
     parse_s3_uri,
@@ -97,6 +97,7 @@ def remove_data_sources(connection, plan: dict):
     for url in plan["source_urls"]:
         delete_unreferenced_source(connection, url=url)
     delete_unreferenced_link_sources(connection)
+    delete_unreferenced_row_sources(connection)
 
 
 def supersede_duplicates(connection, existing: dict, *, survivor_url: str | None) -> list[tuple[str, str]]:

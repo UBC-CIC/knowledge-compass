@@ -158,9 +158,10 @@ function isHttpSource(source: SourceItem | string) {
   return isSafeUrl(url);
 }
 
-// Uploaded documents without a public URL (s3:// URIs) still get a card.
+// Uploaded documents and CSV row resources without public URLs still get cards.
 function isResourceSource(source: SourceItem | string) {
-  return isHttpSource(source) || sourceLabel(source).type === "document";
+  const type = sourceLabel(source).type;
+  return isHttpSource(source) || type === "document" || type === "csv_row";
 }
 
 function withResourceLinks(text: string, sources: (SourceItem | string)[]) {

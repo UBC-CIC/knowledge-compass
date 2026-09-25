@@ -82,5 +82,51 @@ class CsvRunTests(unittest.TestCase):
         self.assertIn("link crawl failed", finish.call_args.kwargs["metadata"]["link_error"])
 
 
+class ChunkPersistenceTests(unittest.TestCase):
+    def chunk(self, metadata):
+        return {
+            "chunk_index": 0,
+            "heading_path": "Row",
+            "text": "same embedded text",
+            "body": "same embedded text",
+            "word_count": 3,
+            "content_hash": "hash",
+            "metadata": metadata,
+        }
+
+    def test_metadata_only_change_reuses_existing_vector(self):
+        chunk = self.chunk({"citation_url": "https://new.example"})
+        old_state = (
+            chunk["content_hash"],
+            batch._embed_text_md5(chunk),
+            batch._metadata_state({"heading_path": "Row", "citation_url": "https://old.example"}),
+        )
+        reuse_key = (chunk["content_hash"], batch._embed_text_md5(chunk))
+        with mock.patch.object(batch, "_existing_chunk_states", return_value={0: old_state}), \
+                mock.patch.object(batch, "_reusable_embeddings", return_value={reuse_key: "[0.1]"}), \
+                mock.patch.object(batch, "_globally_reusable_embeddings", return_value={}), \
+                mock.patch.object(batch, "_embed_texts") as embed, \
+                mock.patch.object(batch, "_upsert_chunk") as upsert, \
+                mock.patch.object(batch, "_delete_stale_chunks", return_value=0):
+            result = batch.write_chunks(mock.Mock(), "source", [chunk])
+        embed.assert_not_called()
+        upsert.assert_called_once()
+        self.assertEqual(result, {"written": 1, "embedded": 0, "deleted": 0})
+
+    def test_multi_source_writer_deduplicates_identical_inputs(self):
+        first = self.chunk({"citation_url": "https://one.example"})
+        second = self.chunk({"citation_url": "https://two.example"})
+        with mock.patch.object(batch, "_existing_chunk_states", return_value={}), \
+                mock.patch.object(batch, "_reusable_embeddings", return_value={}), \
+                mock.patch.object(batch, "_globally_reusable_embeddings", return_value={}), \
+                mock.patch.object(batch, "_embed_texts", return_value=[[0.1]]) as embed, \
+                mock.patch.object(batch, "_upsert_chunk") as upsert, \
+                mock.patch.object(batch, "_delete_stale_chunks", return_value=0):
+            result = batch.write_chunk_sets(mock.Mock(), [("one", [first]), ("two", [second])])
+        embed.assert_called_once_with(["same embedded text"])
+        self.assertEqual(upsert.call_count, 2)
+        self.assertEqual(result, {"written": 2, "embedded": 1, "deleted": 0})
+
+
 if __name__ == "__main__":
     unittest.main()

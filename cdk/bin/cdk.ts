@@ -35,7 +35,7 @@ const dbFlowStack = new DBFlowStack(
   `${StackPrefix}-DBFlow`,
   vpcStack,
   dbStack,
-  { env }
+  { env },
 );
 
 const cicdStack = new CICDStack(app, `${StackPrefix}-CICD`, {
@@ -90,9 +90,10 @@ const ingestionStack = new IngestionStack(
     stackPrefix: StackPrefix,
     crawlerRepository: cicdStack.ecrRepositories["crawler"],
     transcriberRepository: cicdStack.ecrRepositories["transcriber"],
-    vectorIndexManagerRepository: cicdStack.ecrRepositories["vectorIndexManagerSigV4"],
+    vectorIndexManagerRepository:
+      cicdStack.ecrRepositories["vectorIndexManagerSigV4"],
     imageBuildPipelineName: cicdStack.pipelineName,
-  }
+  },
 );
 ingestionStack.addDependency(cicdStack);
 ingestionStack.addDependency(vpcStack);
@@ -114,10 +115,15 @@ const apiStack = new ApiGatewayStack(
       grantBucketAccess: (principal) =>
         ingestionStack.ingestBucket.grantReadWrite(principal),
     },
-  }
+  },
 );
 apiStack.addDependency(cicdStack);
 apiStack.addDependency(ingestionStack);
+// The API and ingestion workers require the additive database migrations to
+// be applied before their code is deployed. This also makes `cdk deploy --all`
+// order DBFlow ahead of the API stack; production rollback remains roll-forward
+// because CloudFormation does not run migration downs.
+apiStack.addDependency(dbFlowStack);
 
 const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
   env,

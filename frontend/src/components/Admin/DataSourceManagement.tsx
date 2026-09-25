@@ -366,7 +366,7 @@ function sanitizeUploadFileName(fileName: string): string {
   const cleanedStem =
     // \p{L}\p{N}_ = Python's Unicode \w, so non-ASCII names match the backend.
     stem
-      .replace(/[^\p{L}\p{N}_.\-]+/gu, "_")
+      .replace(/[^\p{L}\p{N}_.-]+/gu, "_")
       .replace(/_+/g, "_")
       .replace(/^[_.]+|[_.]+$/g, "") || "upload";
   const cleanedExt = ext.replace(/[^\p{L}\p{N}_.]/gu, "");
@@ -484,11 +484,20 @@ type CsvLinkRow = {
   row_number: number;
   url: string;
   normalized_url: string | null;
+  raw_citation_url: string | null;
+  citation_url: string | null;
+  citation_warning: string | null;
+  title: string | null;
+  description: string | null;
   status: CsvLinkStatus;
   reason: string | null;
   http_status: number | null;
   content_type: string | null;
   fetched_at: string | null;
+  row_indexed: boolean;
+  fetched_content_indexed: boolean;
+  indexing_reason: string | null;
+  indexed_at: string | null;
   row_metadata: Record<string, unknown>;
 };
 
@@ -496,6 +505,9 @@ type CsvLinksResponse = {
   data_source_id: string;
   url_column: string | null;
   row_id_column: string | null;
+  title_column: string | null;
+  description_column: string | null;
+  citation_column: string | null;
   summary: Record<CsvLinkStatus, number>;
   total: number;
   limit: number;
@@ -601,7 +613,7 @@ function CsvLinkStatusPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium text-gray-800">
-          Crawled links
+          CSV row resources
           <span className="ml-2 font-normal text-gray-500">
             from column <span className="font-mono">{urlColumn}</span>
             {rowIdColumn ? (
@@ -609,6 +621,15 @@ function CsvLinkStatusPanel({
                 {" "}
                 · id <span className="font-mono">{rowIdColumn}</span>
               </>
+            ) : null}
+            {data?.title_column ? (
+              <> · title <span className="font-mono">{data.title_column}</span></>
+            ) : null}
+            {data?.description_column ? (
+              <> · description <span className="font-mono">{data.description_column}</span></>
+            ) : null}
+            {data?.citation_column ? (
+              <> · citation <span className="font-mono">{data.citation_column}</span></>
             ) : null}
           </span>
         </div>
@@ -661,7 +682,7 @@ function CsvLinkStatusPanel({
         </div>
       ) : filteredTotal === 0 ? (
         <div className="text-xs text-gray-500">
-          {statusFilter ? `No ${statusFilter} links.` : "No links have been recorded for this CSV yet."}
+          {statusFilter ? `No ${statusFilter} rows.` : "No row resources have been recorded for this CSV yet."}
         </div>
       ) : (
         <>
@@ -669,37 +690,85 @@ function CsvLinkStatusPanel({
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-left text-xs text-gray-600">
                 <tr>
-                  <th className="px-3 py-2 font-semibold w-[8%]">Row</th>
-                  <th className="px-3 py-2 font-semibold w-[46%]">URL</th>
-                  <th className="px-3 py-2 font-semibold w-[12%]">Status</th>
-                  <th className="px-3 py-2 font-semibold w-[34%]">Detail</th>
+                  <th className="px-3 py-2 font-semibold">Row / resource</th>
+                  <th className="px-3 py-2 font-semibold">Fetched URL</th>
+                  <th className="px-3 py-2 font-semibold">Resolved citation</th>
+                  <th className="px-3 py-2 font-semibold">State</th>
+                  <th className="px-3 py-2 font-semibold">Detail</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.links ?? []).map((link) => (
-                  <tr key={link.row_key} className="border-t border-gray-100 align-top">
-                    <td className="px-3 py-2 text-xs text-gray-500 tabular-nums">{link.row_number}</td>
-                    <td className="px-3 py-2 min-w-0">
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary break-all underline underline-offset-2"
-                      >
-                        {link.url}
-                      </a>
-                    </td>
-                    <td className="px-3 py-2">{linkStatusBadge(link.status)}</td>
-                    <td className="px-3 py-2 text-xs text-gray-600 break-words">
-                      {link.reason ? <div className="break-words">{link.reason}</div> : null}
-                      <div className="text-gray-400">
-                        {link.http_status ? `HTTP ${link.http_status}` : null}
-                        {link.http_status && link.fetched_at ? " · " : ""}
-                        {link.fetched_at ? formatDateTime(link.fetched_at) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {(data?.links ?? []).map((link) => {
+                  const fetchHref = link.normalized_url && isHttpUrl(link.normalized_url)
+                    ? link.normalized_url
+                    : null;
+                  const citationHref = link.citation_url && isHttpUrl(link.citation_url)
+                    ? link.citation_url
+                    : null;
+                  return (
+                    <tr key={link.row_key} className="border-t border-gray-100 align-top">
+                      <td className="px-3 py-2 min-w-40">
+                        <div className="font-medium text-gray-800">
+                          {link.title || `Row ${link.row_number}`}
+                        </div>
+                        <div className="text-[11px] text-gray-400 tabular-nums">Row {link.row_number}</div>
+                      </td>
+                      <td className="px-3 py-2 min-w-48 max-w-80">
+                        {fetchHref ? (
+                          <a
+                            href={fetchHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary break-all underline underline-offset-2"
+                          >
+                            {link.url || fetchHref}
+                          </a>
+                        ) : (
+                          <span className="break-all text-gray-500">{link.url || "No fetch URL"}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 min-w-48 max-w-80">
+                        {citationHref ? (
+                          <a
+                            href={citationHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary break-all underline underline-offset-2"
+                          >
+                            {citationHref}
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">Non-clickable resource</span>
+                        )}
+                        {link.citation_warning ? (
+                          <div className="mt-1 text-[11px] text-amber-700">{link.citation_warning}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 min-w-32 space-y-1">
+                        <div>{linkStatusBadge(link.status)}</div>
+                        <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                          link.row_indexed
+                            ? "border-green-200 bg-green-50 text-green-700"
+                            : "border-gray-200 bg-gray-100 text-gray-600"
+                        }`}>
+                          {link.row_indexed ? "Resource indexed" : "Not indexed"}
+                        </span>
+                        {link.fetched_content_indexed ? (
+                          <div className="text-[11px] text-gray-500">Fetched text attached</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 min-w-48 text-xs text-gray-600 break-words">
+                        {link.reason ? <div>{link.reason}</div> : null}
+                        {link.indexing_reason ? <div>{link.indexing_reason}</div> : null}
+                        <div className="text-gray-400">
+                          {link.http_status ? `HTTP ${link.http_status}` : null}
+                          {link.http_status && link.fetched_at ? " · " : ""}
+                          {link.fetched_at ? formatDateTime(link.fetched_at) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -761,6 +830,9 @@ export default function DataSourceManagement() {
   );
   const [urlColumn, setUrlColumn] = useState("");
   const [rowIdColumn, setRowIdColumn] = useState("");
+  const [titleColumn, setTitleColumn] = useState("");
+  const [descriptionColumn, setDescriptionColumn] = useState("");
+  const [citationColumn, setCitationColumn] = useState("");
   const [metadataFile, setMetadataFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{
@@ -931,7 +1003,6 @@ export default function DataSourceManagement() {
     fetchAdminCredentials();
     fetchAnalyticsTotals();
     fetchAdminDataSources();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1206,6 +1277,9 @@ export default function DataSourceManagement() {
     setSuggestedUrlColumn(null);
     setUrlColumn("");
     setRowIdColumn("");
+    setTitleColumn("");
+    setDescriptionColumn("");
+    setCitationColumn("");
     if (isCsvFile(selectedFile)) {
       inspectCsvColumns(selectedFile)
         .then(({ columns, suggested }) => {
@@ -1330,6 +1404,9 @@ export default function DataSourceManagement() {
     setSuggestedUrlColumn(null);
     setUrlColumn("");
     setRowIdColumn("");
+    setTitleColumn("");
+    setDescriptionColumn("");
+    setCitationColumn("");
     setMetadataFile(null);
     setUploadStatus({ type: null, message: "" });
     setUploadTab("single");
@@ -1689,6 +1766,11 @@ export default function DataSourceManagement() {
               created_by: adminEmail,
               ...(urlColumn ? { url_column: urlColumn } : {}),
               ...(urlColumn && rowIdColumn ? { row_id_column: rowIdColumn } : {}),
+              ...(urlColumn && titleColumn ? { title_column: titleColumn } : {}),
+              ...(urlColumn && descriptionColumn
+                ? { description_column: descriptionColumn }
+                : {}),
+              ...(urlColumn && citationColumn ? { citation_column: citationColumn } : {}),
             }
           : {
               type: "markdown",
@@ -2429,9 +2511,15 @@ export default function DataSourceManagement() {
                               id="csv-url-column"
                               value={urlColumn}
                               onChange={(e) => {
-                            setUrlColumn(e.target.value);
-                            if (!e.target.value) setRowIdColumn("");
-                          }}
+                                const nextUrlColumn = e.target.value;
+                                if (nextUrlColumn !== urlColumn) {
+                                  setRowIdColumn("");
+                                  setTitleColumn("");
+                                  setDescriptionColumn("");
+                                  setCitationColumn("");
+                                }
+                                setUrlColumn(nextUrlColumn);
+                              }}
                               className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
                             >
                               <option value="">Don't crawl links</option>
@@ -2458,9 +2546,13 @@ export default function DataSourceManagement() {
                                     <button
                                       type="button"
                                       className="text-primary underline"
-                                      onClick={() =>
-                                        setUrlColumn(suggestedUrlColumn)
-                                      }
+                                      onClick={() => {
+                                        setRowIdColumn("");
+                                        setTitleColumn("");
+                                        setDescriptionColumn("");
+                                        setCitationColumn("");
+                                        setUrlColumn(suggestedUrlColumn);
+                                      }}
                                     >
                                       Use it
                                     </button>
@@ -2478,7 +2570,13 @@ export default function DataSourceManagement() {
                           <select
                             id="csv-row-id-column"
                             value={rowIdColumn}
-                            onChange={(e) => setRowIdColumn(e.target.value)}
+                            onChange={(e) => {
+                              const nextRowIdColumn = e.target.value;
+                              setRowIdColumn(nextRowIdColumn);
+                              if (titleColumn === nextRowIdColumn) setTitleColumn("");
+                              if (descriptionColumn === nextRowIdColumn) setDescriptionColumn("");
+                              if (citationColumn === nextRowIdColumn) setCitationColumn("");
+                            }}
                             className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
                           >
                             <option value="">Match rows by their full contents</option>
@@ -2495,6 +2593,72 @@ export default function DataSourceManagement() {
                             row updates its crawled link instead of adding a new one. Leave unset to match
                             rows by their full contents.
                           </div>
+                        </div>
+                      )}
+
+                      {primaryFile && isCsvFile(primaryFile) && csvColumns.length > 0 && urlColumn && (
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div className="space-y-1">
+                            <label htmlFor="csv-title-column" className="text-sm font-medium text-gray-900">
+                              Resource title column (optional)
+                            </label>
+                            <select
+                              id="csv-title-column"
+                              value={titleColumn}
+                              onChange={(e) => setTitleColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">Use the fetched page title</option>
+                              {csvColumns
+                                .filter((column) => column !== urlColumn && column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label htmlFor="csv-description-column" className="text-sm font-medium text-gray-900">
+                              Description column (optional)
+                            </label>
+                            <select
+                              id="csv-description-column"
+                              value={descriptionColumn}
+                              onChange={(e) => setDescriptionColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">No mapped description</option>
+                              {csvColumns
+                                .filter((column) => column !== urlColumn && column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label htmlFor="csv-citation-column" className="text-sm font-medium text-gray-900">
+                              Citation link column (optional)
+                            </label>
+                            <select
+                              id="csv-citation-column"
+                              value={citationColumn}
+                              onChange={(e) => setCitationColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">Use the fetched URL</option>
+                              {csvColumns
+                                .filter((column) => column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+                          <p className="text-xs text-gray-500 md:col-span-3">
+                            Each row is indexed as its own resource. Its title and description enrich fetched
+                            content, while the citation link controls what users open. Invalid citation links
+                            safely fall back to the fetched URL.
+                          </p>
                         </div>
                       )}
 

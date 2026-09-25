@@ -45,17 +45,32 @@ def make_pdf(text: str) -> bytes:
 
 def link(ds, key, number, url, status="pending", **extra):
     row = {
+        "id": f"{ds}:{key}",
         "data_source_id": ds,
+        "csv_file": f"{ds}.csv",
         "row_key": key,
         "row_number": number,
+        "raw_url": url or "",
         "normalized_url": url,
         "source_url": f"csvlink://{url}" if url and status != "skipped" else None,
+        "raw_citation_url": None,
+        "citation_url": url,
+        "citation_warning": None,
+        "title": key.upper(),
+        "description": f"Description for {key}",
+        "row_text": f"Program: {key.upper()}\nDescription: Description for {key}",
+        "resource_hash": key,
+        "row_source_id": None,
         "row_metadata": {"Program": key.upper()},
         "status": status,
         "reason": None,
         "http_status": None,
         "content_type": None,
         "fetched": False,
+        "row_indexed": False,
+        "fetched_content_indexed": False,
+        "indexing_reason": None,
+        "indexed_at": None,
     }
     row.update(extra)
     return row
@@ -83,32 +98,102 @@ class FakeStore:
 
     def pending_urls(self, ds):
         seen, out = set(), []
-        for row in sorted(self.links, key=lambda r: r["row_number"]):
+        for row in sorted(self.links, key=lambda item: item["row_number"]):
             if row["data_source_id"] == ds and row["status"] == "pending" and row["source_url"] \
                     and row["source_url"] not in seen:
                 seen.add(row["source_url"])
                 out.append({"normalized_url": row["normalized_url"], "source_url": row["source_url"]})
         return out
 
+    def pending_index_rows(self, ds, limit):
+        return [
+            row for row in sorted(self.links, key=lambda item: item["row_number"])
+            if row["data_source_id"] == ds and row["indexed_at"] is None
+        ][:limit]
+
+    def count_index_pending(self, ds):
+        return sum(
+            1 for row in self.links
+            if row["data_source_id"] == ds and row["indexed_at"] is None
+        )
+
+    def fail_index_pending(self, ds, reason):
+        for row in self.links:
+            if row["data_source_id"] == ds and row["indexed_at"] is None:
+                row.update(row_indexed=False, fetched_content_indexed=False,
+                           indexing_reason=reason, indexed_at="now")
+
     def session_fetch(self, source_url, session_id):
-        meta = self.sources.get(source_url, {}).get("metadata", {})
-        if meta.get("fetch_session") == session_id:
+        source = self.sources.get(source_url, {})
+        meta = source.get("metadata", {})
+        if meta.get("fetch_session") == session_id and source.get("chunks"):
             return {"http_status": meta.get("http_status"), "content_type": meta.get("content_type")}
         return None
 
     def source_exists(self, source_url):
         return source_url in self.sources
 
+    def canonical_content(self, source_url):
+        source = self.sources.get(source_url)
+        if not source:
+            return None, []
+        return source.get("name"), source.get("chunks", [])
+
     def upsert_link_source(self, source_url, *, name, metadata):
-        self.sources[source_url] = {"id": f"src:{source_url}", "name": name, "metadata": dict(metadata)}
+        existing = self.sources.get(source_url, {})
+        self.sources[source_url] = {
+            "id": existing.get("id", f"src:{source_url}"),
+            "name": name,
+            "metadata": dict(metadata),
+            "chunks": existing.get("chunks", []),
+        }
         return self.sources[source_url]["id"]
+
+    def upsert_row_source(self, row, *, name, metadata):
+        source_url = worker.row_source_url(row["data_source_id"], row["row_key"])
+        existing = self.sources.get(source_url, {})
+        self.sources[source_url] = {
+            "id": existing.get("id", f"src:{source_url}"),
+            "name": name,
+            "metadata": dict(metadata),
+            "chunks": existing.get("chunks", []),
+        }
+        return self.sources[source_url]["id"]
+
+    def mark_row_indexed(self, row_id, source_id, *, indexed, fetched_content, reason):
+        row = next(item for item in self.links if item["id"] == row_id)
+        row.update(
+            row_source_id=source_id,
+            row_indexed=indexed,
+            fetched_content_indexed=fetched_content,
+            indexing_reason=reason,
+            indexed_at="now",
+        )
+
+    def rows_for_source(self, source_url, data_source_id, limit):
+        return [
+            row for row in sorted(self.links, key=lambda item: item["row_number"])
+            if row["source_url"] == source_url
+            and row["data_source_id"] == data_source_id
+            and row["status"] == "pending"
+        ][:limit]
 
     def refresh_source_rows(self, source_url):
         if source_url in self.sources:
             self.sources[source_url]["metadata"]["rows"] = [
-                {"row_key": r["row_key"], "columns": r["row_metadata"]}
-                for r in self.links if r["source_url"] == source_url
+                {"row_key": row["row_key"], "columns": row["row_metadata"]}
+                for row in self.links if row["source_url"] == source_url
             ]
+
+    def mark_row_ids(self, row_ids, status, *, reason=None, http_status=None,
+                     content_type=None, fetched=False):
+        count = 0
+        for row in self.links:
+            if row["id"] in row_ids and row["status"] == "pending":
+                row.update(status=status, reason=reason, http_status=http_status,
+                           content_type=content_type, fetched=row["fetched"] or fetched)
+                count += 1
+        return count
 
     def mark_rows(self, source_url, status, *, data_source_id, reason=None, http_status=None,
                   content_type=None, fetched=False):
@@ -125,19 +210,24 @@ class FakeStore:
     def delete_source(self, source_url):
         self.sources.pop(source_url, None)
 
+    def drop_fetched_content(self, source_url):
+        for row in self.links:
+            if row["source_url"] == source_url:
+                row["fetched_content_indexed"] = False
+
     def count_pending(self, ds):
-        return sum(1 for r in self.links if r["data_source_id"] == ds and r["status"] == "pending")
+        return sum(1 for row in self.links if row["data_source_id"] == ds and row["status"] == "pending")
 
     def fail_pending(self, ds, reason):
-        for r in self.links:
-            if r["data_source_id"] == ds and r["status"] == "pending":
-                r.update(status="failed", reason=reason)
+        for row in self.links:
+            if row["data_source_id"] == ds and row["status"] == "pending":
+                row.update(status="failed", reason=reason)
 
     def summary(self, ds):
         counts = {"pending": 0, "success": 0, "failed": 0, "skipped": 0}
-        for r in self.links:
-            if r["data_source_id"] == ds:
-                counts[r["status"]] += 1
+        for row in self.links:
+            if row["data_source_id"] == ds:
+                counts[row["status"]] += 1
         return counts
 
     def finalize_run(self, run_id, summary):
@@ -148,7 +238,7 @@ class FakeStore:
         return 0
 
     def by_key(self, key):
-        return next(r for r in self.links if r["row_key"] == key)
+        return next(row for row in self.links if row["row_key"] == key)
 
 
 class FakeFetcher:
@@ -185,6 +275,14 @@ B = "https://b.example/gone"
 C = "http://internal.example/admin"
 D = "https://d.example/guide.pdf"
 E = "https://e.example/flaky"
+CANONICAL_CHUNK = {
+    "chunk_index": 0,
+    "body": LOREM,
+    "text": LOREM,
+    "word_count": len(LOREM.split()),
+    "content_hash": "canonical",
+    "metadata": {"heading_path": "Program A"},
+}
 
 
 def run(store, fetcher, *, time_left=lambda: 600, write=None):
@@ -192,6 +290,44 @@ def run(store, fetcher, *, time_left=lambda: 600, write=None):
         store, fetcher, data_source_id="ds1", run_id="run1", session_id="sess1",
         time_left=time_left, concurrency=4, write=write or RecordingWriter(),
     )
+
+
+class RowResourceTests(unittest.TestCase):
+    def test_short_row_without_fetch_url_is_still_indexed(self):
+        row = link("ds1", "row-only", 1, None, status="skipped", reason="no fetch URL",
+                   citation_url="https://public.example/row", row_text="Title: Row only")
+        store = FakeStore([row])
+        writer = RecordingWriter()
+
+        stats = run(store, FakeFetcher({}), write=writer)
+
+        self.assertEqual(stats["rows_indexed"], 1)
+        self.assertTrue(row["row_indexed"])
+        self.assertFalse(row["fetched_content_indexed"])
+        source = store.sources[worker.row_source_url("ds1", "row-only")]
+        self.assertEqual(source["metadata"]["citation_url"], "https://public.example/row")
+        self.assertEqual(writer.calls[source["id"]][0]["body"], "Title: Row only")
+
+    def test_shared_fetch_creates_row_specific_citations_and_descriptions(self):
+        first = link("ds1", "r1", 1, A, citation_url="https://public.example/one",
+                     description="Description one")
+        second = link("ds1", "r2", 2, A, citation_url="https://public.example/two",
+                      description="Description two")
+        store = FakeStore([first, second])
+        fetcher = FakeFetcher({A: html_result(A)})
+        writer = RecordingWriter()
+
+        run(store, fetcher, write=writer)
+
+        self.assertEqual(fetcher.calls, [A])
+        one = store.sources[worker.row_source_url("ds1", "r1")]
+        two = store.sources[worker.row_source_url("ds1", "r2")]
+        self.assertEqual(one["metadata"]["citation_url"], "https://public.example/one")
+        self.assertEqual(two["metadata"]["citation_url"], "https://public.example/two")
+        self.assertTrue(writer.calls[one["id"]][1]["body"].startswith("Description one\n\n"))
+        self.assertTrue(writer.calls[two["id"]][1]["body"].startswith("Description two\n\n"))
+        self.assertTrue(first["fetched_content_indexed"])
+        self.assertTrue(second["fetched_content_indexed"])
 
 
 class MixedUrlTests(unittest.TestCase):
@@ -263,6 +399,8 @@ class MixedUrlTests(unittest.TestCase):
         empty = FetchResult(url=A, http_status=200, content_type=HTML, charset=None, body=b"<html><body></body></html>")
         run(store, FakeFetcher({A: empty}))
         self.assertEqual(store.by_key("r1")["status"], "failed")
+        self.assertTrue(store.by_key("r1")["row_indexed"])
+        self.assertFalse(store.by_key("r1")["fetched_content_indexed"])
         self.assertIn("no extractable text", store.by_key("r1")["reason"])
 
     def test_indexing_error_fails_rows_only(self):
@@ -285,7 +423,8 @@ class MixedUrlTests(unittest.TestCase):
         store = FakeStore(
             [link("ds1", "r1", 1, A)],
             sources={f"csvlink://{A}": {"id": "s", "name": "A", "metadata": {
-                "fetch_session": "sess1", "http_status": 200, "content_type": HTML}}},
+                "fetch_session": "sess1", "http_status": 200, "content_type": HTML},
+                "chunks": [CANONICAL_CHUNK]}},
         )
         fetcher = FakeFetcher({})
         stats = run(store, fetcher)
@@ -310,6 +449,18 @@ class MixedUrlTests(unittest.TestCase):
 
 
 class LargeCsvTests(unittest.TestCase):
+    def test_more_than_2100_rows_sharing_one_url_drain_without_false_failures(self):
+        links = [link("ds1", f"shared-{index}", index, A) for index in range(2110)]
+        store = FakeStore(links)
+        fetcher = FakeFetcher({A: html_result(A)})
+
+        run(store, fetcher)
+
+        self.assertEqual(fetcher.calls, [A])
+        self.assertEqual(store.count_pending("ds1"), 0)
+        self.assertEqual(store.summary("ds1")["success"], 2110)
+        self.assertTrue(all(row["row_indexed"] and row["fetched_content_indexed"] for row in links))
+
     def test_500_urls_each_fetched_once(self):
         urls = [f"https://site{i}.example/" for i in range(500)]
         links = [link("ds1", f"r{i}", i, url) for i, url in enumerate(urls)]
@@ -334,6 +485,8 @@ class EntryPointTests(unittest.TestCase):
         with mock.patch.object(worker, "LinkStore", return_value=store), \
                 mock.patch.object(worker, "LinkFetcher", return_value=fetcher), \
                 mock.patch.object(worker, "write_chunks", RecordingWriter()), \
+                mock.patch.object(worker, "write_chunk_sets",
+                                  return_value={"written": 1, "embedded": 1, "deleted": 0}), \
                 mock.patch.object(worker, "invoke_link_worker") as invoke:
             result = worker.process_csv_links(event or self.EVENT, connection=None, context=context)
         return result, invoke

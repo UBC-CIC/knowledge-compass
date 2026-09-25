@@ -388,26 +388,45 @@ If validation passes, it inserts:
 3. A `pending` `ingestion_runs` row for the primary file
 4. A `pending` `ingestion_runs` row for the metadata JSON file
 
-### Crawling links from a CSV column
+### CSV row resources and linked content
 
-A CSV can opt in to having the web pages and PDFs its rows link to fetched and indexed. The CSV's own rows are indexed exactly as before either way.
+A CSV opts in to discrete row resources by configuring `url_column`. The CSV's original whole-file, content-defined chunks remain indexed exactly as before; row resources supplement rather than replace them. Once configured, **every row** is planned, including rows whose fetch URL cell is blank or invalid.
 
-| Field           | Description                                                                                                     |
-| --------------- | --------------------------------------------------------------------------------------------------------------- |
-| `url_column`    | Optional. Column holding one http(s) link per row. Omit it and no links are crawled.                            |
-| `row_id_column` | Optional, needs `url_column`. Identifies a row across re-uploads; by default a row is identified by its content. |
+| Field | Description |
+| --- | --- |
+| `url_column` | Feature gate and the single HTML/PDF URL to fetch for each row. A blank cell does not prevent row-only indexing. |
+| `row_id_column` | Optional stable identity across re-uploads. Without it, the normalized full row determines identity. |
+| `title_column` | Optional human title used for the row source and fetched content. |
+| `description_column` | Optional description included in row text and prepended to each row-specific fetched chunk. |
+| `citation_column` | Optional public URL shown to users. It is independent of the URL that was fetched. |
 
-Both are checked against the CSV header (case-insensitively) when staging. Without `url_column`, the staging response carries `suggested_url_column`: a column where more than 80% of the sampled values are http(s) URLs. It is a hint only. The single-file upload dialog offers the same suggestion.
+All configured roles require `url_column` and are resolved against the CSV header exactly, then case-insensitively after trimming. Exact header spelling is stored in `data_sources.metadata`. Mapping-only changes trigger reprocessing even when file bytes are unchanged. Without `url_column`, staging still returns `suggested_url_column` when more than 80% of sampled non-empty values in a column are safe HTTP(S) URLs, but no row-resource work runs.
 
-On Sync, once the CSV's rows are embedded, the run stays `running` while a background worker (`helpers/process_csv_links.py`) fetches each distinct URL once:
+#### Storage and chunk layout
 
-* **Content:** HTML pages and PDFs only. JavaScript is not rendered and only the linked page is fetched, with no crawling beyond redirects. Anything else fails with a reason.
-* **Indexing:** one `sources` row per normalized URL (`csvlink://<url>`, `source_type = 'csv_link'`) is shared by every row in every CSV that links to it. The real URL is its citation. The linking rows' other columns are attached as `sources.metadata.rows` and `chunks.metadata.csv_rows`, and are shown to the model with the retrieved passage.
-* **Safety:** only http/https; the host's resolved addresses, and those of every redirect hop, must all be public (no private, loopback, link-local or metadata addresses), and the connection goes to the vetted address. robots.txt is honoured for `KnowledgeCompassBot`, including `Crawl-delay`.
-* **Failures:** a bad link only fails its own rows. A permanent failure (404/410, blocked, disallowed, unsupported, no text) removes content previously indexed for that URL. A transient one (timeout, 5xx) keeps it.
-* **Re-uploads:** rows removed from the CSV, or edited so they no longer match, lose their link record. Pages no row links to any more are deleted. Deleting the CSV deletes them too.
+Three layers intentionally coexist:
 
-Per-row status (`pending` / `success` / `failed` / `skipped` plus the reason) is available from `GET /admin/data_sources/{id}/links?status=&limit=&offset=`. The run's metadata gets a `link_summary`, or a `link_error` if link crawling could not run.
+1. The uploaded CSV remains a `document` source with its existing grouped whole-row chunks.
+2. Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source. It is fetched once per CSV/session, preserves SSRF and robots protections, supports unchanged-content reuse, and is hidden from answer retrieval after row variants are available.
+3. Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` contains all non-empty descriptive columns except the fetch URL, citation URL, and stable ID. Chunks `1+` contain canonical fetched chunks with the row description prepended. Short row-only chunks are intentionally allowed below the normal 20-word document minimum.
+
+The row source stores the mapped title, description, columns, normalized fetch URL, resolved citation, CSV identity, and canonical chunk identity in source/chunk metadata. Multiple rows can therefore share one network fetch while remaining independently searchable and citeable. This duplicates row-specific fetched chunk/vector rows: for `R` rows sharing a page with `C` chunks, storage is approximately `R × C` row chunks plus the canonical `C` chunks. The writer deduplicates identical effective Cohere inputs within a batch and reuses unchanged vectors on re-ingest, but PostgreSQL/HNSW storage still scales with the duplicated chunk count.
+
+#### Citation and status semantics
+
+Citation resolution is row-local:
+
+1. A valid HTTP(S) value from `citation_column`.
+2. Otherwise, the normalized `url_column` value.
+3. Otherwise, no public URL; the user sees a titled, non-clickable resource card.
+
+An invalid non-empty citation value records `citation_warning` and safely follows the fallback chain. Valid citation fragments (for example `#page=12` or a section anchor) are preserved even though fragments are removed from fetch identity. Internal `csvrow://` identities are never exposed. Retrieval prefers chunk citation metadata, then source citation metadata, requires the owning row to be currently indexed, and pages past competing variants of the same canonical fetched chunk before final top-k selection.
+
+`csv_row_links.status` continues to describe fetching: `pending`, `success`, `failed`, or `skipped`. A blank URL is `skipped` with reason `no fetch URL`; invalid/failing URLs remain `failed`. Independent fields report row-resource indexing: `row_indexed`, `fetched_content_indexed`, `indexing_reason`, and `indexed_at`. A fetch failure does not remove chunk `0`; permanent failures remove stale fetched chunks while transient failures preserve previously indexed fetched content.
+
+The background worker indexes row-only resources in bounded batches, fetches each distinct URL with the existing safe HTTP client, materializes bounded sets of row variants, and uses continuations for remaining fetch or indexing work. Reconciliation preserves a stable row source when `row_key` survives and deletes orphaned row/canonical sources when rows or CSV data sources disappear.
+
+Per-row fetch and indexing state is available from `GET /admin/data_sources/{id}/links?status=&limit=&offset=`. The response preserves existing fields and adds configured roles, title/description, raw/resolved citation, citation warnings, and indexing diagnostics. The run metadata continues to receive `link_summary` or `link_error`.
 
 Limits (environment variables on the knowledge base Lambda):
 
@@ -423,6 +442,10 @@ Limits (environment variables on the knowledge base Lambda):
 | `LINK_PER_DOMAIN_DELAY_SECONDS` | 1        | Minimum gap between requests to one host (a larger robots delay wins).   |
 | `LINK_MAX_CRAWL_DELAY_SECONDS`  | 10       | Cap on a robots.txt `Crawl-delay`.                                       |
 | `LINK_MAX_CONTINUATIONS`        | 20       | Times the worker re-invokes itself when out of time before giving up.    |
+
+#### Deployment and rollback
+
+Migration `017_csv_row_resources.js` is additive. Deploy and verify DBFlow first, then deploy the API/worker stack, then the frontend; re-sync existing configured CSVs to materialize their row resources. `cdk/bin/cdk.ts` declares the API stack's dependency on DBFlow so `cdk deploy --all` respects this order, but a phased production deployment is still preferred. CloudFormation does not run migration downs during rollback, PostgreSQL enum values are intentionally retained, and the migration down deletes row-resource content. Production recovery should therefore roll application code forward rather than invoke the down migration. Snapshot the database before any destructive future contract migration.
 
 ## Sync Sessions
 

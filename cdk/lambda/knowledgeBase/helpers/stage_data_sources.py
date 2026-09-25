@@ -221,38 +221,55 @@ def _reject_if_not_replaceable(existing: dict | None, *, s3_key: str, file_name:
 
 
 def _link_config(
-    source_type: str, bucket: str, key: str, url_column: str | None, row_id_column: str | None
+    source_type: str,
+    bucket: str,
+    key: str,
+    url_column: str | None,
+    row_id_column: str | None,
+    title_column: str | None = None,
+    description_column: str | None = None,
+    citation_column: str | None = None,
 ) -> dict:
     """
-    Validate a CSV's url_column / row_id_column against its header (resolving
-    them to the header's exact spelling) and suggest a URL column when none is
-    given. Raises StageRejected.
+    Validate configured CSV column roles against the uploaded header, resolving
+    each role to the header's exact spelling. ``url_column`` remains the feature
+    gate; the other row-resource roles are meaningful only when it is set.
     """
-    url_column = (url_column or "").strip() or None
-    row_id_column = (row_id_column or "").strip() or None
+    requested = {
+        "url_column": (url_column or "").strip() or None,
+        "row_id_column": (row_id_column or "").strip() or None,
+        "title_column": (title_column or "").strip() or None,
+        "description_column": (description_column or "").strip() or None,
+        "citation_column": (citation_column or "").strip() or None,
+    }
+    role_names = tuple(requested)
     if source_type != "csv":
-        if url_column or row_id_column:
-            raise StageRejected(400, {"error": "url_column and row_id_column are only supported for CSV files"})
-        return {"url_column": None, "row_id_column": None, "suggested_url_column": None}
-    if row_id_column and not url_column:
-        raise StageRejected(400, {"error": "row_id_column requires url_column"})
+        if any(requested.values()):
+            raise StageRejected(400, {"error": f"{', '.join(role_names)} are only supported for CSV files"})
+        return {**{name: None for name in role_names}, "suggested_url_column": None}
+
+    dependent_roles = [name for name in role_names[1:] if requested[name]]
+    if dependent_roles and not requested["url_column"]:
+        raise StageRejected(400, {
+            "error": f"{', '.join(dependent_roles)} require url_column",
+        })
 
     try:
         info = inspect_uploaded_csv(bucket, key)
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not read CSV header of s3://%s/%s: %s", bucket, key, e)
-        if url_column:
-            raise StageRejected(400, {"error": "Could not read the CSV header to check url_column"})
-        return {"url_column": None, "row_id_column": None, "suggested_url_column": None}
+        if any(requested.values()):
+            raise StageRejected(400, {"error": "Could not read the CSV header to check configured columns"})
+        return {**{name: None for name in role_names}, "suggested_url_column": None}
 
-    config = {"url_column": None, "row_id_column": None, "suggested_url_column": info["suggested_url_column"]}
-    for field, requested in (("url_column", url_column), ("row_id_column", row_id_column)):
-        if not requested:
+    config = {**{name: None for name in role_names}, "suggested_url_column": info["suggested_url_column"]}
+    for field, requested_name in requested.items():
+        if not requested_name:
             continue
-        resolved = resolve_column(info["columns"], requested)
+        resolved = resolve_column(info["columns"], requested_name)
         if not resolved:
             raise StageRejected(400, {
-                "error": f"{field} '{requested}' is not a column of this CSV",
+                "error": f"{field} '{requested_name}' is not a column of this CSV",
                 "columns": info["columns"],
             })
         config[field] = resolved
@@ -285,6 +302,9 @@ def stage_file_pair(
     metadata_s3_key: str,
     url_column: str | None = None,
     row_id_column: str | None = None,
+    title_column: str | None = None,
+    description_column: str | None = None,
+    citation_column: str | None = None,
 ) -> dict:
     """
     Stage a CSV/Markdown file and its metadata JSON sidecar, replacing the
@@ -312,8 +332,24 @@ def stage_file_pair(
         logger.error("Uploaded file not found in S3: %s", e, exc_info=True)
         raise StageRejected(400, {"error": "One or both uploaded files do not exist in S3"})
 
-    links = _link_config(source_type, primary_s3_bucket, primary_s3_key, url_column, row_id_column)
-    link_metadata = {k: links[k] for k in ("url_column", "row_id_column") if links[k]}
+    links = _link_config(
+        source_type,
+        primary_s3_bucket,
+        primary_s3_key,
+        url_column,
+        row_id_column,
+        title_column,
+        description_column,
+        citation_column,
+    )
+    role_fields = (
+        "url_column",
+        "row_id_column",
+        "title_column",
+        "description_column",
+        "citation_column",
+    )
+    link_metadata = {key: links[key] for key in role_fields if links[key]}
 
     source_key = upload_source_key(source_type, primary_file_name)
     new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
@@ -324,7 +360,7 @@ def stage_file_pair(
     _reject_if_not_replaceable(existing, s3_key=primary_s3_key, file_name=primary_file_name)
 
     same_link_config = existing and all(
-        existing["metadata"].get(k) == link_metadata.get(k) for k in ("url_column", "row_id_column")
+        existing["metadata"].get(key) == link_metadata.get(key) for key in role_fields
     )
     if existing and same_link_config and _content_unchanged(existing, primary_etag):
         old_metadata_etag = stored_etag(
@@ -863,6 +899,9 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
             metadata_s3_key=metadata_s3_key,
             url_column=body.get("url_column"),
             row_id_column=body.get("row_id_column"),
+            title_column=body.get("title_column"),
+            description_column=body.get("description_column"),
+            citation_column=body.get("citation_column"),
         )
     except StageRejected as rejected:
         return _response(event, rejected.status_code, rejected.body)
