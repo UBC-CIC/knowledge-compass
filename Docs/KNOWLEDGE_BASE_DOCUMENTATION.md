@@ -447,6 +447,34 @@ Limits (environment variables on the knowledge base Lambda):
 
 Migration `017_csv_row_resources.js` is additive. Deploy and verify DBFlow first, then deploy the API/worker stack, then the frontend; re-sync existing configured CSVs to materialize their row resources. `cdk/bin/cdk.ts` declares the API stack's dependency on DBFlow so `cdk deploy --all` respects this order, but a phased production deployment is still preferred. CloudFormation does not run migration downs during rollback, PostgreSQL enum values are intentionally retained, and the migration down deletes row-resource content. Production recovery should therefore roll application code forward rather than invoke the down migration. Snapshot the database before any destructive future contract migration.
 
+### PDF text extraction
+
+Uploaded PDF documents and PDFs linked from CSV rows are read by `helpers/pdf_text.py`. Amazon Textract document analysis with the `LAYOUT` feature OCRs scanned and image-only pages, returns paragraphs in reading order across columns, and drops running headers, footers, and page numbers. pypdf's embedded text layer is the fallback, so a PDF that indexed before Textract still indexes when Textract is unavailable.
+
+`PDF_TEXTRACT_MODE` on the knowledge base Lambda (set in `cdk/lib/api-stack.ts`) controls when Textract runs:
+
+| Value | Behavior |
+| --- | --- |
+| `always` (default) | Every PDF is read with Textract. |
+| `auto` | Only PDFs whose embedded text is missing or unreadable on at least a quarter of their pages (under 20 words, or mostly non-letter characters). |
+| `off` | pypdf only, as before Textract was added. |
+
+How a PDF is read:
+
+* Single-page PDFs up to 10 MB use the synchronous `AnalyzeDocument` API. Anything else runs as an asynchronous `StartDocumentAnalysis` job: uploads are read in place, and fetched PDFs are first copied to `textract/input/` in the ingest bucket.
+* OCR waits are budgeted against the Lambda's remaining time, keeping 90 seconds for chunking, embedding, and database writes. An upload whose job is still running is handed to a fresh invocation of the document worker (up to 10 continuations). A linked PDF falls back to its embedded text; if it has none, its rows fail with a transient reason and keep previously indexed content.
+* Unfinished jobs are recorded under `textract/jobs/` by content hash, so a continuation, a retry, or the next sync picks up a running job instead of paying for a new one. Textract keeps async results for 7 days.
+* Finished results are cached under `textract/cache/` by content hash, so re-syncing an unchanged PDF does not run OCR again.
+* Files over Textract's limits (500 MB or 3,000 pages) skip Textract. Pages missing from a partially successful job use their embedded text.
+
+Everything under `textract/` expires after 30 days (lifecycle rule `ExpireTextractArtifacts` in `cdk/lib/ingestion-stack.ts`), so cached text of a deleted document can remain for up to that long.
+
+Each PDF document run records `ingestion_runs.metadata.pdf_extraction`: `engine` (`textract` or `pypdf`), `pages`, `characters`, `seconds`, and where relevant `cached`, `textract_job_id`, and a `note` explaining a fallback. It never contains document text. When a PDF yields no text, the run's `error_message` (or the CSV row's reason) says what was tried, for example `no extractable text (OCR found none)`, and suggests a retry when the cause was transient.
+
+Textract bills per page analyzed (see [Amazon Textract pricing](https://aws.amazon.com/textract/pricing/)). The cache avoids repeat charges for unchanged PDFs, and `auto` limits OCR to the PDFs that need it. Default request quotas are low outside the largest regions (for example 2 `StartDocumentAnalysis` and 1 `AnalyzeDocument` request per second), so the client retries throttled calls adaptively and large CSV link crawls slow down rather than fail.
+
+The shared `lambdaRole` is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
+
 ## Sync Sessions
 
 A sync session starts when an admin calls:

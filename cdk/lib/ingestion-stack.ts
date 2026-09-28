@@ -107,7 +107,7 @@ export class IngestionStack extends Stack {
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.udp(53), "DNS UDP (AmazonProvidedDNS)");
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(53), "DNS TCP fallback");
 
-    // ── S3 ingest bucket (video uploads + transcript outputs) ──────────────────
+    // ── S3 ingest bucket (uploads, transcript outputs, Textract artifacts) ────
     const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -132,6 +132,15 @@ export class IngestionStack extends Stack {
           noncurrentVersionExpiration: Duration.days(3),
           expiredObjectDeleteMarker: true,
           abortIncompleteMultipartUploadAfter: Duration.days(3),
+        },
+        {
+          // Textract staging copies of fetched PDFs (deleted once read) and
+          // cached OCR text (lambda/knowledgeBase/helpers/pdf_text.py). This
+          // bounds how long extracted text outlives its source; an expired
+          // cache entry only means that PDF is OCR'd again on its next sync.
+          id: "ExpireTextractArtifacts",
+          prefix: "textract/",
+          expiration: Duration.days(30),
         },
       ],
     });

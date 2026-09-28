@@ -134,7 +134,7 @@ def handler(event, context=None):
             except Exception as e:
                 logger.error(f"Error connecting to database: {e}")
                 return {"error": "Error connecting to database"}
-            return process_document_batch(event=event, connection=connection)
+            return process_document_batch(event=event, connection=connection, context=context)
 
         # Async link phase of a CSV run (see helpers/process_csv_links.py);
         # fired by csv_links.start_link_phase and by itself to continue.

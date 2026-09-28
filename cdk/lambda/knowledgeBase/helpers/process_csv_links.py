@@ -13,11 +13,14 @@ Per invocation:
   again: its rows are just marked successful;
 - HTML/PDF text is chunked like Markdown / documents and written with
   process_document_batch.write_chunks, so re-crawling an unchanged page
-  re-embeds nothing. The linking rows' other columns are attached to the
-  source (metadata.rows) and every chunk (metadata.csv_rows);
+  re-embeds nothing. PDFs are read (Textract OCR with a pypdf fallback, see
+  pdf_text.py) on the fetch threads, so a slow OCR job overlaps other
+  fetches. The linking rows' other columns are attached to the source
+  (metadata.rows) and every chunk (metadata.csv_rows);
 - a failed fetch only fails its rows. A permanent failure (dead link,
   blocked, disallowed, unsupported) removes previously indexed content for
-  that URL; a transient one (timeout, 5xx) keeps it;
+  that URL; a transient one (timeout, 5xx, a PDF OCR could not finish right
+  now) keeps it;
 - no new URL is started once less than one fetch + embedding margin of
   Lambda time is left; the worker then re-invokes itself for the rest (up
   to LINK_MAX_CONTINUATIONS times) before finalizing the run.
@@ -39,11 +42,11 @@ from helpers.csv_links import (
     row_source_url,
 )
 from helpers.html_extract import extract_html
-from helpers.link_fetcher import HTML, FetchError, FetchLimits, LinkFetcher
+from helpers.link_fetcher import HTML, PDF, FetchError, FetchLimits, LinkFetcher
+from helpers.pdf_text import extract_pdf, ocr_enabled
 from helpers.process_document_batch import (
     _chunk_document_text,
     _chunk_markdown,
-    _extract_pdf_text,
     write_chunk_sets,
     write_chunks,
 )
@@ -53,6 +56,9 @@ logger.setLevel(logging.INFO)
 
 # Time kept free for embedding + writing the last in-flight pages.
 _EMBED_RESERVE_SECONDS = 60
+# With OCR on, a fetch also needs time for Textract to read a PDF, so new
+# fetches stop this much earlier (pdf_text keeps its own reserve on top).
+_OCR_RESERVE_SECONDS = 90
 _MAX_ROWS_IN_METADATA = 20
 _DEFAULT_LAMBDA_SECONDS = 600
 _ROW_INDEX_BATCH = 10
@@ -664,24 +670,39 @@ def _pdf_title(url: str) -> str:
     return name or parts.hostname or url
 
 
-def build_chunks(result) -> tuple[str, list]:
-    """(title, chunks) for a fetched HTML page or PDF."""
+def build_chunks(result, pdf=None) -> tuple[str, list]:
+    """(title, chunks) for a fetched HTML page or PDF; `pdf` is the PDF's already-read PdfText."""
     if result.content_type == HTML:
         title, text = extract_html(result.body, result.charset)
         return title, _chunk_markdown(text)
     title = _pdf_title(result.url)
-    return title, _chunk_document_text(_extract_pdf_text(result.body), title)
+    if pdf is None:
+        pdf = extract_pdf(result.body)
+    return title, _chunk_document_text(pdf.text, title)
 
 
-def _fetch(fetcher, url: str):
-    """Runs on a pool thread: never raises, returns a FetchResult or FetchError."""
+def _fetch(fetcher, url: str, time_left=None):
+    """
+    Runs on a pool thread and never raises: returns (FetchResult or FetchError,
+    PdfText or None). A fetched PDF is also read here, so a slow OCR job
+    overlaps other fetches instead of holding up the main thread.
+    """
     try:
-        return fetcher.fetch(url)
+        result = fetcher.fetch(url)
     except FetchError as e:
-        return e
+        return e, None
     except Exception as e:  # noqa: BLE001
         logger.warning("Unexpected error fetching %s: %s", url, e, exc_info=True)
-        return FetchError(f"unexpected error: {e.__class__.__name__}", permanent=False)
+        return FetchError(f"unexpected error: {e.__class__.__name__}", permanent=False), None
+    if result.content_type != PDF:
+        return result, None
+    try:
+        pdf = extract_pdf(result.body, time_left=time_left)
+    except Exception as e:  # noqa: BLE001  (handle_outcome reads it again and reports the error)
+        logger.warning("Could not read PDF %s: %s", url, e, exc_info=True)
+        return result, None
+    logger.info("Read PDF %s: %s", url, json.dumps(pdf.summary()))
+    return result, pdf
 
 
 def _record_failure(store, item: dict, error: FetchError, data_source_id: str):
@@ -709,8 +730,12 @@ def handle_outcome(
     session_id: str,
     time_left=None,
     write=None,
+    pdf=None,
 ) -> str:
-    """Index a fetched document (or record why not) and commit. Returns the rows' new status."""
+    """
+    Index a fetched document (or record why not) and commit. Returns the rows'
+    new status. `pdf` is a fetched PDF's text if _fetch already read it.
+    """
     time_left = time_left or (lambda: _DEFAULT_LAMBDA_SECONDS)
     row_write = write
     canonical_write = write or write_chunks
@@ -720,13 +745,18 @@ def handle_outcome(
         return "failed"
 
     try:
-        title, chunks = build_chunks(outcome)
-        reason = "no extractable text (empty page, or a scanned/image-only PDF)"
+        if outcome.content_type == PDF and pdf is None:
+            pdf = extract_pdf(outcome.body, time_left=time_left)
+        title, chunks = build_chunks(outcome, pdf)
+        reason = pdf.empty_reason() if pdf is not None else "no extractable text (empty page)"
     except Exception as e:  # noqa: BLE001  (malformed HTML/PDF)
         logger.warning("Could not extract %s: %s", item["normalized_url"], e, exc_info=True)
         title, chunks, reason = "", [], f"could not extract text: {e.__class__.__name__}"
     if not chunks:
-        error = FetchError(reason, permanent=True, http_status=outcome.http_status)
+        # A PDF that OCR couldn't read right now (Textract error, out of time)
+        # keeps what it indexed before, like a transient fetch error.
+        permanent = not (pdf is not None and pdf.retryable)
+        error = FetchError(reason, permanent=permanent, http_status=outcome.http_status)
         _record_failure(store, item, error, data_source_id)
         store.commit()
         return "failed"
@@ -779,6 +809,8 @@ def run_link_phase(store, fetcher, *, data_source_id: str, run_id: str, session_
     """
     pending = iter(store.pending_urls(data_source_id))
     reserve = fetcher.limits.total_timeout + _EMBED_RESERVE_SECONDS
+    if ocr_enabled():
+        reserve += _OCR_RESERVE_SECONDS
     stats = {
         "success": 0,
         "failed": 0,
@@ -829,7 +861,7 @@ def run_link_phase(store, fetcher, *, data_source_id: str, run_id: str, session_
                     )
                     stats["reused"] += 1
                     continue
-                in_flight[pool.submit(_fetch, fetcher, item["normalized_url"])] = item
+                in_flight[pool.submit(_fetch, fetcher, item["normalized_url"], time_left)] = item
 
         fill()
         while in_flight:
@@ -842,14 +874,16 @@ def run_link_phase(store, fetcher, *, data_source_id: str, run_id: str, session_
                     # Deleted or reset while crawling: write nothing more.
                     stats["aborted"] = True
                     continue
+                outcome, pdf = future.result()
                 status = handle_outcome(
                     store,
                     item,
-                    future.result(),
+                    outcome,
                     data_source_id=data_source_id,
                     session_id=session_id,
                     time_left=time_left,
                     write=write,
+                    pdf=pdf,
                 )
                 stats[status] += 1
             fill()

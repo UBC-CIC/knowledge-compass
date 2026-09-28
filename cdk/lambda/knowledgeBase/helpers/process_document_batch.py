@@ -19,7 +19,10 @@ halves:
 - process_document_batch(): the actual worker. It runs OUTSIDE the API
   Gateway request lifecycle (invoked via the "task": "process_document_batch"
   branch in main.py), so it can take as long as the Lambda's configured
-  timeout allows.
+  timeout allows. It doesn't start a run with under
+  _MIN_SECONDS_TO_START_RUN left: the remaining runs (and a PDF whose
+  Textract job is still running, which pdf_text.py picks up again by content
+  hash) are handed to a fresh invocation, up to _MAX_CONTINUATIONS times.
 
 State machine reused unchanged: stage_data_sources -> 'pending';
 start_ingestion_job / trigger_uploaded_document promote/mark -> 'running'
@@ -43,9 +46,10 @@ it. Without url_column the CSV path is unchanged.
 Re-ingesting a source re-embeds only chunks whose text is new to it: a chunk
 already stored at any index (e.g. shifted by an inserted row) is moved with
 its stored embedding instead of being sent to Bedrock again.
-- Document (PDF/DOCX/TXT): text is extracted (pypdf / python-docx / plain
-  decode) and split into ~300-word chunks with sentence-boundary overlap,
-  same as markdown but with no heading structure to key off of.
+- Document (PDF/DOCX/TXT): text is extracted (Amazon Textract with a pypdf
+  fallback, see pdf_text.py / python-docx / plain decode) and split into
+  ~300-word chunks with sentence-boundary overlap, same as markdown but with
+  no heading structure to key off of.
 
 The paired `{file}.metadata.json` sidecar (Bedrock KB convention) has no
 content of its own to embed; its own data_sources row is marked 'completed'
@@ -61,12 +65,13 @@ import json
 import logging
 import os
 import re
+import time
 
 import boto3
 from docx import Document as DocxDocument
-from pypdf import PdfReader
 
 from helpers.csv_links import start_link_phase
+from helpers.pdf_text import TextractPending, extract_pdf
 from helpers.upload_identity import source_url_for
 
 logger = logging.getLogger()
@@ -92,6 +97,13 @@ _MAX_WORDS_PER_CHUNK = 300
 _CSV_MIN_GROUP_WORDS = 100
 _CSV_AVG_EXTRA_WORDS = 100
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+# A run isn't started with less time than this left in the invocation (enough
+# for a short OCR wait plus pdf_text.RESERVE_SECONDS of chunking/embedding);
+# the rest continue in a fresh invocation, at most _MAX_CONTINUATIONS times.
+_MIN_SECONDS_TO_START_RUN = 120
+_MAX_CONTINUATIONS = 10
+_DEFAULT_LAMBDA_SECONDS = 600
 
 s3_client = boto3.client("s3", region_name=REGION)
 bedrock_runtime = boto3.client("bedrock-runtime", region_name=REGION)
@@ -244,9 +256,8 @@ def _chunk_csv(raw_bytes: bytes, max_words: int = _MAX_WORDS_PER_CHUNK) -> list:
     return chunks
 
 
-def _extract_pdf_text(raw_bytes: bytes) -> str:
-    reader = PdfReader(io.BytesIO(raw_bytes))
-    return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+def _is_pdf(file_name: str) -> bool:
+    return (file_name or "").lower().endswith(".pdf")
 
 
 def _extract_docx_text(raw_bytes: bytes) -> str:
@@ -259,9 +270,10 @@ def _extract_txt_text(raw_bytes: bytes) -> str:
 
 
 def _extract_document_text(file_name: str, raw_bytes: bytes) -> str:
+    """Text of a DOCX/TXT (or, without S3/time context, a PDF) document."""
     lower_name = (file_name or "").lower()
     if lower_name.endswith(".pdf"):
-        return _extract_pdf_text(raw_bytes)
+        return extract_pdf(raw_bytes).text
     if lower_name.endswith(".docx"):
         return _extract_docx_text(raw_bytes)
     if lower_name.endswith(".txt"):
@@ -716,19 +728,81 @@ def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
     return {"started": True, "run_id": ingestion_run_id}
 
 
-def process_document_batch(event, connection) -> dict:
+def _time_left(context):
+    """Seconds this invocation has left, from the Lambda context when there is one."""
+    if context is not None and hasattr(context, "get_remaining_time_in_millis"):
+        return lambda: context.get_remaining_time_in_millis() / 1000
+    started = time.monotonic()
+    return lambda: _DEFAULT_LAMBDA_SECONDS - (time.monotonic() - started)
+
+
+def _read_pdf(run: dict, raw_bytes: bytes, *, time_left, can_continue: bool):
     """
-    Worker: chunk + embed every csv/markdown run this module marked 'running',
-    and finalize any paired json (metadata-sidecar) runs. Invoked asynchronously
-    (InvocationType="Event"), so it is not bound by the API Gateway timeout.
+    A document run's PDF text. Textract reads the upload in place; when this
+    invocation could hand the run on, OCR that outlives it raises
+    TextractPending instead of settling for the embedded text.
+    """
+    meta = run["metadata"]
+    return extract_pdf(
+        raw_bytes,
+        s3_object={"Bucket": meta["s3_bucket"], "Name": meta["s3_key"]},
+        time_left=time_left,
+        allow_pending=can_continue,
+    )
+
+
+def _no_text_error(pdf) -> str:
+    if pdf is None:
+        return "No extractable text found in this document."
+    message = f"Could not index this PDF: {pdf.empty_reason()}."
+    if pdf.retryable:
+        message += " Retry this source to try again."
+    return message
+
+
+def _continue_later(connection, runs: list, continuation: int) -> list:
+    """
+    Hand runs this invocation had no time for to a fresh one. Returns the ids
+    of runs failed instead (continuation limit reached, or the invoke failed).
+    """
+    run_ids = [run["ingestion_run_id"] for run in runs]
+    if continuation < _MAX_CONTINUATIONS and LAMBDA_FUNCTION_NAME:
+        try:
+            lambda_client.invoke(
+                FunctionName=LAMBDA_FUNCTION_NAME,
+                InvocationType="Event",
+                Payload=json.dumps({"task": "process_document_batch", "continuation": continuation + 1}).encode("utf-8"),
+            )
+            logger.info("Document worker continues in a new invocation: %d run(s) left", len(run_ids))
+            return []
+        except Exception as e:  # noqa: BLE001
+            logger.error("Could not continue document ingestion: %s", e, exc_info=True)
+    _fail_runs(connection, run_ids, "Document ingestion ran out of time before finishing this source. Retry it.")
+    connection.commit()
+    return run_ids
+
+
+def process_document_batch(event, connection, context=None) -> dict:
+    """
+    Worker: chunk + embed every csv/markdown/document run this module marked
+    'running', and finalize any paired json (metadata-sidecar) runs. Invoked
+    asynchronously (InvocationType="Event"), so it is not bound by the API
+    Gateway timeout; event["continuation"] counts self-continuations.
     """
     runs = _running_document_runs(connection)
     if not runs:
         return {"processed": 0, "reason": "no running document runs found"}
 
-    completed, failed = [], []
+    continuation = int((event or {}).get("continuation") or 0)
+    can_continue = continuation < _MAX_CONTINUATIONS
+    time_left = _time_left(context)
+    completed, failed, deferred = [], [], []
 
-    for run in runs:
+    for index, run in enumerate(runs):
+        if time_left() < _MIN_SECONDS_TO_START_RUN:
+            deferred = runs[index:]
+            break
+
         run_id = run["ingestion_run_id"]
         ds_type = run["type"]
         meta = run["metadata"]
@@ -745,6 +819,7 @@ def process_document_batch(event, connection) -> dict:
                 failed.append(run_id)
             continue
 
+        run_metadata = {}
         try:
             bucket = meta.get("s3_bucket")
             key = meta.get("s3_key")
@@ -756,12 +831,18 @@ def process_document_batch(event, connection) -> dict:
             if ds_type == "markdown":
                 chunks = _chunk_markdown(raw_bytes.decode("utf-8", errors="replace"))
             elif ds_type == "document":
-                text = _extract_document_text(meta.get("document_file_name") or run["name"], raw_bytes)
+                file_name = meta.get("document_file_name") or run["name"]
+                pdf = None
+                if _is_pdf(file_name):
+                    pdf = _read_pdf(run, raw_bytes, time_left=time_left, can_continue=can_continue)
+                    run_metadata["pdf_extraction"] = pdf.summary()
+                    logger.info("Document run %s: PDF read %s", run_id, json.dumps(pdf.summary()))
+                    text = pdf.text
+                else:
+                    text = _extract_document_text(file_name, raw_bytes)
                 chunks = _chunk_document_text(text, run["name"])
                 if not chunks:
-                    raise RuntimeError(
-                        "No extractable text found in this document. Scanned/image-only PDFs are not supported."
-                    )
+                    raise RuntimeError(_no_text_error(pdf))
             else:  # csv
                 chunks = _chunk_csv(raw_bytes)
 
@@ -792,7 +873,6 @@ def process_document_batch(event, connection) -> dict:
                 run_id, counts["written"], counts["embedded"], counts["written"] - counts["embedded"], counts["deleted"],
             )
 
-            run_metadata = {}
             if ds_type == "csv":
                 # The CSV's own rows stay indexed whatever happens to its links.
                 connection.commit()
@@ -801,7 +881,7 @@ def process_document_batch(event, connection) -> dict:
                     completed.append(run_id)
                     logger.info("Document run %s: link crawl started; it will finalize the run", run_id)
                     continue
-                run_metadata = link["metadata"]
+                run_metadata.update(link["metadata"])
 
             _finish_run(
                 connection, run_id, "completed",
@@ -810,14 +890,29 @@ def process_document_batch(event, connection) -> dict:
             connection.commit()
             completed.append(run_id)
 
+        except TextractPending as pending:
+            # Out of time with OCR still running. Nothing was written for this
+            # run yet; the next invocation finds the same job by content hash.
+            connection.rollback()
+            logger.info("Document run %s: Textract job %s still running; continuing later", run_id, pending.job_id)
+            deferred = runs[index:]
+            break
+
         except Exception as e:  # noqa: BLE001
             connection.rollback()
             logger.error("Document ingestion failed for run %s: %s", run_id, e, exc_info=True)
             try:
-                _finish_run(connection, run_id, "failed", error_message=str(e)[:1000])
+                _finish_run(connection, run_id, "failed", error_message=str(e)[:1000], metadata=run_metadata)
                 connection.commit()
             except Exception:  # noqa: BLE001
                 connection.rollback()
             failed.append(run_id)
 
-    return {"processed": len(runs), "completed": completed, "failed": failed}
+    if deferred:
+        failed.extend(_continue_later(connection, deferred, continuation))
+    return {
+        "processed": len(runs) - len(deferred),
+        "completed": completed,
+        "failed": failed,
+        "deferred": [run["ingestion_run_id"] for run in deferred],
+    }

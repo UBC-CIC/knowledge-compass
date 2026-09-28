@@ -1226,8 +1226,9 @@ export class ApiGatewayStack extends cdk.Stack {
       functionName: `${id}-lambdaKnowledgeBase`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "main.handler",
-      // pypdf/python-docx (helpers/process_document_batch.py's PDF/DOCX text
-      // extraction) are vendored directly into lambda/knowledgeBase/ as prebuilt
+      // pypdf/python-docx (the PDF fallback in helpers/pdf_text.py and DOCX
+      // text extraction in helpers/process_document_batch.py) are vendored
+      // directly into lambda/knowledgeBase/ as prebuilt
       // manylinux wheels (see requirements.txt) rather than pip-installed via
       // Docker bundling, so deploying this stack has no Docker dependency —
       // consistent with the rest of this zip-asset Lambda (boto3 from the
@@ -1237,6 +1238,8 @@ export class ApiGatewayStack extends cdk.Stack {
       // (helpers/process_document_batch.py) runs via an async self-invocation,
       // not behind API Gateway's 29s limit, so it needs headroom to chunk +
       // embed larger CSV/Markdown uploads. Synchronous routes are unaffected.
+      // Textract OCR waits are budgeted against this from the Lambda context;
+      // work that doesn't fit continues in a fresh self-invocation.
       timeout: Duration.seconds(600),
       role: lambdaRole,
       layers: [psycopgLayer],
@@ -1248,8 +1251,28 @@ export class ApiGatewayStack extends cdk.Stack {
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         REGION: this.region,
         LAMBDA_FUNCTION_NAME: `${id}-lambdaKnowledgeBase`,
+        // PDF text extraction (helpers/pdf_text.py): "always" reads every PDF
+        // with Amazon Textract, "auto" only PDFs without a usable text layer
+        // (scans, image-only exports), "off" uses pypdf alone.
+        PDF_TEXTRACT_MODE: "always",
       },
     });
+
+    // Amazon Textract document analysis for PDF ingestion (helpers/pdf_text.py):
+    // AnalyzeDocument for single-page PDFs, Start/GetDocumentAnalysis for the
+    // rest. These actions have no resource-level permissions. Textract reads
+    // the ingest-bucket objects with this role's own S3 access
+    // (grantBucketAccess below), so no Textract service role is needed. Like
+    // the other statements here, this lands on the shared lambdaRole.
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        "textract:AnalyzeDocument",
+        "textract:StartDocumentAnalysis",
+        "textract:GetDocumentAnalysis",
+      ],
+      resources: ["*"],
+    }));
 
     lambdaKnowledgeBase.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({

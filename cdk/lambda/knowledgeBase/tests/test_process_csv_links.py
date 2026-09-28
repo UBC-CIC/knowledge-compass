@@ -7,6 +7,7 @@ Run from the knowledgeBase dir:
     pytest tests
 """
 
+import os
 import threading
 import unittest
 from unittest import mock
@@ -15,6 +16,7 @@ import _setup  # noqa: F401,E402  (path + env; see _setup.py)
 
 from helpers import process_csv_links as worker  # noqa: E402
 from helpers.link_fetcher import HTML, PDF, FetchError, FetchLimits, FetchResult  # noqa: E402
+from helpers.pdf_text import PdfText  # noqa: E402
 
 LOREM = " ".join(["Families can request a meeting with the school team at any time."] * 5)
 HTML_PAGE = f"<html><head><title>Program A</title></head><body><main><h1>Program A</h1><p>{LOREM}</p></main></body></html>".encode()
@@ -524,6 +526,55 @@ class EntryPointTests(unittest.TestCase):
         result, _ = self.invoke(store, fetcher)
         self.assertTrue(result["skipped"])
         self.assertEqual(fetcher.calls, [])
+
+
+class PdfOcrTests(unittest.TestCase):
+    """How a linked PDF's OCR outcome (helpers/pdf_text.py) lands on its rows."""
+
+    def pdf_fetcher(self):
+        return FakeFetcher({D: FetchResult(url=D, http_status=200, content_type=PDF, charset=None,
+                                           body=make_pdf(LOREM))})
+
+    def indexed_store(self):
+        """D was indexed by an earlier sync."""
+        source = {"id": "src-old", "name": "guide.pdf", "metadata": {}, "chunks": [CANONICAL_CHUNK]}
+        return FakeStore([link("ds1", "r1", 1, D)], sources={f"csvlink://{D}": source})
+
+    def test_pdf_is_read_on_the_fetch_thread_with_the_time_budget(self):
+        store = FakeStore([link("ds1", "r1", 1, D)])
+        pdf = PdfText(pages=[LOREM], engine="textract")
+        with mock.patch.object(worker, "extract_pdf", return_value=pdf) as extract:
+            stats = run(store, self.pdf_fetcher())
+        self.assertEqual(stats["success"], 1)
+        extract.assert_called_once()
+        self.assertEqual(extract.call_args.kwargs["time_left"](), 600)
+        self.assertEqual(store.by_key("r1")["status"], "success")
+
+    def test_ocr_that_could_not_finish_keeps_what_was_indexed_before(self):
+        store = self.indexed_store()
+        pdf = PdfText(pages=[""], note="Textract did not finish in time", retryable=True)
+        with mock.patch.object(worker, "extract_pdf", return_value=pdf):
+            run(store, self.pdf_fetcher())
+        self.assertIn(f"csvlink://{D}", store.sources)
+        self.assertEqual(store.by_key("r1")["status"], "failed")
+        self.assertIn("did not finish in time", store.by_key("r1")["reason"])
+        self.assertIn("previously indexed content kept", store.by_key("r1")["reason"])
+
+    def test_pdf_without_text_even_after_ocr_drops_its_old_content(self):
+        store = self.indexed_store()
+        with mock.patch.object(worker, "extract_pdf", return_value=PdfText(pages=[""], engine="textract")):
+            run(store, self.pdf_fetcher())
+        self.assertNotIn(f"csvlink://{D}", store.sources)
+        self.assertIn("OCR found none", store.by_key("r1")["reason"])
+
+    def test_fetches_stop_earlier_when_ocr_needs_time(self):
+        fetcher = self.pdf_fetcher()
+        with mock.patch.dict(os.environ, {"PDF_TEXTRACT_MODE": "always"}):
+            run(FakeStore([link("ds1", "r1", 1, D)]), fetcher, time_left=lambda: 100)
+        self.assertEqual(fetcher.calls, [])
+        with mock.patch.dict(os.environ, {"PDF_TEXTRACT_MODE": "off"}):
+            run(FakeStore([link("ds1", "r1", 1, D)]), fetcher, time_left=lambda: 100)
+        self.assertEqual(fetcher.calls, [D])
 
 
 if __name__ == "__main__":

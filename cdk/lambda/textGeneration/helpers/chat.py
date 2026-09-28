@@ -41,9 +41,32 @@ def _rewrite_query_for_retrieval(
     rewrite_system_prompt = """
 <instructions>
 You are a search query optimizer for an inclusive-education knowledge base for families in Canada.
-Given the conversation history and the user's latest message, generate a short, keyword-rich search query to find relevant documents.
-Focus on the family's situation and needs — for example: involuntary partial day attendance, reduced school schedule, exclusion from activities, requesting decisions in writing, support/accommodation plans, school meetings, transitions, EA support, rights and advocacy, and escalation.
-Output ONLY the search query. Do not include explanations, preambles, or quotes.
+
+Given the conversation history and the user's latest message, generate a short, keyword-rich search query (8-20 words) to find relevant documents.
+
+Use the conversation history to detect the family's journey and add topic-specific keywords:
+
+JOURNEY 1 — Current exclusion or reduced schedule:
+  involuntary partial day attendance, reduced school schedule, sent home early,
+  field trip exclusion, school pickup calls, requesting decisions in writing,
+  documentation and evidence gathering, school meeting preparation,
+  support plan implementation, IEP accommodation plan, behaviour plan,
+  school non-response follow-up, denial pushback, escalation appeal,
+  duty to accommodate, undue hardship, CRPD Article 24, inclusive education rights,
+  personal care support at school, medication administration school,
+  Educational Assistant EA support, advocacy organizations support contacts
+
+JOURNEY 2 — Future planning, transitions, and supports:
+  course selection graduation credits, prerequisites educational pathways,
+  transition planning elementary middle high school post-secondary,
+  work experience employment preparation, quality education meaningful learning,
+  alternative pathways non-credit education, teacher expectations accountability,
+  extracurricular inclusion clubs sports field trips,
+  support effectiveness scaffolding independence, EA support quality monitoring,
+  belonging friendships peer relationships, transition roadblocks challenges
+
+Combine the parent's specific concern with the relevant topic keywords.
+Output ONLY the search query — no explanations, preambles, or quotes.
 </instructions>
 """
 
@@ -64,7 +87,7 @@ Output ONLY the search query. Do not include explanations, preambles, or quotes.
             messages=[{"role": "user", "content": [{"text": user_message}]}],
             system=[{"text": rewrite_system_prompt}],
             inferenceConfig={
-                "maxTokens": 50,  
+                "maxTokens": 60,  
                 "temperature": 0.0
             }
         )
