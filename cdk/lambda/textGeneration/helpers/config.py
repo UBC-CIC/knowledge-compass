@@ -590,6 +590,16 @@ OUTPUT_FORMAT_DETECTIVE = """
 1. One warm sentence acknowledging what the parent shared.
 2. One focused question — no more than one.
 Do NOT list options. Do NOT suggest actions or resources. End with a question mark.
+
+After your visible response, you MUST output a hidden <detective_state> tag.
+This is never shown to the user — it tracks your assessment of the family's journey.
+<detective_state>
+journey: J1 or J2 or UNCLEAR
+situation: [best-guess letter A-O, or UNKNOWN if not yet clear]
+confidence: LOW or MEDIUM or HIGH
+info_gathered: [comma-separated list of what you know so far]
+info_needed: [the single most important thing still unknown]
+</detective_state>
 """.strip()
 
 OUTPUT_FORMAT_SUGGESTION = """
@@ -597,6 +607,18 @@ You MUST wrap your response inside <answer> tags.
 After your answer, you MUST list the integer indices of the sources you actively used
 inside <cited_indices> tags as a JSON array (e.g. <cited_indices>[1, 3]</cited_indices>).
 If no sources were used, output <cited_indices>[]</cited_indices>.
+
+After cited_indices, you MUST output a <journey_state> block — a brief structured
+summary of where this family is in their journey. This is stored internally and
+fed back to you on future turns so you maintain context. Keep it concise (3-5 lines).
+Format:
+<journey_state>
+journey: J1 or J2
+situation: [letter A-O from the situation clusters]
+stage: [brief description of where the family is right now]
+actions_taken: [comma-separated list of what the family has already done]
+next_need: [the single most likely next thing the family will need help with]
+</journey_state>
 
 Within your <answer>:
 - Start with a direct 2-4 sentence summary of where the family is and their next step.
@@ -626,6 +648,13 @@ Once you send that, wait 5–7 business days. If you don't hear back, we can tal
 **Did the school put any of this in writing?**
 </answer>
 <cited_indices>[1, 2]</cited_indices>
+<journey_state>
+journey: J1
+situation: D
+stage: Parent has requested decision in writing, awaiting school response
+actions_taken: identified situation, understood reason, sent written request
+next_need: follow-up guidance if school does not respond
+</journey_state>
 """.strip()
 
 WELCOME_MESSAGE = """

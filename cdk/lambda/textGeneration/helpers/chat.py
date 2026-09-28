@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
-    get_exchange_count, get_session_title, update_session_title
+    get_exchange_count, get_session_title, update_session_title, save_journey_state
 )
 from helpers.logic import get_current_prompt
 from helpers.bedrock import format_context_for_prompt
@@ -411,8 +411,10 @@ def get_response(
                     chunk = delta["text"]
                     full_response_text += chunk
 
-                    # Detective replies are plain text. Suggestion replies wrap
-                    # the visible answer in <answer> tags — don't stream those tags.
+                    # Detective replies are plain text followed by a hidden
+                    # <detective_state> tag. Suggestion replies wrap the visible
+                    # answer in <answer> tags. In both cases, stop streaming
+                    # before hidden metadata tags.
                     if expect_answer_tags:
                         if "<answer>" in full_response_text:
                             answer_started = True
@@ -424,9 +426,9 @@ def get_response(
                     else:
                         target_text = full_response_text
                         
-                    # 2. Stop extracting if we hit a closing tag
+                    # 2. Stop extracting if we hit a closing tag or hidden metadata tag
                     stop_found = False
-                    for stop_tag in ["</answer>", "<cited"]:
+                    for stop_tag in ["</answer>", "<cited", "<detective_state"]:
                         stop_idx = target_text.find(stop_tag)
                         if stop_idx != -1:
                             target_text = target_text[:stop_idx]
@@ -435,7 +437,7 @@ def get_response(
                     # 3. Prevent partial tags at the end of the chunk from leaking
                     if not stop_found:
                         held_back = 0
-                        for stop_tag in ["</answer>", "<cited_indices>", "</cited_indices>", "<cited"]:
+                        for stop_tag in ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]:
                             for i in range(1, len(stop_tag)):
                                 if target_text.endswith(stop_tag[:i]):
                                     held_back = max(held_back, i)
@@ -456,7 +458,8 @@ def get_response(
         if final_answer_match:
             answer_text = final_answer_match.group(1).strip()
         else:
-            answer_text = full_response_text.split('<cited_indices>')[0].strip()
+            # Detective phase: strip any trailing <detective_state> tag from saved text
+            answer_text = re.split(r'<(?:cited_indices|detective_state)', full_response_text)[0].strip()
             
         # Parse cited_indices
         indices_match = re.search(r'<cited_indices>\s*\[(.*?)\]\s*</cited_indices>', full_response_text, re.DOTALL)
@@ -504,6 +507,37 @@ def get_response(
         used_sources,
         warning_text
     )
+
+    # Extract and persist journey state for multi-turn context.
+    # Suggestion phase: <journey_state> after <cited_indices>.
+    # Detective phase: <detective_state> after the visible response.
+    # Both are never streamed to the user.
+    if full_response_text:
+        try:
+            state_text = None
+            if phase_name == "SUGGESTION":
+                state_match = re.search(
+                    r'<journey_state>(.*?)</journey_state>',
+                    full_response_text,
+                    re.DOTALL
+                )
+                if state_match:
+                    state_text = state_match.group(1).strip()
+            elif phase_name == "DETECTIVE":
+                state_match = re.search(
+                    r'<detective_state>(.*?)</detective_state>',
+                    full_response_text,
+                    re.DOTALL
+                )
+                if state_match:
+                    state_text = state_match.group(1).strip()
+
+            if state_text:
+                save_journey_state(db_connection, chat_session_id, state_text)
+                db_connection.commit()
+        except Exception as e:
+            db_connection.rollback()
+            logger.warning(f"Failed to save journey state: {e}")
 
     generated_title = None
     if final_answer_text and not final_answer_text.startswith("I encountered an error"):

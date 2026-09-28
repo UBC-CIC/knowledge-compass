@@ -1,7 +1,7 @@
 
 from typing import Tuple
 import helpers.config as config
-from helpers.crud import get_exchange_count
+from helpers.crud import get_exchange_count, get_journey_state
 
 
 def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, str, str, str]:
@@ -56,8 +56,20 @@ def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, s
         retrieval_count = 15
         model_arn = config.SONNET_ARN
 
+        # Retrieve any stored journey state from previous turns (detective or suggestion).
+        journey_state = get_journey_state(chat_session_id, db_connection)
+        state_block = ""
+        if journey_state:
+            state_block = (
+                f"\n\n<previous_journey_state>\n"
+                f"{journey_state}\n"
+                f"</previous_journey_state>\n\n"
+                f"Use this context to understand where the family is in their journey. "
+                f"Do not repeat completed steps. Build on what has already been discussed."
+            )
+
         phase_instructions = (
-            f"<phase>\n{config.SUGGESTION_PHASE_PROMPT}\n</phase>\n\n"
+            f"<phase>\n{config.SUGGESTION_PHASE_PROMPT}{state_block}\n</phase>\n\n"
             f"<output_format>\n{config.OUTPUT_FORMAT_SUGGESTION}\n</output_format>"
         )
 

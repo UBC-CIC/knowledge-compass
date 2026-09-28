@@ -193,3 +193,40 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
         logger.error(f"fetch_system_config failed: {e}")
         # Return what we have (empty or partial)
     return config
+
+
+def get_journey_state(db_connection, chat_session_id: str) -> Optional[str]:
+    """
+    Retrieve the journey_state string stored in chat_sessions.metadata.
+    Returns None if no state has been saved yet.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                "SELECT metadata->>'journey_state' FROM chat_sessions WHERE id = %s",
+                (chat_session_id,)
+            )
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
+    except Exception as e:
+        logger.error(f"get_journey_state failed: {e}")
+        return None
+
+
+def save_journey_state(db_connection, chat_session_id: str, journey_state: str) -> None:
+    """
+    Persist the journey_state string into chat_sessions.metadata.
+    Merges with any existing metadata using jsonb concatenation.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE chat_sessions
+                   SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('journey_state', %s)
+                 WHERE id = %s
+                """,
+                (journey_state, chat_session_id)
+            )
+    except Exception as e:
+        logger.error(f"save_journey_state failed: {e}")
