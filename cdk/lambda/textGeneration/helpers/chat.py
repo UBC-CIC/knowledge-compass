@@ -390,7 +390,6 @@ def get_response(
     if model_arn == config.SONNET_ARN:
         request_payload["additionalModelRequestFields"] = {
             "thinking" : {"type": "disabled"},
-            "output_config": {"effort": "low"}
         }
 
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
