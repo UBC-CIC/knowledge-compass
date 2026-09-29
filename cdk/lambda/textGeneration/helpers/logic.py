@@ -57,7 +57,7 @@ def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, s
         model_arn = config.SONNET_ARN
 
         # Retrieve any stored journey state from previous turns (detective or suggestion).
-        journey_state = get_journey_state(chat_session_id, db_connection)
+        journey_state = get_journey_state(db_connection, chat_session_id)
         state_block = ""
         if journey_state:
             state_block = (

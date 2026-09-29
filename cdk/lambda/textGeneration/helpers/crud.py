@@ -27,21 +27,23 @@ def fetch_recent_messages(
     chat_session_id: str,
 ) -> List[Dict[str, Any]]:    
     """
-    Fetch recent messages for a chat session (oldest->newest).
+    Fetch the most recent messages for a chat session, returned oldest->newest.
+
+    The inner query selects the latest N messages (DESC + LIMIT); the outer
+    query restores chronological order for the Bedrock conversation.
     """
     with db_connection.cursor() as cur:
-        # Note: Added 'sources' (LIMIT 20 is small enough to include full json) or keep it lightweight
-        # Previous implementation kept it lightweight. But chat.py retrieves sources?
-        # Actually fetch_recent_messages is used for context. Context needs content only?
-        # Check chat.py usage. It uses msg['sender'] and msg['content'].
-        # So current query is fine.
         cur.execute(
             """
             SELECT sender, content, created_at
-            FROM chat_messages
-            WHERE chat_session_id = %s
+            FROM (
+                SELECT sender, content, created_at
+                FROM chat_messages
+                WHERE chat_session_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            ) AS recent
             ORDER BY created_at ASC
-            LIMIT %s
             """,
             (chat_session_id, 20)
         )
@@ -54,6 +56,12 @@ def fetch_recent_messages(
             "content": content,
             "created_at": created_at.isoformat() if created_at else None
         })
+
+    # Bedrock Converse requires the conversation to start with a user turn.
+    # A sliding window can begin on an AI message, so drop any leading ones.
+    while messages and messages[0]["sender"] != "user":
+        messages.pop(0)
+
     return messages
 
 def ensure_user_exists(db_connection, user_id: str) -> None:
