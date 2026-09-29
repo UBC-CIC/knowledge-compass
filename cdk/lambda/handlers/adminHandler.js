@@ -28,6 +28,7 @@ const SYSTEM_MESSAGE_TYPES = new Set([
   "suggestion_phase_prompt",
   "output_format_detective",
   "output_format_suggestion",
+  "output_format_partial",
   "welcome_message",
   "disclaimer",
 ]);
@@ -44,6 +45,7 @@ const DEFAULT_CHARACTER_LIMITS = {
   suggestion_phase_prompt: 6000,
   output_format_detective: 1000,
   output_format_suggestion: 3500,
+  output_format_partial: 3500,
   welcome_message: 2000,
   disclaimer: 700,
 };
@@ -1016,6 +1018,8 @@ exports.handler = async (event) => {
             latest.id,
             latest.max_messages_per_day,
             latest.min_messages_before_suggest,
+            latest.routing_mode,
+            latest.min_exchanges_before_answer,
             latest.max_characters_per_user_message,
             latest.max_characters_per_ai_message,
             latest.temperature,
@@ -1034,6 +1038,8 @@ exports.handler = async (event) => {
         const fallback = {
           max_messages_per_day: 45,
           min_messages_before_suggest: 4,
+          routing_mode: "fixed",
+          min_exchanges_before_answer: 0,
           max_characters_per_user_message: 2000,
           max_characters_per_ai_message: 5000,
           temperature: 0.2,
@@ -1171,6 +1177,8 @@ exports.handler = async (event) => {
         const allowed = [
           "max_messages_per_day",
           "min_messages_before_suggest",
+          "routing_mode",
+          "min_exchanges_before_answer",
           "max_characters_per_user_message",
           "max_characters_per_ai_message",
           "temperature",
@@ -1222,6 +1230,30 @@ exports.handler = async (event) => {
           response.statusCode = 400;
           response.body = JSON.stringify({
             error: "min_messages_before_suggest must be an integer between 0 and 500",
+          });
+          break;
+        }
+
+        if (
+          patch.routing_mode !== undefined &&
+          !["fixed", "dynamic"].includes(patch.routing_mode)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "routing_mode must be 'fixed' or 'dynamic'",
+          });
+          break;
+        }
+
+        if (
+          patch.min_exchanges_before_answer !== undefined &&
+          (!isFiniteInt(patch.min_exchanges_before_answer) ||
+            patch.min_exchanges_before_answer < 0 ||
+            patch.min_exchanges_before_answer > 500)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "min_exchanges_before_answer must be an integer between 0 and 500",
           });
           break;
         }
@@ -1308,6 +1340,33 @@ exports.handler = async (event) => {
 
         const updatedByUserId = adminRows[0].id;
 
+        // The dynamic-routing floor may not exceed the ceiling. Compare against
+        // stored values for whichever side is not in this patch.
+        if (
+          patch.min_exchanges_before_answer !== undefined ||
+          patch.min_messages_before_suggest !== undefined
+        ) {
+          const currentRows = await sqlConnection`
+            SELECT min_messages_before_suggest, min_exchanges_before_answer
+            FROM system_settings
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+          `;
+          const current = currentRows[0] ?? {};
+          const floor =
+            patch.min_exchanges_before_answer ?? current.min_exchanges_before_answer ?? 0;
+          const ceiling =
+            patch.min_messages_before_suggest ?? current.min_messages_before_suggest ?? 4;
+          if (floor > ceiling) {
+            response.statusCode = 400;
+            response.body = JSON.stringify({
+              error:
+                "min_exchanges_before_answer must be less than or equal to min_messages_before_suggest",
+            });
+            break;
+          }
+        }
+
         // Single UPDATE of the latest row (no â€œensure row existsâ€ step)
         const updated = await sqlConnection`
           WITH latest AS (
@@ -1320,6 +1379,8 @@ exports.handler = async (event) => {
           SET
             max_messages_per_day = COALESCE(${patch.max_messages_per_day}, s.max_messages_per_day),
             min_messages_before_suggest = COALESCE(${patch.min_messages_before_suggest}, s.min_messages_before_suggest),
+            routing_mode = COALESCE(${patch.routing_mode ?? null}::varchar, s.routing_mode),
+            min_exchanges_before_answer = COALESCE(${patch.min_exchanges_before_answer ?? null}::int, s.min_exchanges_before_answer),
             max_characters_per_user_message = COALESCE(${patch.max_characters_per_user_message}, s.max_characters_per_user_message),
             max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message}, s.max_characters_per_ai_message),
             temperature = COALESCE(${patch.temperature}, s.temperature),
@@ -1335,6 +1396,8 @@ exports.handler = async (event) => {
             s.id,
             s.max_messages_per_day,
             s.min_messages_before_suggest,
+            s.routing_mode,
+            s.min_exchanges_before_answer,
             s.max_characters_per_user_message,
             s.max_characters_per_ai_message,
             s.temperature,

@@ -97,6 +97,20 @@ export const DEFAULT_SYSTEM_MESSAGES: Record<SystemMessageType, SystemMessageVer
       created_at: undefined,
     },
   ],
+  // Seeded by migration 022 (combined answer-and-ask turns).
+  output_format_partial: [
+    {
+      id: "seed-output_format_partial-v1",
+      type: "output_format_partial",
+      content: "This is a PARTIAL guidance turn: the family's situation is mostly clear, but one\nimportant detail is still missing. Give a short, useful start and ask for that detail.\n\nYou MUST wrap your response inside <answer> tags.\nAfter your answer, you MUST list the integer indices of the sources you actively used\ninside <cited_indices> tags as a JSON array (e.g. <cited_indices>[1, 3]</cited_indices>).\nIf no sources were used, output <cited_indices>[]</cited_indices>.\n\nAfter cited_indices, you MUST output a <journey_state> block \u2014 a brief structured\nsummary of where this family is in their journey. Keep it concise (3-5 lines).\nFormat:\n<journey_state>\njourney: J1 or J2\nsituation: [letter A-O from the situation clusters]\nstage: [brief description of where the family is right now]\nactions_taken: [comma-separated list of what the family has already done]\nnext_need: [the single most likely next thing the family will need help with]\n</journey_state>\n\nWithin your <answer> (keep it short, about 80-150 words):\n- One or two sentences acknowledging what the family shared and naming the situation\n  in plain language.\n- 1-2 low-risk first steps that help whatever the missing detail turns out to be\n  (for example, keeping dated notes of each early pickup, or asking the school to share\n  its reasons in writing). Use bold action titles; add short italic sample wording only\n  where it helps.\n- Do NOT give the full plan, escalation options, or anything that depends on the\n  missing detail.\n- When a retrieved source directly supports a step, include a markdown link: [Title](URL).\n- End with exactly ONE clarifying question in bold, aimed at the missing detail\n  (see the <focus> block if provided).\n- Do NOT add a separate \"Sources\" heading \u2014 the system lists sources below the answer.\n\nExample format:\n<answer>\nIt sounds like your child is being sent home before the end of the school day, which is often called partial day attendance. Many families go through this, and there are good first steps you can take right away.\n\n**Keep a simple record.** Note the date, the time you were called, and the reason given each time.\n\n**Ask for the reason in writing.** *\"Could you share the reasons for today's early pickup in writing?\"*\n\n**Has the school said how long they expect this to continue?**\n</answer>\n<cited_indices>[]</cited_indices>\n<journey_state>\njourney: J1\nsituation: A\nstage: Child is being sent home early; duration and school's reasons not yet known\nactions_taken: described the situation\nnext_need: understand the school's reason and expected duration\n</journey_state>",
+      character_limit: 3500,
+      version: 1,
+      is_active: true,
+      affects_text_generation: true,
+      created_by_email: null,
+      created_at: undefined,
+    },
+  ],
   welcome_message: [
     {
       id: "seed-welcome_message-v2",

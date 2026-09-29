@@ -967,6 +967,8 @@ paths:
                   id: { type: string }
                   max_messages_per_day: { type: integer }
                   min_messages_before_suggest: { type: integer }
+                  routing_mode: { type: string, enum: [fixed, dynamic] }
+                  min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
@@ -1000,7 +1002,16 @@ paths:
               type: object
               properties:
                 max_messages_per_day: { type: integer }
-                min_messages_before_suggest: { type: integer }
+                min_messages_before_suggest:
+                  type: integer
+                  description: Fixed mode - exchange that switches to guidance. Dynamic mode - guidance by this exchange at the latest.
+                routing_mode:
+                  type: string
+                  enum: [fixed, dynamic]
+                  description: fixed uses the exchange count only; dynamic lets the per-turn router decide.
+                min_exchanges_before_answer:
+                  type: integer
+                  description: Dynamic mode floor (questions before guidance, urgent turns bypass it). Must be <= min_messages_before_suggest.
                 max_characters_per_user_message: { type: integer }
                 max_characters_per_ai_message: { type: integer }
                 temperature: { type: number }
@@ -1020,6 +1031,8 @@ paths:
                   id: { type: string }
                   max_messages_per_day: { type: integer }
                   min_messages_before_suggest: { type: integer }
+                  routing_mode: { type: string, enum: [fixed, dynamic] }
+                  min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
@@ -1087,6 +1100,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       content:
@@ -1187,6 +1201,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
       requestBody:
@@ -1296,6 +1311,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
         - name: version_id
@@ -1353,6 +1369,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       version:
@@ -1407,6 +1424,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
         - name: version_id
@@ -1476,6 +1494,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       content:

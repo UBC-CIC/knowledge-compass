@@ -5,9 +5,11 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
-    get_exchange_count, get_session_title, update_session_title, save_journey_state
+    get_exchange_count, get_session_title, update_session_title, save_journey_state,
+    get_session_context, save_routing_state
 )
 from helpers.logic import get_current_prompt
+from helpers.routing import RoutingState, decide_phase, route_turn
 from helpers.bedrock import format_context_for_prompt
 from helpers.retrieval import retrieve_from_pgvector
 from helpers.intervention import assess_response
@@ -19,84 +21,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 logger.info(f"boto3 version: {boto3.__version__}")
-
-def _rewrite_query_for_retrieval(
-    raw_query: str,
-    chat_history: List[Dict[str, Any]],
-    llm_region: str,
-    haiku_model_arn: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-) -> str:
-    """
-    Uses a fast, low-cost LLM call to rewrite a conversational user query into a
-    keyword-rich search query optimized for vector database retrieval.
-    Falls back to the raw query on any error.
-    """
-    # Build a condensed history string (last few exchanges only)
-    history_lines = []
-    for msg in chat_history[-10:]:
-        role = "User" if msg["sender"] == "user" else "Assistant"
-        history_lines.append(f"{role}: {msg['content']}")
-    history_block = "\n".join(history_lines) if history_lines else "(no prior conversation)"
-
-    rewrite_system_prompt = """
-<instructions>
-You are a search query optimizer for an inclusive-education knowledge base for families in Canada.
-
-Given the conversation history and the user's latest message, generate a short, keyword-rich search query (8-20 words) to find relevant documents.
-
-Use the conversation history to detect the family's journey and add topic-specific keywords:
-
-JOURNEY 1 — Current exclusion or reduced schedule:
-  involuntary partial day attendance, reduced school schedule, sent home early,
-  field trip exclusion, school pickup calls, requesting decisions in writing,
-  documentation and evidence gathering, school meeting preparation,
-  support plan implementation, IEP accommodation plan, behaviour plan,
-  school non-response follow-up, denial pushback, escalation appeal,
-  duty to accommodate, undue hardship, CRPD Article 24, inclusive education rights,
-  personal care support at school, medication administration school,
-  Educational Assistant EA support, advocacy organizations support contacts
-
-JOURNEY 2 — Future planning, transitions, and supports:
-  course selection graduation credits, prerequisites educational pathways,
-  transition planning elementary middle high school post-secondary,
-  work experience employment preparation, quality education meaningful learning,
-  alternative pathways non-credit education, teacher expectations accountability,
-  extracurricular inclusion clubs sports field trips,
-  support effectiveness scaffolding independence, EA support quality monitoring,
-  belonging friendships peer relationships, transition roadblocks challenges
-
-Combine the parent's specific concern with the relevant topic keywords.
-Output ONLY the search query — no explanations, preambles, or quotes.
-</instructions>
-"""
-
-    user_message = f"""
-<conversation_history>
-{history_block}
-</conversation_history>
-
-<latest_user_message>
-{raw_query}
-</latest_user_message>
-"""
-
-    try:
-        bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
-        response = bedrock_runtime.converse(
-            modelId=haiku_model_arn,
-            messages=[{"role": "user", "content": [{"text": user_message}]}],
-            system=[{"text": rewrite_system_prompt}],
-            inferenceConfig={
-                "maxTokens": 60,  
-                "temperature": 0.0
-            }
-        )
-        rewritten = response["output"]["message"]["content"][0]["text"].strip()
-        logger.info(f"Query rewrite: '{raw_query}' -> '{rewritten}'")
-        return rewritten if rewritten else raw_query
-    except Exception as e:
-        logger.warning(f"Query rewrite failed, using raw query: {e}")
-        return raw_query
 
 def _generate_session_title(
     query: str,
@@ -154,10 +78,15 @@ def _prepare_conversation(
     user_id: Optional[str],
     db_connection,
     save_user_message: bool = True
-) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, str, List[Dict[str, Any]], str, str, Dict[str, Any]]:
     """
-    Handles validation, history fetching, user msg saving, retrieval, and prompt construction.
-    Returns: (bedrock_messages, full_system_prompt, sources, phase_name)
+    Handles validation, history fetching, user msg saving, routing, retrieval, and
+    prompt construction.
+    Returns: (bedrock_messages, static_system_prompt, dynamic_prompt, sources,
+              phase_name, model_arn, routing_ctx)
+      - phase_name is the public phase ("DETECTIVE" | "SUGGESTION")
+      - routing_ctx carries the internal phase, route and prior routing state so
+        the caller can persist the next routing state after generation.
     """
     # 1. Validation
     if not query or not query.strip():
@@ -185,20 +114,48 @@ def _prepare_conversation(
         logger.error(f"DB Error: {e}")
         raise
 
-    # 4. Determine Phase & Prompt
-    static_system_prompt, num_retrieval_results, phase_name, phase_instructions, model_arn= get_current_prompt(
-        chat_session_id,
-        db_connection
+    # 4. Load session context. The user message is already saved, so the
+    #    count equals the number of completed exchanges before this message.
+    exchange_count = get_exchange_count(chat_session_id, db_connection)
+    journey_state, stored_routing = get_session_context(db_connection, chat_session_id)
+    routing_state = RoutingState.from_metadata(
+        stored_routing, exchange_count, config.MIN_EXCHANGES_BEFORE_SUGGEST
     )
 
-    # 5. Rewrite query for better retrieval
-    search_query = _rewrite_query_for_retrieval(
+    # 5. Route the turn: retrieval query + routing signals in one Haiku call.
+    #    None on failure -> raw query and the count-based phase rule.
+    route = route_turn(
         raw_query=query,
         chat_history=raw_history,
-        llm_region=llm_region
+        previous_state=journey_state,
+        llm_region=llm_region,
+        model_id=config.HAIKU_ARN,
+    )
+    search_query = route.search_query if route else query
+
+    phase = decide_phase(
+        route=route,
+        exchange_count=exchange_count,
+        state=routing_state,
+        routing_mode=config.ROUTING_MODE,
+        floor=config.MIN_EXCHANGES_BEFORE_ANSWER,
+        ceiling=config.MIN_EXCHANGES_BEFORE_SUGGEST,
+    )
+    logger.info(
+        "Routing: mode=%s phase=%s exchange_count=%d router_ok=%s",
+        config.ROUTING_MODE, phase, exchange_count, route is not None,
     )
 
-    # 6. RAG Retrieval (using rewritten query)
+    # 6. Build the phase prompt.
+    static_system_prompt, num_retrieval_results, phase_name, phase_instructions, model_arn = get_current_prompt(
+        phase=phase,
+        exchange_count=exchange_count,
+        journey_state=journey_state,
+        route=route,
+    )
+    routing_ctx = {"phase": phase, "route": route, "state": routing_state}
+
+    # 7. RAG Retrieval (using the routed query)
     sources = retrieve_from_pgvector(
         search_query,
         db_connection,
@@ -206,10 +163,10 @@ def _prepare_conversation(
         num_results=num_retrieval_results,
     )
 
-    # 7. Build Context
+    # 8. Build Context
     context_block = format_context_for_prompt(sources)
     
-    # 8. Construct Final System Prompt.
+    # 9. Construct Final System Prompt.
     # The phase block (from logic.get_current_prompt) already carries the
     # phase-appropriate <output_format> — including the <answer>/<cited_indices>
     # contract for the suggestion phase — so chat.py only appends retrieved context.
@@ -220,7 +177,7 @@ def _prepare_conversation(
 </retrieved_context>
 """
 
-    # 9. Build Messages
+    # 10. Build Messages
     bedrock_messages = []
     for msg in raw_history:
         role = "user" if msg["sender"] == "user" else "assistant"
@@ -235,7 +192,7 @@ def _prepare_conversation(
         "content": [{"text": query}]
     })
 
-    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn
+    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx
 
 def _save_ai_response(
     db_connection,
@@ -337,7 +294,7 @@ def get_response(
             if guardrail_result['action'] == ACTION_ANONYMIZED:
                 query = guardrail_result['text']
 
-        bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn = _prepare_conversation(
+        bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx = _prepare_conversation(
             query,
             region,
             llm_region,
@@ -537,6 +494,21 @@ def get_response(
         except Exception as e:
             db_connection.rollback()
             logger.warning(f"Failed to save journey state: {e}")
+
+    # Advance routing state only after a successful reply, so a failed
+    # generation does not count as a question asked or guidance given.
+    if answer_text and not answer_text.startswith("I encountered an error"):
+        try:
+            next_state = routing_ctx["state"].advance(routing_ctx["phase"])
+            save_routing_state(
+                db_connection,
+                chat_session_id,
+                next_state.to_metadata(routing_ctx["route"]),
+            )
+            db_connection.commit()
+        except Exception as e:
+            db_connection.rollback()
+            logger.warning(f"Failed to save routing state: {e}")
 
     generated_title = None
     if final_answer_text and not final_answer_text.startswith("I encountered an error"):

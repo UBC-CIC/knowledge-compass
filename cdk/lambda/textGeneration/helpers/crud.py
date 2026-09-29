@@ -2,7 +2,7 @@
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -166,37 +166,41 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
             for row in rows:
                 config['messages'][row[0]] = row[1]
 
-        # Fetch System Settings
+        # Fetch System Settings. to_jsonb(row) keeps this query valid whether or
+        # not newer columns (e.g. routing_mode from migration 022) exist yet.
         with db_connection.cursor() as cur:
             cur.execute("""
-                SELECT max_messages_per_day,
-                       min_messages_before_suggest,
-                       max_characters_per_user_message,
-                       max_characters_per_ai_message,
-                       temperature,
-                       top_p,
-                       support_score_threshold,
-                       scope_alignment_score_threshold,
-                       grounded_threshold,
-                       partially_grounded_threshold
-                FROM system_settings
-                ORDER BY updated_at DESC
+                SELECT to_jsonb(s)
+                FROM system_settings s
+                ORDER BY s.updated_at DESC
                 LIMIT 1
             """)
             row = cur.fetchone()
-            if row:
-                config['settings'] = {
-                    'max_messages_per_day': row[0],
-                    'min_messages_before_suggest': row[1],
-                    'max_characters_per_user_message': row[2],
-                    'max_characters_per_ai_message': row[3],
-                    'temperature': float(row[4]) if row[4] is not None else 0.7,
-                    'top_p': float(row[5]) if row[5] is not None else 0.9,
-                    'support_score_threshold': float(row[6]) if row[6] is not None else 0.25,
-                    'scope_alignment_score_threshold': float(row[7]) if row[7] is not None else 0.25,
-                    'grounded_threshold': float(row[8]) if row[8] is not None else 0.75,
-                    'partially_grounded_threshold': float(row[9]) if row[9] is not None else 0.50,
+            if row and isinstance(row[0], dict):
+                s = row[0]
+
+                def _float(key, default):
+                    value = s.get(key)
+                    return float(value) if value is not None else default
+
+                settings = {
+                    'max_messages_per_day': s.get('max_messages_per_day'),
+                    'min_messages_before_suggest': s.get('min_messages_before_suggest'),
+                    'max_characters_per_user_message': s.get('max_characters_per_user_message'),
+                    'max_characters_per_ai_message': s.get('max_characters_per_ai_message'),
+                    'temperature': _float('temperature', 0.7),
+                    'top_p': _float('top_p', 0.9),
+                    'support_score_threshold': _float('support_score_threshold', 0.25),
+                    'scope_alignment_score_threshold': _float('scope_alignment_score_threshold', 0.25),
+                    'grounded_threshold': _float('grounded_threshold', 0.75),
+                    'partially_grounded_threshold': _float('partially_grounded_threshold', 0.50),
                 }
+                if s.get('routing_mode') in ('fixed', 'dynamic'):
+                    settings['routing_mode'] = s['routing_mode']
+                if isinstance(s.get('min_exchanges_before_answer'), int):
+                    settings['min_exchanges_before_answer'] = s['min_exchanges_before_answer']
+                # Drop NULL integer columns so config.py keeps its defaults.
+                config['settings'] = {k: v for k, v in settings.items() if v is not None}
     except Exception as e:
         logger.error(f"fetch_system_config failed: {e}")
         # Return what we have (empty or partial)
@@ -238,3 +242,44 @@ def save_journey_state(db_connection, chat_session_id: str, journey_state: str) 
             )
     except Exception as e:
         logger.error(f"save_journey_state failed: {e}")
+
+
+def get_session_context(db_connection, chat_session_id: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Retrieve (journey_state, routing_state) from chat_sessions.metadata in one query.
+    Either value is None if it has not been saved yet.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                "SELECT metadata->>'journey_state', metadata->'routing' FROM chat_sessions WHERE id = %s",
+                (chat_session_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            journey_state = row[0] if row[0] else None
+            routing = row[1] if isinstance(row[1], dict) else None
+            return journey_state, routing
+    except Exception as e:
+        logger.error(f"get_session_context failed: {e}")
+        return None, None
+
+
+def save_routing_state(db_connection, chat_session_id: str, routing_state: Dict[str, Any]) -> None:
+    """
+    Persist per-session routing state (enum-only fields) into chat_sessions.metadata.
+    Merges with any existing metadata using jsonb concatenation.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE chat_sessions
+                   SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('routing', %s::jsonb)
+                 WHERE id = %s
+                """,
+                (json.dumps(routing_state), chat_session_id)
+            )
+    except Exception as e:
+        logger.error(f"save_routing_state failed: {e}")

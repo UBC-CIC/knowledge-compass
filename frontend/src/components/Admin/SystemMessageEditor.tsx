@@ -35,6 +35,7 @@ export type SystemMessageType =
   | "suggestion_phase_prompt"
   | "output_format_detective"
   | "output_format_suggestion"
+  | "output_format_partial"
   | "welcome_message"
   | "disclaimer";
 
@@ -46,6 +47,7 @@ export type MessagePlacement =
   | "phase_suggestion"
   | "output_format_detective"
   | "output_format_suggestion"
+  | "output_format_partial"
   | "ui_only";
 
 export type SystemMessageVersion = {
@@ -115,7 +117,10 @@ const STACK_ROWS: Array<{
       selectedPhase === "DETECTIVE" ? "Detective Output Format" : "Suggestion Output Format",
     isActive: (placement, selectedPhase) =>
       (placement === "output_format_detective" && selectedPhase === "DETECTIVE") ||
-      (placement === "output_format_suggestion" && selectedPhase === "SUGGESTION"),
+      // Partial turns use the suggestion prompt with this format in place of
+      // the suggestion output format.
+      ((placement === "output_format_suggestion" || placement === "output_format_partial") &&
+        selectedPhase === "SUGGESTION"),
   },
   {
     key: "retrieved_context",
@@ -129,6 +134,7 @@ const PHASE_ONLY_PLACEMENTS: Partial<Record<MessagePlacement, PromptPhase>> = {
   output_format_detective: "DETECTIVE",
   phase_suggestion: "SUGGESTION",
   output_format_suggestion: "SUGGESTION",
+  output_format_partial: "SUGGESTION",
 };
 
 function formatDate(iso?: string) {

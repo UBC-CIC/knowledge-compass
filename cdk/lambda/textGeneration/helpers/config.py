@@ -23,7 +23,9 @@ GUARDRAIL_VERSION = os.getenv('GUARDRAIL_VERSION')
 
 # Chat Configuration
 MAX_MESSAGES_PER_DAY = 45
-MIN_EXCHANGES_BEFORE_SUGGEST = 4
+MIN_EXCHANGES_BEFORE_SUGGEST = 4          # fixed mode: switch point; dynamic mode: ceiling
+MIN_EXCHANGES_BEFORE_ANSWER = 0           # dynamic mode: floor (urgent turns bypass it)
+ROUTING_MODE = "fixed"                    # "fixed" (exchange count only) | "dynamic" (per-turn router)
 MAX_CHARACTERS_PER_USER_MESSAGE = 2000
 MAX_CHARACTERS_PER_AI_MESSAGE = 5000
 
@@ -99,7 +101,7 @@ Follow Inclusion Canada's preferred language: use person-first disability langua
 """.strip()
 
 DETECTIVE_PHASE_PROMPT = """
-CURRENT STATUS: Exchange {exchange_count} of at least {min_exchanges}.
+CURRENT STATUS: Exchange {exchange_count}.
 {readiness_note}
 
 Ask exactly ONE warm, focused question. Acknowledge what the parent said first.
@@ -142,25 +144,27 @@ For Journey 2 (ask in this order if unknown):
      learning quality, extracurricular inclusion, teacher expectations?
   3. What have they done so far — meetings, discussions with school, nothing yet?
 
-EARLY CLARITY RULE:
-If the parent's first message clearly describes a specific situation with enough
-detail to provide guidance (e.g., "The school just called and told me to pick up
-my child — what should I do?"), you MAY acknowledge and provide immediate guidance
-even if {may_suggest} is False, but ONLY when the situation and need are unambiguous.
-Otherwise, follow the exchange rules strictly.
-
 STRICT RULES:
 - ONE question only per turn. Never list multiple questions.
-- Do NOT suggest resources, next steps, or actions yet — unless {may_suggest} is True.
-- If {may_suggest} is True AND the situation is already clear, you MAY provide guidance.
+- Do NOT suggest resources, next steps, or actions on this turn. The system moves to
+  guidance automatically once the family's situation is clear.
+- If a <focus> block is provided, aim your question at that missing information.
 - Never assume gender, disability type, or province without the parent mentioning it.
 - Never assume the family requested the reduced schedule.
 """.strip()
 
 SUGGESTION_PHASE_PROMPT = """
 Review the full conversation history. Identify which situation cluster best fits,
-then follow the matching response pattern. If the conversation spans multiple
-clusters, address the most pressing need first and note the other as a follow-up.
+then follow the matching response pattern. A <routing_hint> block may suggest a
+primary and secondary cluster; treat it as a hint, the conversation is authoritative.
+
+If the conversation spans multiple clusters, address the most pressing need first
+and note the other briefly as a follow-up. Priority order:
+  1. Urgent, happening now (C)
+  2. Unresolved school action: no response, denial, pushback, escalation (G, H)
+  3. Documentation, meetings, support plan implementation (D, E, F)
+  4. Understanding the situation, the school's reason, rights and concepts (A, B, I)
+  5. Support networks and future planning (J, K, L, M, N, O)
 
 ===================================================================
 JOURNEY 1 — INVOLUNTARY PARTIAL DAY ATTENDANCE
@@ -659,6 +663,63 @@ next_need: follow-up guidance if school does not respond
 </journey_state>
 """.strip()
 
+# Combined answer-and-ask turn: the situation is mostly clear but one important
+# detail is missing. Same parse contract as the suggestion format (<answer>,
+# <cited_indices>, <journey_state>). Keep in sync with migration 022.
+OUTPUT_FORMAT_PARTIAL = """
+This is a PARTIAL guidance turn: the family's situation is mostly clear, but one
+important detail is still missing. Give a short, useful start and ask for that detail.
+
+You MUST wrap your response inside <answer> tags.
+After your answer, you MUST list the integer indices of the sources you actively used
+inside <cited_indices> tags as a JSON array (e.g. <cited_indices>[1, 3]</cited_indices>).
+If no sources were used, output <cited_indices>[]</cited_indices>.
+
+After cited_indices, you MUST output a <journey_state> block — a brief structured
+summary of where this family is in their journey. Keep it concise (3-5 lines).
+Format:
+<journey_state>
+journey: J1 or J2
+situation: [letter A-O from the situation clusters]
+stage: [brief description of where the family is right now]
+actions_taken: [comma-separated list of what the family has already done]
+next_need: [the single most likely next thing the family will need help with]
+</journey_state>
+
+Within your <answer> (keep it short, about 80-150 words):
+- One or two sentences acknowledging what the family shared and naming the situation
+  in plain language.
+- 1-2 low-risk first steps that help whatever the missing detail turns out to be
+  (for example, keeping dated notes of each early pickup, or asking the school to share
+  its reasons in writing). Use bold action titles; add short italic sample wording only
+  where it helps.
+- Do NOT give the full plan, escalation options, or anything that depends on the
+  missing detail.
+- When a retrieved source directly supports a step, include a markdown link: [Title](URL).
+- End with exactly ONE clarifying question in bold, aimed at the missing detail
+  (see the <focus> block if provided).
+- Do NOT add a separate "Sources" heading — the system lists sources below the answer.
+
+Example format:
+<answer>
+It sounds like your child is being sent home before the end of the school day, which is often called partial day attendance. Many families go through this, and there are good first steps you can take right away.
+
+**Keep a simple record.** Note the date, the time you were called, and the reason given each time.
+
+**Ask for the reason in writing.** *"Could you share the reasons for today's early pickup in writing?"*
+
+**Has the school said how long they expect this to continue?**
+</answer>
+<cited_indices>[]</cited_indices>
+<journey_state>
+journey: J1
+situation: A
+stage: Child is being sent home early; duration and school's reasons not yet known
+actions_taken: described the situation
+next_need: understand the school's reason and expected duration
+</journey_state>
+""".strip()
+
 WELCOME_MESSAGE = """
 Hi, I'm here to help you navigate your child's education. Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone. Tell me what's been happening. What's going on with your child's schooling right now?
 """.strip()
@@ -674,6 +735,7 @@ def load_config(db_connection):
     Uses caching to avoid DB hits on every request if container is warm.
     """
     global _CONFIG_LOADED
+    global MIN_EXCHANGES_BEFORE_ANSWER, ROUTING_MODE, OUTPUT_FORMAT_PARTIAL
     global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_AI_MESSAGE, TEMPERATURE, TOP_P, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
     global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
     global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, WELCOME_MESSAGE
@@ -722,6 +784,8 @@ def load_config(db_connection):
     if settings:
         MAX_MESSAGES_PER_DAY = settings.get('max_messages_per_day', MAX_MESSAGES_PER_DAY)
         MIN_EXCHANGES_BEFORE_SUGGEST = settings.get('min_messages_before_suggest', MIN_EXCHANGES_BEFORE_SUGGEST)
+        MIN_EXCHANGES_BEFORE_ANSWER = settings.get('min_exchanges_before_answer', MIN_EXCHANGES_BEFORE_ANSWER)
+        ROUTING_MODE = settings.get('routing_mode', ROUTING_MODE)
         MAX_CHARACTERS_PER_USER_MESSAGE = settings.get('max_characters_per_user_message', MAX_CHARACTERS_PER_USER_MESSAGE)
         MAX_CHARACTERS_PER_AI_MESSAGE = settings.get('max_characters_per_ai_message', MAX_CHARACTERS_PER_AI_MESSAGE)
         TEMPERATURE = settings.get('temperature', TEMPERATURE)
@@ -743,6 +807,7 @@ def load_config(db_connection):
         SUGGESTION_PHASE_PROMPT = msgs.get('suggestion_phase_prompt', SUGGESTION_PHASE_PROMPT)
         OUTPUT_FORMAT_DETECTIVE = msgs.get('output_format_detective', OUTPUT_FORMAT_DETECTIVE)
         OUTPUT_FORMAT_SUGGESTION = msgs.get('output_format_suggestion', OUTPUT_FORMAT_SUGGESTION)
+        OUTPUT_FORMAT_PARTIAL = msgs.get('output_format_partial', OUTPUT_FORMAT_PARTIAL)
         WELCOME_MESSAGE = msgs.get('welcome_message', WELCOME_MESSAGE)
 
     _CONFIG_LOADED = True

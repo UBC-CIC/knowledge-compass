@@ -14,6 +14,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AuthService } from "@/functions/authService";
 import { getCurrentUser } from "aws-amplify/auth";
 import SystemMessageEditor from "@/components/Admin/SystemMessageEditor";
@@ -25,9 +32,13 @@ import type {
   MessagePlacement,
 } from "@/components/Admin/SystemMessageEditor";
 
+type RoutingMode = "fixed" | "dynamic";
+
 type SystemSettingsDTO = {
   max_messages_per_day: number;
   min_messages_before_suggest: number;
+  routing_mode: RoutingMode;
+  min_exchanges_before_answer: number;
   max_characters_per_user_message: number;
   max_characters_per_ai_message: number;
   temperature: number;
@@ -45,6 +56,8 @@ type SystemSettingsAPIResponse = Partial<SystemSettingsDTO>;
 const DEFAULT_SETTINGS: SystemSettingsDTO = {
   max_messages_per_day: 45,
   min_messages_before_suggest: 4,
+  routing_mode: "fixed",
+  min_exchanges_before_answer: 0,
   max_characters_per_user_message: 2000,
   max_characters_per_ai_message: 5000,
   temperature: 0.2,
@@ -85,7 +98,7 @@ const MESSAGE_META: Record<SystemMessageType, MessageMeta> = {
   detective_phase_prompt: {
     title: "Detective Phase Prompt",
     description:
-      "Instructions for asking one question at a time to identify the family's journey and situation. Keep the {exchange_count}, {min_exchanges}, {readiness_note} and {may_suggest} placeholders",
+      "Instructions for asking one question at a time to identify the family's journey and situation. Keep the {exchange_count} and {readiness_note} placeholders ({min_exchanges} and {may_suggest} are still supported)",
     affectsTextGeneration: true,
     placement: "phase_detective",
   },
@@ -107,6 +120,13 @@ const MESSAGE_META: Record<SystemMessageType, MessageMeta> = {
       "How guidance replies are structured. Keep the <answer> and <cited_indices> tags, which the app uses to parse replies and sources",
     affectsTextGeneration: true,
     placement: "output_format_suggestion",
+  },
+  output_format_partial: {
+    title: "Partial Guidance Output Format",
+    description:
+      "Used instead of the suggestion output format when the situation is mostly clear but one detail is missing (dynamic routing only): 1-2 low-risk steps plus one clarifying question. Keep the <answer>, <cited_indices> and <journey_state> tags",
+    affectsTextGeneration: true,
+    placement: "output_format_partial",
   },
   welcome_message: {
     title: "Welcome Message",
@@ -249,11 +269,23 @@ function PromptAssemblyCard({
           </div>
 
           <div className="text-sm text-gray-500">
-            Suggestion phase starts after{" "}
-            <span className="font-medium text-gray-700">
-              {settings.min_messages_before_suggest}
-            </span>{" "}
-            exchange{settings.min_messages_before_suggest === 1 ? "" : "s"}.
+            {settings.routing_mode === "dynamic" ? (
+              <>
+                Each message is routed; guidance comes by exchange{" "}
+                <span className="font-medium text-gray-700">
+                  {settings.min_messages_before_suggest}
+                </span>{" "}
+                at the latest.
+              </>
+            ) : (
+              <>
+                Suggestion phase starts after{" "}
+                <span className="font-medium text-gray-700">
+                  {settings.min_messages_before_suggest}
+                </span>{" "}
+                exchange{settings.min_messages_before_suggest === 1 ? "" : "s"}.
+              </>
+            )}
           </div>
         </div>
 
@@ -356,6 +388,12 @@ export default function SystemSettings() {
           data.max_messages_per_day ?? DEFAULT_SETTINGS.max_messages_per_day,
         min_messages_before_suggest:
           data.min_messages_before_suggest ?? DEFAULT_SETTINGS.min_messages_before_suggest,
+        routing_mode:
+          data.routing_mode === "dynamic" || data.routing_mode === "fixed"
+            ? data.routing_mode
+            : DEFAULT_SETTINGS.routing_mode,
+        min_exchanges_before_answer:
+          data.min_exchanges_before_answer ?? DEFAULT_SETTINGS.min_exchanges_before_answer,
         max_characters_per_user_message:
           data.max_characters_per_user_message ?? DEFAULT_SETTINGS.max_characters_per_user_message,
         max_characters_per_ai_message:
@@ -405,6 +443,12 @@ export default function SystemSettings() {
   };
 
   const handleSaveSystemSettings = async () => {
+    if (settings.min_exchanges_before_answer > settings.min_messages_before_suggest) {
+      setError(
+        "Questions before guidance must be less than or equal to the exchange by which guidance is given"
+      );
+      return;
+    }
     try {
       setSaving(true);
       setError(null);
@@ -416,6 +460,8 @@ export default function SystemSettings() {
       const payload = {
         max_messages_per_day: settings.max_messages_per_day,
         min_messages_before_suggest: settings.min_messages_before_suggest,
+        routing_mode: settings.routing_mode,
+        min_exchanges_before_answer: settings.min_exchanges_before_answer,
         max_characters_per_user_message: settings.max_characters_per_user_message,
         max_characters_per_ai_message: settings.max_characters_per_ai_message,
         temperature: settings.temperature,
@@ -636,7 +682,33 @@ export default function SystemSettings() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="min-messages-before-suggest">Min messages before suggest</Label>
+                  <Label htmlFor="routing-mode">When to give guidance</Label>
+                  <Select
+                    value={settings.routing_mode}
+                    onValueChange={(value) =>
+                      setSettings((s) => ({ ...s, routing_mode: value as RoutingMode }))
+                    }
+                  >
+                    <SelectTrigger id="routing-mode" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixed">Fixed: after a set number of exchanges</SelectItem>
+                      <SelectItem value="dynamic">Dynamic: as soon as the situation is clear</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">
+                    Dynamic mode reads each message and answers, asks, or gives a short
+                    first step plus one question
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="min-messages-before-suggest">
+                    {settings.routing_mode === "dynamic"
+                      ? "Give guidance by exchange"
+                      : "Min messages before suggest"}
+                  </Label>
                   <Input
                     id="min-messages-before-suggest"
                     type="number"
@@ -650,9 +722,35 @@ export default function SystemSettings() {
                     }
                   />
                   <p className="text-xs text-gray-500">
-                    Minimum back-and-forth before suggestion logic can activate
+                    {settings.routing_mode === "dynamic"
+                      ? "Latest exchange at which guidance is always given, even if details are still missing"
+                      : "Minimum back-and-forth before suggestion logic can activate"}
                   </p>
                 </div>
+
+                {settings.routing_mode === "dynamic" ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="min-exchanges-before-answer">Questions before guidance</Label>
+                    <Input
+                      id="min-exchanges-before-answer"
+                      type="number"
+                      min={0}
+                      max={settings.min_messages_before_suggest}
+                      value={settings.min_exchanges_before_answer}
+                      aria-describedby="min-exchanges-before-answer-help"
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          min_exchanges_before_answer: Number(e.target.value),
+                        }))
+                      }
+                    />
+                    <p id="min-exchanges-before-answer-help" className="text-xs text-gray-500">
+                      Minimum questions to ask first. 0 lets a clear first message be answered
+                      right away; urgent situations are always answered immediately
+                    </p>
+                  </div>
+                ) : null}
 
                 <div className="space-y-2">
                   <Label htmlFor="max-chars-user">Max characters per user message</Label>

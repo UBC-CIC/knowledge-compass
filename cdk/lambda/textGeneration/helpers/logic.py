@@ -1,63 +1,90 @@
 
-from typing import Tuple
+from typing import Optional, Tuple
 import helpers.config as config
-from helpers.crud import get_exchange_count, get_journey_state
+from helpers.routing import (
+    DETECTIVE,
+    PARTIAL,
+    ROUTING_MODE_DYNAMIC,
+    Route,
+    public_phase,
+)
+
+DETECTIVE_RETRIEVAL_COUNT = 5
+ANSWER_RETRIEVAL_COUNT = 15
 
 
-def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, str, str, str]:
+def _readiness_note(exchange_count: int) -> str:
+    if config.ROUTING_MODE == ROUTING_MODE_DYNAMIC:
+        return (
+            "Ask one question on this turn. The system moves to guidance automatically "
+            "once the family's situation is clear."
+        )
+    remaining = max(1, config.MIN_EXCHANGES_BEFORE_SUGGEST - exchange_count)
+    return f"You must ask at least {remaining} more question(s) before suggesting resources."
+
+
+def _focus_block(route: Optional[Route]) -> str:
+    if route is None or not route.info_needed:
+        return ""
+    return f"\n\n<focus>\nMost important missing information: {route.info_needed}\n</focus>"
+
+
+def _routing_hint_block(route: Optional[Route]) -> str:
+    if route is None or (route.journey == "UNCLEAR" and route.situation == "UNKNOWN"):
+        return ""
+    secondary = route.secondary_situation if route.secondary_situation != "NONE" else "none"
+    return (
+        "\n\n<routing_hint>\n"
+        f"journey: {route.journey} | primary situation: {route.situation} | "
+        f"secondary situation: {secondary} | urgent: {'yes' if route.urgent else 'no'}\n"
+        "This is an automated first read of the latest message. "
+        "The conversation history is authoritative.\n"
+        "</routing_hint>"
+    )
+
+
+def get_current_prompt(
+    phase: str,
+    exchange_count: int,
+    journey_state: Optional[str],
+    route: Optional[Route] = None,
+) -> Tuple[str, int, str, str, str]:
     """
-    Determines the current conversation phase and constructs the system prompt.
+    Construct the system prompt for a phase chosen by helpers.routing.decide_phase.
 
     Returns (static_prompt, retrieval_count, phase_name, phase_instructions, model_arn)
       - static_prompt:      cached block (role + guardrails + language_guidelines)
       - retrieval_count:    how many chunks to retrieve for this phase
-      - phase_name:         "DETECTIVE" | "SUGGESTION"
+      - phase_name:         public phase, "DETECTIVE" | "SUGGESTION" (PARTIAL is
+                            reported as SUGGESTION to keep the frontend contract)
       - phase_instructions: the dynamic block for this phase (phase prompt +
                             phase-specific output format), wrapped in XML tags
-      - model_arn:          Haiku for detective, Sonnet for suggestion
+      - model_arn:          Haiku for detective, Sonnet for partial/suggestion
 
-    Inclusion Canada structure (Phase 3):
+    Inclusion Canada structure:
       static  = <role> + <guardrails> + <language_guidelines>
       dynamic = <phase> + <output_format>   (retrieved_context is appended by chat.py)
     """
-    # 1. Auto-calculate exchange count (User+AI pairs so far).
-    exchange_count = get_exchange_count(chat_session_id, db_connection)
-
-    # 2. Detective vs Suggestion based on how many exchanges have happened.
-    #    may_suggest mirrors the notebook: once enough exchanges have occurred the
-    #    guide may provide guidance rather than only asking questions.
-    min_exchanges = config.MIN_EXCHANGES_BEFORE_SUGGEST
-    may_suggest = exchange_count >= min_exchanges
-
-    if not may_suggest:
-        phase_name = "DETECTIVE"
-        retrieval_count = 5
+    if phase == DETECTIVE:
+        retrieval_count = DETECTIVE_RETRIEVAL_COUNT
         model_arn = config.HAIKU_ARN
 
-        remaining = max(0, min_exchanges - exchange_count)
-        readiness_note = (
-            f"You must ask at least {remaining} more question(s) before suggesting resources."
-            if remaining > 0
-            else "You may provide guidance now if the situation is already clear."
-        )
-        # The detective prompt carries runtime placeholders; fill them here.
+        # All legacy placeholders are still supplied so older or admin-edited
+        # prompt versions keep formatting; unused keyword arguments are ignored.
         detective_body = config.DETECTIVE_PHASE_PROMPT.format(
             exchange_count=exchange_count + 1,
-            min_exchanges=min_exchanges,
-            readiness_note=readiness_note,
-            may_suggest=may_suggest,
+            min_exchanges=config.MIN_EXCHANGES_BEFORE_SUGGEST,
+            readiness_note=_readiness_note(exchange_count),
+            may_suggest=False,
         )
         phase_instructions = (
-            f"<phase>\n{detective_body}\n</phase>\n\n"
+            f"<phase>\n{detective_body}{_focus_block(route)}\n</phase>\n\n"
             f"<output_format>\n{config.OUTPUT_FORMAT_DETECTIVE}\n</output_format>"
         )
     else:
-        phase_name = "SUGGESTION"
-        retrieval_count = 15
+        retrieval_count = ANSWER_RETRIEVAL_COUNT
         model_arn = config.SONNET_ARN
 
-        # Retrieve any stored journey state from previous turns (detective or suggestion).
-        journey_state = get_journey_state(db_connection, chat_session_id)
         state_block = ""
         if journey_state:
             state_block = (
@@ -68,12 +95,19 @@ def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, s
                 f"Do not repeat completed steps. Build on what has already been discussed."
             )
 
+        extra_blocks = _routing_hint_block(route)
+        if phase == PARTIAL:
+            extra_blocks += _focus_block(route)
+            output_format = config.OUTPUT_FORMAT_PARTIAL
+        else:
+            output_format = config.OUTPUT_FORMAT_SUGGESTION
+
         phase_instructions = (
-            f"<phase>\n{config.SUGGESTION_PHASE_PROMPT}{state_block}\n</phase>\n\n"
-            f"<output_format>\n{config.OUTPUT_FORMAT_SUGGESTION}\n</output_format>"
+            f"<phase>\n{config.SUGGESTION_PHASE_PROMPT}{state_block}{extra_blocks}\n</phase>\n\n"
+            f"<output_format>\n{output_format}\n</output_format>"
         )
 
-    # 3. Static (cached) block: role + guardrails + language guidelines.
+    # Static (cached) block: role + guardrails + language guidelines.
     static_prompt = f"""<role>
 {config.ROLE}
 </role>
@@ -87,4 +121,4 @@ def get_current_prompt(chat_session_id: str, db_connection) -> Tuple[str, int, s
 </language_guidelines>
 """.strip()
 
-    return static_prompt, retrieval_count, phase_name, phase_instructions, model_arn
+    return static_prompt, retrieval_count, public_phase(phase), phase_instructions, model_arn
