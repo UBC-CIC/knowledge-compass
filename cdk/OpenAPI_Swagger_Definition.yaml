@@ -1599,6 +1599,8 @@ paths:
                       chat_sessions: { type: integer }
                       messages: { type: integer }
                       questions: { type: integer }
+                      thumbs_up: { type: integer }
+                      thumbs_down: { type: integer }
                   timeSeries:
                     type: array
                     nullable: true
@@ -1609,6 +1611,19 @@ paths:
                         users: { type: integer }
                         questions: { type: integer }
                         chat_sessions: { type: integer }
+                        thumbs_up: { type: integer }
+                        thumbs_down: { type: integer }
+                  recentFeedback:
+                    type: array
+                    nullable: true
+                    description: Up to 50 most recent feedback entries with a written comment in the window
+                    items:
+                      type: object
+                      properties:
+                        chat_session_id: { type: string, format: uuid }
+                        rating: { type: string, enum: [up, down] }
+                        comment: { type: string }
+                        updated_at: { type: string, format: date-time }
         "401": { description: Unauthorized }
         "500": { description: Internal Server Error }
       x-amazon-apigateway-integration:
@@ -1783,6 +1798,127 @@ paths:
       responses:
         "204":
           description: Chat session deleted successfully
+        "400":
+          description: Invalid request
+        "403":
+          description: Forbidden - User does not own this chat session
+        "404":
+          description: Chat session not found
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${chatSessionFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /chat_sessions/{chat_session_id}/feedback:
+    <<: *commonOptions
+    get:
+      tags:
+        - ChatSessions
+      summary: Get the owning user's feedback for a chat session
+      operationId: get_chat_session_feedback
+      security:
+        - userAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          description: Chat session UUID
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: true
+          description: User UUID used to verify ownership
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Feedback for the session, or null if none has been given
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feedback:
+                    type: object
+                    nullable: true
+                    properties:
+                      rating: { type: string, enum: [up, down] }
+                      comment: { type: string, nullable: true }
+                      updated_at: { type: string, format: date-time }
+        "400":
+          description: Invalid request
+        "403":
+          description: Forbidden - User does not own this chat session
+        "404":
+          description: Chat session not found
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${chatSessionFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+    put:
+      tags:
+        - ChatSessions
+      summary: Create or replace thumbs up/down feedback (and optional comment) for a chat session
+      operationId: put_chat_session_feedback
+      security:
+        - userAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          description: Chat session UUID
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: true
+          description: User UUID used to verify ownership
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - rating
+              properties:
+                rating:
+                  type: string
+                  enum: [up, down]
+                comment:
+                  type: string
+                  nullable: true
+                  maxLength: 1000
+      responses:
+        "200":
+          description: Feedback saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rating: { type: string, enum: [up, down] }
+                  has_comment: { type: boolean }
+                  updated_at: { type: string, format: date-time }
         "400":
           description: Invalid request
         "403":

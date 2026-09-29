@@ -23,7 +23,7 @@ def get_cors_headers(event):
                     "Access-Control-Allow-Methods": "*"
                 }
     
-    headers = event.get('headers', {}) if event else {}
+    headers = (event.get('headers') or {}) if event else {}
     origin = headers.get('origin') or headers.get('Origin')
     allowed_origin = ""
     

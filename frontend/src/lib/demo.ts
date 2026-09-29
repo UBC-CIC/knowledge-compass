@@ -329,12 +329,27 @@ export function seedDemoHistory() {
 }
 
 export const DEMO_ANALYTICS_SERIES = [
-  { date: "Jul 6", users: 4, chat_sessions: 6, questions: 18 },
-  { date: "Jul 20", users: 7, chat_sessions: 11, questions: 29 },
-  { date: "Aug 3", users: 11, chat_sessions: 16, questions: 41 },
-  { date: "Aug 17", users: 14, chat_sessions: 21, questions: 54 },
-  { date: "Aug 31", users: 19, chat_sessions: 28, questions: 71 },
-  { date: "Sep 14", users: 24, chat_sessions: 36, questions: 88 },
+  { date: "Jul 6", users: 4, chat_sessions: 6, questions: 18, thumbs_up: 2, thumbs_down: 1 },
+  { date: "Jul 20", users: 7, chat_sessions: 11, questions: 29, thumbs_up: 4, thumbs_down: 1 },
+  { date: "Aug 3", users: 11, chat_sessions: 16, questions: 41, thumbs_up: 6, thumbs_down: 2 },
+  { date: "Aug 17", users: 14, chat_sessions: 21, questions: 54, thumbs_up: 8, thumbs_down: 2 },
+  { date: "Aug 31", users: 19, chat_sessions: 28, questions: 71, thumbs_up: 11, thumbs_down: 3 },
+  { date: "Sep 14", users: 24, chat_sessions: 36, questions: 88, thumbs_up: 15, thumbs_down: 3 },
+];
+
+export const DEMO_RECENT_FEEDBACK = [
+  {
+    chat_session_id: "demo-feedback-1",
+    rating: "up" as const,
+    comment: "The steps for asking about a reduced schedule were really clear.",
+    updated_at: "2026-09-14T15:20:00.000Z",
+  },
+  {
+    chat_session_id: "demo-feedback-2",
+    rating: "down" as const,
+    comment: "I wanted more information about options in my province.",
+    updated_at: "2026-09-12T18:05:00.000Z",
+  },
 ];
 
 export const DEMO_OVERVIEW_TOTALS = {

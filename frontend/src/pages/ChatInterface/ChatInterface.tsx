@@ -10,6 +10,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import type { Message } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
+import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
 import {
   applyDemoFact,
   getDemoSessionState,
@@ -815,6 +816,11 @@ export default function AIChatPage({
       : [];
   const showDemoGuidance =
     isDemoMode && !isStreaming && Boolean(lastBotMessage?.showGuidance);
+  // Offer feedback once the assistant has finished at least one reply.
+  const showFeedback =
+    Boolean(activeChatSessionId) &&
+    !isStreaming &&
+    messages.some((m) => m.sender === "bot" && !m.isTyping && m.text.trim());
 
   const handleKeepGoing = () => {
     setMessages((prev) => {
@@ -904,6 +910,12 @@ export default function AIChatPage({
                   ) : null}
                   {showDemoGuidance ? (
                     <DemoGuidanceCard onKeepGoing={handleKeepGoing} />
+                  ) : null}
+                  {showFeedback && activeChatSessionId ? (
+                    <ConversationFeedback
+                      sessionId={activeChatSessionId}
+                      userId={userId}
+                    />
                   ) : null}
                   <div ref={messagesEndRef} className="h-1 shrink-0" />
                 </>

@@ -62,10 +62,10 @@ exports.handler = async (event) => {
         },
       };
 
-      console.log(
-        "Invoking text generation function with payload:",
-        textGenPayload
-      );
+      // Do not log the payload: it contains the user's message and identifiers.
+      console.log("Invoking text generation function", {
+        connectionId: event.requestContext.connectionId,
+      });
 
       const result = await lambda.send(
         new InvokeCommand({

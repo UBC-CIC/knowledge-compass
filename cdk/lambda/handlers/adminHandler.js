@@ -776,7 +776,9 @@ exports.handler = async (event) => {
                 (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs) AS users,
                 (SELECT COUNT(cs.id)::int FROM chat_sessions cs) AS chat_sessions,
                 (SELECT COUNT(cm.id)::int FROM chat_messages cm) AS messages,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm WHERE cm.sender = 'user') AS questions
+                (SELECT COUNT(cm.id)::int FROM chat_messages cm WHERE cm.sender = 'user') AS questions,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'up') AS thumbs_up,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'down') AS thumbs_down
             `;
             return totalsRows[0];
           }
@@ -802,7 +804,19 @@ exports.handler = async (event) => {
               FROM chat_messages cm
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
-                AND cm.sender = 'user') AS questions
+                AND cm.sender = 'user') AS questions,
+
+              (SELECT COUNT(sf.id)::int
+              FROM session_feedback sf
+              WHERE sf.updated_at >= ${startDateIso}
+                AND sf.updated_at < ${endDateIso}
+                AND sf.rating = 'up') AS thumbs_up,
+
+              (SELECT COUNT(sf.id)::int
+              FROM session_feedback sf
+              WHERE sf.updated_at >= ${startDateIso}
+                AND sf.updated_at < ${endDateIso}
+                AND sf.rating = 'down') AS thumbs_down
           `;
           return totalsRows[0];
         };
@@ -875,22 +889,50 @@ exports.handler = async (event) => {
               AND cm.created_at < ${endDateIso}
               AND cm.sender = 'user'
             GROUP BY DATE_TRUNC('day', cm.created_at)::date
+          ),
+          daily_feedback AS (
+            SELECT
+              DATE_TRUNC('day', sf.updated_at)::date AS date,
+              COUNT(sf.id) FILTER (WHERE sf.rating = 'up')::int AS thumbs_up,
+              COUNT(sf.id) FILTER (WHERE sf.rating = 'down')::int AS thumbs_down
+            FROM session_feedback sf
+            WHERE sf.updated_at >= ${startDateIso}
+              AND sf.updated_at < ${endDateIso}
+            GROUP BY DATE_TRUNC('day', sf.updated_at)::date
           )
           SELECT
             TO_CHAR(ds.date, 'Mon DD') AS date,
             COALESCE(GREATEST(dcs.session_users, dq.question_users), 0)::int AS users,
             COALESCE(dq.questions, 0)::int AS questions,
-            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions
+            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions,
+            COALESCE(df.thumbs_up, 0)::int AS thumbs_up,
+            COALESCE(df.thumbs_down, 0)::int AS thumbs_down
           FROM date_series ds
           LEFT JOIN daily_chat_sessions dcs ON ds.date = dcs.date
           LEFT JOIN daily_questions dq ON ds.date = dq.date
+          LEFT JOIN daily_feedback df ON ds.date = df.date
           ORDER BY ds.date ASC
         `;
 
         const totals = await fetchTotals(startDateIso, endDateIso);
 
+        // Most recent written feedback in the window (admin-only view).
+        const recentFeedback = await sqlConnection`
+          SELECT
+            sf.chat_session_id::text AS chat_session_id,
+            sf.rating,
+            sf.comment,
+            sf.updated_at
+          FROM session_feedback sf
+          WHERE sf.updated_at >= ${startDateIso}
+            AND sf.updated_at < ${endDateIso}
+            AND sf.comment IS NOT NULL
+          ORDER BY sf.updated_at DESC
+          LIMIT 50
+        `;
+
         response.statusCode = 200;
-        response.body = JSON.stringify({ timeSeries, totals });
+        response.body = JSON.stringify({ timeSeries, totals, recentFeedback });
         break;
       }
 
@@ -1341,8 +1383,13 @@ exports.handler = async (event) => {
     }
   }
 
-  // Log response for debugging (visible in AWS CloudWatch Logs)
-  console.log(response);
+  // Log response for debugging (visible in AWS CloudWatch Logs).
+  // Analytics now includes user-written feedback comments; log status only.
+  if (event.resource === "/admin/analytics") {
+    console.log({ statusCode: response.statusCode, resource: event.resource });
+  } else {
+    console.log(response);
+  }
 
   // Return HTTP response to API Gateway, which forwards it to the client
   return response;

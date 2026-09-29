@@ -1,5 +1,10 @@
 const crypto = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
+const {
+  validateUUID,
+  validateEnum,
+  sanitizeString,
+} = require("./utils/validation.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -49,6 +54,35 @@ const parseBody = (body) => {
   } catch {
     throw new Error("Invalid JSON body");
   }
+};
+
+const FEEDBACK_RATINGS = ["up", "down"];
+const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
+
+// Validates path/query ids and confirms the caller's user_id owns the session.
+// Returns null on success, or { statusCode, error } to send back.
+const checkFeedbackSessionOwnership = async (chatSessionId, userId) => {
+  const sessionCheck = validateUUID(chatSessionId, "chat_session_id");
+  if (!sessionCheck.valid) return { statusCode: 400, error: sessionCheck.error };
+
+  const userCheck = validateUUID(userId, "user_id");
+  if (!userCheck.valid) return { statusCode: 400, error: userCheck.error };
+
+  const chatSession = await sqlConnection`
+    SELECT id, user_id
+    FROM chat_sessions
+    WHERE id = ${chatSessionId}
+  `;
+
+  if (chatSession.length === 0) {
+    return { statusCode: 404, error: "Chat session not found" };
+  }
+
+  if (chatSession[0].user_id !== userId) {
+    return { statusCode: 403, error: "You can only give feedback on your own chat sessions" };
+  }
+
+  return null;
 };
 
 const handleError = (error, response) => {
@@ -303,6 +337,85 @@ exports.handler = async (event) => {
         break;
       }
 
+      case "GET /chat_sessions/{chat_session_id}/feedback": {
+        const chatSessionId = event.pathParameters?.chat_session_id;
+        const userId = event.queryStringParameters?.user_id;
+
+        const ownershipError = await checkFeedbackSessionOwnership(chatSessionId, userId);
+        if (ownershipError) {
+          response.statusCode = ownershipError.statusCode;
+          response.body = JSON.stringify({ error: ownershipError.error });
+          break;
+        }
+
+        const rows = await sqlConnection`
+          SELECT rating, comment, updated_at
+          FROM session_feedback
+          WHERE chat_session_id = ${chatSessionId}
+        `;
+
+        response.statusCode = 200;
+        response.body = JSON.stringify({ feedback: rows[0] ?? null });
+        break;
+      }
+
+      case "PUT /chat_sessions/{chat_session_id}/feedback": {
+        const chatSessionId = event.pathParameters?.chat_session_id;
+        const userId = event.queryStringParameters?.user_id;
+
+        let body;
+        try {
+          body = parseBody(event.body);
+        } catch (error) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: error.message });
+          break;
+        }
+
+        const ratingCheck = validateEnum(body.rating, FEEDBACK_RATINGS, "rating");
+        if (!ratingCheck.valid) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: ratingCheck.error });
+          break;
+        }
+
+        if (body.comment !== undefined && body.comment !== null && typeof body.comment !== "string") {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: "comment must be a string" });
+          break;
+        }
+        const comment = sanitizeString(body.comment, FEEDBACK_COMMENT_MAX_LENGTH);
+
+        const ownershipError = await checkFeedbackSessionOwnership(chatSessionId, userId);
+        if (ownershipError) {
+          response.statusCode = ownershipError.statusCode;
+          response.body = JSON.stringify({ error: ownershipError.error });
+          break;
+        }
+
+        // One feedback row per session; later submissions replace the rating
+        // and comment so users can change their mind.
+        const saved = await sqlConnection`
+          INSERT INTO session_feedback (chat_session_id, rating, comment)
+          VALUES (${chatSessionId}, ${body.rating}, ${comment})
+          ON CONFLICT (chat_session_id) DO UPDATE SET
+            rating = EXCLUDED.rating,
+            comment = EXCLUDED.comment,
+            updated_at = now()
+          RETURNING rating, updated_at
+        `;
+
+        // The comment is intentionally not echoed back so it never appears in
+        // response logs.
+        response.statusCode = 200;
+        response.body = JSON.stringify({
+          rating: saved[0].rating,
+          has_comment: comment !== null,
+          updated_at: saved[0].updated_at,
+        });
+        break;
+      }
+
       default:
         throw new Error(`Unsupported route: "${pathData}"`);
     }
@@ -310,6 +423,11 @@ exports.handler = async (event) => {
     handleError(error, response);
   }
 
-  console.log(response);
+  // Feedback responses can contain the user's free-text comment; log status only.
+  if (event.resource === "/chat_sessions/{chat_session_id}/feedback") {
+    console.log({ statusCode: response.statusCode, resource: event.resource });
+  } else {
+    console.log(response);
+  }
   return response;
 };
