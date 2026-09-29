@@ -94,9 +94,17 @@ export const useWebSocket = (
     }, delay);
   }, []);
 
+  // The URL carries a short-lived auth token that rotates periodically. The
+  // token is only checked on $connect, so keep the latest URL in a ref for
+  // (re)connects instead of tearing down a healthy socket on every rotation,
+  // which would drop any response being streamed on the old connection.
+  const urlRef = useRef(url);
+  urlRef.current = url;
+
   const connect = useCallback(() => {
+    const currentUrl = urlRef.current;
     if (
-      !url ||
+      !currentUrl ||
       wsRef.current?.readyState === WebSocket.CONNECTING ||
       wsRef.current?.readyState === WebSocket.OPEN
     ) {
@@ -106,9 +114,17 @@ export const useWebSocket = (
     setConnectionState("connecting");
 
     try {
-      wsRef.current = new WebSocket(url);
+      const ws = new WebSocket(currentUrl);
+      wsRef.current = ws;
 
-      wsRef.current.onopen = () => {
+      // Events from a socket that has since been replaced (or manually
+      // closed) must not touch the shared refs/state; otherwise an old
+      // socket's late onclose orphans the new one and every send falls back
+      // to non-streaming HTTP.
+      const isCurrent = () => wsRef.current === ws;
+
+      ws.onopen = () => {
+        if (!isCurrent()) return;
         console.log("[WebSocket] Connected successfully");
         setConnectionState("connected");
         reconnectAttemptsRef.current = 0;
@@ -116,7 +132,7 @@ export const useWebSocket = (
         callbacksRef.current.onConnect?.();
       };
 
-      wsRef.current.onmessage = (event) => {
+      ws.onmessage = (event) => {
         try {
           if (typeof event.data === "string" && event.data.length > 1_000_000) {
             console.warn("[WebSocket] Received message string exceeds 1MB, ignoring");
@@ -138,29 +154,27 @@ export const useWebSocket = (
         }
       };
 
-      wsRef.current.onclose = (event) => {
+      ws.onclose = (event) => {
         console.log(
           `[WebSocket] Disconnected - Code: ${event.code}, Reason: ${event.reason}`
         );
+        if (!isCurrent()) return;
 
         wsRef.current = null;
         setConnectionState("disconnected");
         stopHeartbeat();
         callbacksRef.current.onDisconnect?.();
 
+        // API Gateway closes idle/long-lived connections with 1001 (and can
+        // use 1000), so any close we didn't ask for should reconnect.
         if (!isManualDisconnectRef.current) {
-          if (event.code !== 1000 && event.code !== 1001) {
-            console.log(
-              "[WebSocket] Abnormal closure, attempting to reconnect..."
-            );
-            scheduleReconnect();
-          } else {
-            console.log("[WebSocket] Normal closure, not reconnecting");
-          }
+          console.log("[WebSocket] Unexpected closure, attempting to reconnect...");
+          scheduleReconnect();
         }
       };
 
-      wsRef.current.onerror = (error) => {
+      ws.onerror = (error) => {
+        if (!isCurrent()) return;
         console.error("[WebSocket] Connection error:", error);
         setConnectionState("error");
         callbacksRef.current.onError?.(error);
@@ -170,7 +184,7 @@ export const useWebSocket = (
       setConnectionState("error");
       scheduleReconnect();
     }
-  }, [url, startHeartbeat, stopHeartbeat, scheduleReconnect]);
+  }, [startHeartbeat, stopHeartbeat, scheduleReconnect]);
 
   connectRef.current = connect;
 
@@ -229,20 +243,26 @@ export const useWebSocket = (
     }, 1000);
   }, [disconnect, connect]);
 
-  // Only depend on URL changes, not callback changes
+  // Connect once a URL is available. connect() is a no-op while a socket is
+  // already open/connecting, so token rotations don't interrupt streaming;
+  // the new URL is picked up on the next reconnect via urlRef.
   useEffect(() => {
     if (url) {
       isManualDisconnectRef.current = false;
       connect();
     }
+  }, [url, connect]);
 
+  // Tear down only on unmount.
+  useEffect(() => {
     return () => {
       isManualDisconnectRef.current = true;
       disconnect();
     };
-  }, [url]); // Only URL dependency!
+  }, [disconnect]);
 
-  const isConnected = wsRef.current?.readyState === WebSocket.OPEN;
+  // Derived from state so consumers re-render when the connection changes.
+  const isConnected = connectionState === "connected";
 
   return {
     sendMessage,

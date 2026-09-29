@@ -98,9 +98,11 @@ export default function AIChatPage({
   } = useView();
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
-    null
-  );
+  // Id of the bot placeholder currently receiving streamed output. Kept in a
+  // ref (not state) so WebSocket events always see the value set by
+  // sendMessage, even if a render/effect for a session change happens in
+  // between (e.g. when the first message creates a new session).
+  const streamingMessageIdRef = useRef<string | null>(null);
 
   const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
   const [tokenResetTime, setTokenResetTime] = useState<string | null>(null);
@@ -267,6 +269,7 @@ export default function AIChatPage({
   // WebSocket message handlers - memoized to prevent unnecessary reconnections
   const handleWebSocketMessage = useCallback(
     (message: any) => {
+      const streamingMessageId = streamingMessageIdRef.current;
 
       switch (message.type) {
         case "start":
@@ -299,7 +302,7 @@ export default function AIChatPage({
 
         case "complete":
           setIsStreaming(false);
-          setStreamingMessageId(null);
+          streamingMessageIdRef.current = null;
           if (streamingMessageId) {
             setMessages((prev) =>
               prev.map((msg) =>
@@ -333,7 +336,7 @@ export default function AIChatPage({
 
         case "error":
           setIsStreaming(false);
-          setStreamingMessageId(null);
+          streamingMessageIdRef.current = null;
           if (message.error === 'TOKEN_LIMIT_EXCEEDED') {
             setIsTokenLimitReached(true);
             if (message.token_usage?.reset_at) {
@@ -356,8 +359,8 @@ export default function AIChatPage({
           break;
       }
     },
-    [streamingMessageId, activeChatSessionId, updateChatSessionName]
-  ); // Only recreate when streamingMessageId changes
+    [activeChatSessionId, updateChatSessionName]
+  );
 
   const {
     sendMessage: sendWebSocketMessage,
@@ -424,12 +427,21 @@ export default function AIChatPage({
   }, []);
 
   useEffect(() => {
-    // A session switch always invalidates any in-flight stream from the
-    // previous session — otherwise the composer can stay disabled forever if
+    // The first message of a new chat creates the session itself. That
+    // session change must not wipe the stream that sendMessage just started,
+    // and there is no history to load yet.
+    if (activeChatSessionId && skipNextHistoryLoadRef.current) {
+      skipNextHistoryLoadRef.current = false;
+      setIsLoadingHistory(false);
+      return;
+    }
+
+    // Any other session switch invalidates an in-flight stream from the
+    // previous session; otherwise the composer can stay disabled forever if
     // the old session's "complete"/"error" event never matches up with the
     // newly displayed messages.
     setIsStreaming(false);
-    setStreamingMessageId(null);
+    streamingMessageIdRef.current = null;
 
     if (!activeChatSessionId) {
       setMessages([]);
@@ -437,13 +449,6 @@ export default function AIChatPage({
       demoAskedRef.current = 0;
       demoFactsRef.current = {};
       setConversationFacts({});
-      return;
-    }
-
-    // Reset when the active session changes
-    if (skipNextHistoryLoadRef.current) {
-      skipNextHistoryLoadRef.current = false;
-      setIsLoadingHistory(false);
       return;
     }
 
@@ -585,7 +590,7 @@ export default function AIChatPage({
       };
 
       setMessages((prev) => [...prev, userMsg, botMsg]);
-      setStreamingMessageId(botMsg.id);
+      streamingMessageIdRef.current = botMsg.id;
       setIsStreaming(true);
       setMessage("");
 
@@ -623,7 +628,7 @@ export default function AIChatPage({
           return next;
         });
         setIsStreaming(false);
-        setStreamingMessageId(null);
+        streamingMessageIdRef.current = null;
       }, 750);
       return;
     }
@@ -649,14 +654,14 @@ export default function AIChatPage({
 
     // Add user and bot messages
     setMessages((m) => [...m, userMsg, botMsg]);
-    setStreamingMessageId(botMsg.id);
+    streamingMessageIdRef.current = botMsg.id;
     setIsStreaming(true);
 
     // Clear the input box text immediately 
     setMessage("");
 
     // Try WebSocket streaming first, fallback to HTTP if not connected
-    if (isConnected && webSocketUrl) {
+    if (isConnected) {
       
       const success = sendWebSocketMessage({
         action: "generate_text",
@@ -772,7 +777,7 @@ export default function AIChatPage({
       );
     } finally {
       setIsStreaming(false);
-      setStreamingMessageId(null);
+      streamingMessageIdRef.current = null;
     }
   }
 
