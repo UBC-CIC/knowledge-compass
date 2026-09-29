@@ -11,6 +11,7 @@ import type { Message } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
 import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
+import { useSessionFeedback } from "@/hooks/useSessionFeedback";
 import {
   applyDemoFact,
   getDemoSessionState,
@@ -122,6 +123,7 @@ export default function AIChatPage({
   };
 
   const { userId } = useUser();
+  const sessionFeedback = useSessionFeedback(activeChatSessionId, userId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const demoAskedRef = useRef(0);
   const demoFactsRef = useRef<DemoFacts>({});
@@ -803,6 +805,16 @@ export default function AIChatPage({
         warning={message.warning}
         isTyping={message.isTyping}
         phase={message.phase}
+        footer={
+          showFeedback && message.id === lastBotMessage?.id ? (
+            <ConversationFeedback
+              feedback={sessionFeedback.feedback}
+              isSaving={sessionFeedback.isSaving}
+              error={sessionFeedback.error}
+              onSave={sessionFeedback.saveFeedback}
+            />
+          ) : null
+        }
       />
     );
     }
@@ -810,17 +822,19 @@ export default function AIChatPage({
 
   const isWelcome = !activeChatSessionId;
   const lastBotMessage = [...messages].reverse().find((m) => m.sender === "bot");
+  // Feedback is per conversation and sits under the latest finished reply.
+  const showFeedback =
+    Boolean(activeChatSessionId) &&
+    !isStreaming &&
+    !sessionFeedback.isLoading &&
+    Boolean(lastBotMessage && !lastBotMessage.isTyping && lastBotMessage.text.trim());
   const demoChips =
     isDemoMode && !isStreaming && lastBotMessage?.chips?.length
       ? lastBotMessage.chips
       : [];
   const showDemoGuidance =
     isDemoMode && !isStreaming && Boolean(lastBotMessage?.showGuidance);
-  // Offer feedback once the assistant has finished at least one reply.
-  const showFeedback =
-    Boolean(activeChatSessionId) &&
-    !isStreaming &&
-    messages.some((m) => m.sender === "bot" && !m.isTyping && m.text.trim());
+
 
   const handleKeepGoing = () => {
     setMessages((prev) => {
@@ -910,12 +924,6 @@ export default function AIChatPage({
                   ) : null}
                   {showDemoGuidance ? (
                     <DemoGuidanceCard onKeepGoing={handleKeepGoing} />
-                  ) : null}
-                  {showFeedback && activeChatSessionId ? (
-                    <ConversationFeedback
-                      sessionId={activeChatSessionId}
-                      userId={userId}
-                    />
                   ) : null}
                   <div ref={messagesEndRef} className="h-1 shrink-0" />
                 </>

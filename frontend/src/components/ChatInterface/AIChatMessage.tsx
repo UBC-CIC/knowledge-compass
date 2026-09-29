@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -76,6 +76,8 @@ type AIChatMessageProps = {
   warning?: string | null;
   isTyping?: boolean;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
+  /** Rendered inside the message, below its content (e.g. feedback controls). */
+  footer?: ReactNode;
 };
 
 const markdownComponents = {
@@ -184,7 +186,9 @@ export default function AIChatMessage({
   warning = null,
   isTyping = false,
   phase = null,
+  footer = null,
 }: AIChatMessageProps) {
+  const showFooter = Boolean(footer) && !isTyping;
   const body = displayGuideText(text);
   const suggestion = isSuggestionPhase(phase, sources, body);
   const resourceSources = sources.filter(isResourceSource);
@@ -305,6 +309,11 @@ export default function AIChatMessage({
         <div className="px-[22px] py-[22px] text-[16.5px] leading-[1.65] text-pretty">
           {content}
         </div>
+        {showFooter ? (
+          <div className="border-t border-foreground/10 px-[22px] py-1.5">
+            {footer}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -313,6 +322,11 @@ export default function AIChatMessage({
     <div className="flex justify-start">
       <div className="max-w-[94%] rounded-[12px] rounded-bl-[3px] bg-muted px-[17px] py-3.5 text-base leading-[1.68] text-foreground text-pretty">
         {content}
+        {showFooter ? (
+          <div className="-mb-1.5 mt-3 border-t border-foreground/10 pt-1.5">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
