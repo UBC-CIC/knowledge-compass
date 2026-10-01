@@ -1,4 +1,4 @@
-export type AdminView = "dashboard" | "analytics" | "journeys" | "system-settings";
+export type AdminView = "dashboard" | "analytics" | "prompts" | "system-settings";
 
 type AdminSidebarProps = {
   activeView: AdminView;
@@ -12,8 +12,8 @@ const NAV_ITEMS: Array<{
 }> = [
   { key: "dashboard", label: "Overview", hint: "Usage and data sources" },
   { key: "analytics", label: "Analytics", hint: "Trends over time" },
-  { key: "journeys", label: "Journeys", hint: "Journey and cluster prompts" },
-  { key: "system-settings", label: "Assistant settings", hint: "Limits and wording" },
+  { key: "prompts", label: "Prompts", hint: "What the assistant asks and says" },
+  { key: "system-settings", label: "Assistant settings", hint: "Limits and answer checks" },
 ];
 
 export default function AdminSidebar({

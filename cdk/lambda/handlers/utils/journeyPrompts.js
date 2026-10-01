@@ -43,7 +43,8 @@ const TEXT_LIMITS = {
 };
 
 const MIN_PRIORITY = 1;
-const MAX_PRIORITY = 9;
+// Urgency 1-5 in the admin UI (the DB constraint allows up to 9).
+const MAX_PRIORITY = 5;
 const MAX_SORT_ORDER = 1000;
 const MAX_FEEDBACK_DAYS = 365;
 

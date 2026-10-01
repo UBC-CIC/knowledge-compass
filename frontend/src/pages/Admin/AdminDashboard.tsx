@@ -6,7 +6,7 @@ import BrandMark from "@/components/BrandMark";
 import AdminSidebar, { type AdminView } from "@/components/Admin/AdminSidebar";
 import DataSourceManagement from "@/components/Admin/DataSourceManagement";
 import Analytics from "@/components/Admin/Analytics";
-import JourneyManagement from "@/components/Admin/JourneyManagement";
+import PromptManagement from "@/components/Admin/Prompts/PromptManagement";
 import SystemSettings from "@/components/Admin/SystemSettings";
 import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 
@@ -77,7 +77,7 @@ export default function AdminDashboard() {
               [
                 ["dashboard", "Overview"],
                 ["analytics", "Analytics"],
-                ["journeys", "Journeys"],
+                ["prompts", "Prompts"],
                 ["system-settings", "Settings"],
               ] as const
             ).map(([key, label]) => (
@@ -98,7 +98,7 @@ export default function AdminDashboard() {
           </div>
           {activeView === "dashboard" && <DataSourceManagement />}
           {activeView === "analytics" && <Analytics />}
-          {activeView === "journeys" && <JourneyManagement />}
+          {activeView === "prompts" && <PromptManagement />}
           {activeView === "system-settings" && <SystemSettings />}
         </main>
       </div>

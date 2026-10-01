@@ -1805,7 +1805,7 @@ paths:
                 priority:
                   type: integer
                   minimum: 1
-                  maximum: 9
+                  maximum: 5
                 sort_order:
                   type: integer
                 response_pattern:
@@ -1855,7 +1855,7 @@ paths:
                 priority:
                   type: integer
                   minimum: 1
-                  maximum: 9
+                  maximum: 5
                 sort_order:
                   type: integer
                 is_archived:

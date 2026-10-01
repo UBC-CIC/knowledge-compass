@@ -91,7 +91,7 @@ export type JourneyFeedback = {
 export const KEY_PATTERN = /^[A-Z0-9_]{1,16}$/;
 export const RESERVED_KEYS = ["BOTH", "UNCLEAR", "UNKNOWN", "NONE"];
 export const MIN_PRIORITY = 1;
-export const MAX_PRIORITY = 9;
+export const MAX_PRIORITY = 5;
 
 export const DEFAULT_PROMPT_LIMITS: Record<JourneyPromptField, number> = {
   detective_questions: 4000,
