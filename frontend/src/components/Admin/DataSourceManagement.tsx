@@ -1965,7 +1965,15 @@ export default function DataSourceManagement() {
       });
       return;
     }
-    if (documentUrl.trim() && !/^https?:\/\//i.test(documentUrl.trim())) {
+    if (!documentUrl.trim()) {
+      setUploadStatus({
+        type: "error",
+        message:
+          "Add a public link to this document so families can open it from citations.",
+      });
+      return;
+    }
+    if (!/^https?:\/\//i.test(documentUrl.trim())) {
       setUploadStatus({
         type: "error",
         message: "Document link must start with http:// or https://.",
@@ -3099,19 +3107,24 @@ export default function DataSourceManagement() {
                           className="text-sm font-medium text-gray-900"
                           htmlFor="document-url"
                         >
-                          Link (optional)
+                          Public link (required)
                         </label>
                         <Input
                           id="document-url"
+                          type="url"
+                          required
+                          aria-required="true"
+                          aria-describedby="document-url-help"
                           value={documentUrl}
                           onChange={(e) => setDocumentUrl(e.target.value)}
                           placeholder="https://example.com/handbook.pdf"
                         />
-                        <p className="text-xs text-gray-500">
-                          Used in citations. If left blank, this document won't
-                          have a clickable source link. Re-uploads are matched
-                          by file name, so the link can be added, changed, or
-                          shared with other documents at any time.
+                        <p id="document-url-help" className="text-xs text-gray-500">
+                          A public http(s) link where families can open this
+                          document. It's used as the citation link in chat
+                          answers. Re-uploads are matched by file name, so the
+                          link can be changed or shared with other documents at
+                          any time.
                         </p>
                       </div>
                       {uploadStatus.message && uploadTab === "document" ? (
@@ -3170,7 +3183,7 @@ export default function DataSourceManagement() {
                       <Button
                         className="bg-primary hover:bg-primary/90"
                         onClick={handleDocumentUpload}
-                        disabled={!documentFile || uploading}
+                        disabled={!documentFile || !documentUrl.trim() || uploading}
                       >
                         {uploading ? (
                           <>

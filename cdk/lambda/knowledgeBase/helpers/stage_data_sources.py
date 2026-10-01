@@ -742,11 +742,13 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             400,
             {"error": "document_file_name must end with .pdf, .docx, or .txt"},
         )
-    if document_url and not is_http_url(document_url):
+    # Public users can only open a cited document through this link (uploads
+    # are never served from S3), so it is required.
+    if not document_url or not is_http_url(document_url):
         return _response(
             event,
             400,
-            {"error": "document_url must be a public http(s) URL used for citations"},
+            {"error": "document_url is required and must be a public http(s) URL used for citations"},
         )
 
     try:
@@ -756,11 +758,11 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         return _response(event, 400, {"error": "Uploaded document does not exist in S3"})
 
     source_key = upload_source_key("document", file_name)
-    # Chunks are always stored under the internal key, never the optional link:
-    # the link may be blank, change between uploads, or be shared by two
-    # documents. The link is only shown in citations (sources citation_url).
+    # Chunks are always stored under the internal key, never the link: the
+    # link may change between uploads or be shared by two documents. The link
+    # is only shown in citations (sources citation_url).
     source_url = source_key
-    citation_url = document_url or None
+    citation_url = document_url
     existing = find_existing_upload(
         connection, data_source_type="document", source_key=source_key, file_name=file_name
     )

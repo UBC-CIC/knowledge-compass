@@ -458,6 +458,9 @@ paths:
                   example: uploads/document/1712345678_family-rights-handbook.pdf
                 document_url:
                   type: string
+                  description: >-
+                    Required when type is document. Public http(s) URL where users can
+                    open the document; shown as its citation link.
                   example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
