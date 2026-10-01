@@ -1,7 +1,7 @@
 
 from typing import Optional, Tuple
 import helpers.config as config
-from helpers.journeys import build_detective_block, build_suggestion_block
+from helpers.journeys import build_detective_block, build_journey_list, build_suggestion_block
 from helpers.routing import (
     DETECTIVE,
     PARTIAL,
@@ -122,9 +122,12 @@ def get_current_prompt(
             f"<output_format>\n{output_format}\n</output_format>"
         )
 
-    # Static (cached) block: role + guardrails + language guidelines.
+    # Static (cached) block: role + journey list + guardrails + language
+    # guidelines. The journey list only changes when an admin edits journeys.
+    journey_list = build_journey_list(config.JOURNEY_CATALOG)
+    role_body = f"{config.ROLE}\n\n{journey_list}" if journey_list else config.ROLE
     static_prompt = f"""<role>
-{config.ROLE}
+{role_body}
 </role>
 
 <guardrails>

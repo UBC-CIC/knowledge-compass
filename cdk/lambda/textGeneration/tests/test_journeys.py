@@ -56,7 +56,7 @@ def _custom_catalog():
         detection_signals='"college," "university," "after graduation"',
         detective_questions="1. What options are they considering?",
         guidance="Focus on keeping options open after school.",
-        clusters=(Cluster("P", "Applying to college", "Parent asks about applications.", 2,
+        clusters=(Cluster("P", "Applying to college", "Parent asks about applications.",
                           "Response pattern:\n1. Explain supports at college.", 1),),
         sort_order=3,
     )
@@ -78,15 +78,15 @@ class DefaultCatalogTests(unittest.TestCase):
 class CatalogFromRowsTests(unittest.TestCase):
     def test_groups_rows_and_skips_bad_keys(self):
         rows = [
-            ("J1", "One", "d", "s", 1, "q", "g", "A", "Alpha", "m", 2, 1, "p"),
-            ("J1", "One", "d", "s", 1, "q", "g", "B", "Beta", None, None, 2, None),
-            ("J2", "Two", None, None, 2, None, None, None, None, None, None, None, None),
-            ("bad key", "x", "", "", 3, "", "", None, None, None, None, None, None),
+            ("J1", "One", "d", "s", 1, "q", "g", "A", "Alpha", "m", 1, "p"),
+            ("J1", "One", "d", "s", 1, "q", "g", "B", "Beta", None, 2, None),
+            ("J2", "Two", None, None, 2, None, None, None, None, None, None, None),
+            ("bad key", "x", "", "", 3, "", "", None, None, None, None, None),
         ]
         catalog = catalog_from_rows(rows)
         self.assertEqual([j.key for j in catalog.journeys], ["J1", "J2"])
         self.assertEqual([c.key for c in catalog.journey("J1").clusters], ["A", "B"])
-        self.assertEqual(catalog.journey("J1").clusters[1].priority, 5)
+        self.assertEqual(catalog.journey("J1").clusters[1].matches_when, "")
         self.assertEqual(catalog.journey("J2").clusters, ())
         self.assertEqual(catalog.journey("J2").guidance, "")
 
@@ -127,24 +127,20 @@ class SuggestionBlockTests(unittest.TestCase):
     def test_routed_block_is_much_smaller_and_has_only_routed_clusters(self):
         routed = build_suggestion_block(DEFAULT_CATALOG, _route(journey="J1", situation="G", secondary_situation="F"))
         everything = build_suggestion_block(DEFAULT_CATALOG, None)
-        self.assertIn("SITUATION G — NON-RESPONSE, DENIAL, AND SCHOOL PUSHBACK (priority 2)", routed)
-        self.assertIn("SITUATION F — SUPPORT PLAN IMPLEMENTATION (priority 3)", routed)
+        self.assertIn("SITUATION G — NON-RESPONSE, DENIAL, AND SCHOOL PUSHBACK\n", routed)
+        self.assertIn("SITUATION F — SUPPORT PLAN IMPLEMENTATION\n", routed)
         self.assertIn(DEFAULT_CATALOG.journey("J1").guidance, routed)
         self.assertNotIn("SITUATION C", routed)
         self.assertNotIn("JOURNEY J2", routed)
         self.assertLess(len(routed), len(everything) / 4)
         self.assertTrue(routed.startswith("<journeys>\n") and routed.endswith("\n</journeys>"))
 
-    def test_priority_order_lists_included_clusters(self):
+    def test_no_priority_ranking_is_rendered(self):
         block = build_suggestion_block(DEFAULT_CATALOG, _route(journey="J1", situation="A", secondary_situation="C"))
-        order = block.split("\n\n", 1)[0]
-        self.assertIn("1. C (Responding in the moment)", order)
-        self.assertIn("4. A (Recognizing and understanding the situation)", order)
-        self.assertLess(order.index("1. C"), order.index("4. A"))
-
-    def test_single_cluster_has_no_priority_list(self):
-        block = build_suggestion_block(DEFAULT_CATALOG, _route(journey="J1", situation="C"))
+        self.assertTrue(block.startswith("<journeys>\n===="))
         self.assertNotIn("Priority order", block)
+        self.assertNotIn("(priority", block)
+        self.assertNotIn("priority order", config.SUGGESTION_PHASE_PROMPT)
 
     def test_empty_catalog_gives_no_block(self):
         self.assertEqual(build_suggestion_block(JourneyCatalog(), _route()), "")
@@ -209,8 +205,28 @@ class PromptAssemblyTests(unittest.TestCase):
         with mock.patch.object(config, "JOURNEY_CATALOG", catalog):
             _, _, _, instructions, _ = logic.get_current_prompt(SUGGESTION, 5, None, _route(journey="J3", situation="P"))
         self.assertIn("JOURNEY J3 — POST-SECONDARY PLANNING", instructions)
-        self.assertIn("SITUATION P — APPLYING TO COLLEGE (priority 2)", instructions)
+        self.assertIn("SITUATION P — APPLYING TO COLLEGE\n", instructions)
         self.assertNotIn("JOURNEY J1", instructions)
+
+    def test_role_lists_every_journey_in_both_phases(self):
+        for phase in (DETECTIVE, SUGGESTION):
+            static, _, _, _, _ = logic.get_current_prompt(phase, 0, None, _route(journey="J1", situation="C"))
+            role = static.split("</role>", 1)[0]
+            self.assertIn(config.ROLE, role)
+            self.assertIn("<supported_journeys>\nJ1 — Involuntary partial day attendance: A child", role)
+            self.assertIn("\nJ2 — Transitions and future planning: ", role)
+        self.assertNotIn("JOURNEY 1", config.ROLE)
+
+    def test_journey_list_follows_the_catalog(self):
+        catalog = _custom_catalog()
+        with mock.patch.object(config, "JOURNEY_CATALOG", catalog):
+            static, _, _, _, _ = logic.get_current_prompt(DETECTIVE, 0, None, None)
+        for j in catalog.journeys:
+            self.assertIn(f"{j.key} — {j.name}", static)
+        self.assertEqual(journeys.build_journey_list(JourneyCatalog()), "")
+        with mock.patch.object(config, "JOURNEY_CATALOG", JourneyCatalog()):
+            static, _, _, _, _ = logic.get_current_prompt(DETECTIVE, 0, None, None)
+        self.assertNotIn("<supported_journeys>", static)
 
 
 class CatalogRouterTests(unittest.TestCase):

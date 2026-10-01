@@ -65,15 +65,14 @@ test("validateJourneyInput partial updates", () => {
   assert.equal(jp.validateJourneyInput({ key: "J3", name: "x", is_archived: true }).is_archived, undefined);
 });
 
-test("validateClusterInput checks priority and matches_when", () => {
+test("validateClusterInput checks matches_when and ignores priority", () => {
+  // priority was dropped in migration 026; old clients that still send it are ignored.
   assert.deepEqual(
-    jp.validateClusterInput({ key: "P", name: "Applying", matches_when: "asks about college", priority: "2" }),
-    { key: "P", name: "Applying", matches_when: "asks about college", priority: 2 }
+    jp.validateClusterInput({ key: "P", name: "Applying", matches_when: "asks about college", priority: 2 }),
+    { key: "P", name: "Applying", matches_when: "asks about college" }
   );
   assert.throws(() => jp.validateClusterInput({ key: "P", name: "x" }), /matches_when is required/);
-  for (const priority of [0, 10, 1.5, "high"]) {
-    assert.throws(() => jp.validateClusterInput({ key: "P", name: "x", matches_when: "y", priority }), /priority/);
-  }
+  assert.throws(() => jp.validateClusterInput({ priority: 1 }, { partial: true }), /No fields to update/);
 });
 
 test("parseFeedbackRange", () => {
@@ -89,7 +88,7 @@ test("parseFeedbackRange", () => {
 test("shapeTree nests clusters and versions under their owners", () => {
   const tree = jp.shapeTree(
     [{ id: "j1", key: "J1", name: "One", description: "", detection_signals: "", sort_order: 1, is_archived: false }],
-    [{ id: "c1", journey_id: "j1", key: "A", name: "Alpha", matches_when: "m", priority: 4, sort_order: 1, is_archived: false }],
+    [{ id: "c1", journey_id: "j1", key: "A", name: "Alpha", matches_when: "m", sort_order: 1, is_archived: false }],
     [
       { id: "v2", field: "guidance", journey_id: "j1", cluster_id: null, content: "g2", character_limit: 6000, version: 2, is_active: true },
       { id: "v1", field: "guidance", journey_id: "j1", cluster_id: null, content: "g1", character_limit: 6000, version: 1, is_active: false },

@@ -1605,7 +1605,7 @@ paths:
                     description: >-
                       Journeys (id, key, name, description, detection_signals, sort_order,
                       is_archived, prompts.{detective_questions,guidance}[], clusters[] with
-                      id, key, name, matches_when, priority, sort_order, is_archived,
+                      id, key, name, matches_when, sort_order, is_archived,
                       prompts.response_pattern[]). Each prompt version has id, field,
                       owner_id, content, character_limit, version, is_active,
                       created_by_email, created_at.
@@ -1802,10 +1802,6 @@ paths:
                 matches_when:
                   type: string
                   maxLength: 2000
-                priority:
-                  type: integer
-                  minimum: 1
-                  maximum: 5
                 sort_order:
                   type: integer
                 response_pattern:
@@ -1852,10 +1848,6 @@ paths:
                   type: string
                 matches_when:
                   type: string
-                priority:
-                  type: integer
-                  minimum: 1
-                  maximum: 5
                 sort_order:
                   type: integer
                 is_archived:

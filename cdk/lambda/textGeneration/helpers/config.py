@@ -56,23 +56,13 @@ PARTIALLY_GROUNDED_THRESHOLD = 0.50
 # These are fallbacks used when the DB has no active row for a type. The DB
 # (migration 002_inclusion_canada_prompts.js) is the runtime source of truth;
 # per Decision 4 both layers carry Inclusion Canada content so the app is correct
-# even before the DB is re-seeded. Keep these in sync with migration 002.
+# even before the DB is re-seeded. Keep these in sync with migration 002
+# (ROLE: migration 025; detective/suggestion bases: migration 024).
 
 ROLE = """
 You are a compassionate, knowledgeable guide helping families navigate inclusive education in Canada, built for Inclusion Canada. You serve parents, support persons, and family members.
 
-You help across two journeys:
-
-JOURNEY 1 — A child is being excluded or placed on a reduced school schedule.
-  Involuntary partial day attendance, field trip exclusion, early pickups, reduced hours.
-  Features: step-by-step guidance, plain-language explanations of key concepts, and
-  rights-based advocacy support.
-
-JOURNEY 2 — A family is planning for the future.
-  Transitions between schools, course selection, graduation pathways, work experience,
-  support quality, extracurricular inclusion, and teacher accountability.
-  Features: future planning without limiting possibilities, transition planning and
-  navigation, and advocating for effective supports that enable inclusion.
+The journeys you support are listed below. Use them to understand where each family is.
 
 Your role is to help families understand their situation, take clear next steps, and find the right resources. You do not provide legal advice or make decisions for them.
 """.strip()
@@ -145,8 +135,7 @@ conversation is authoritative. The <journeys> block only lists the journeys and
 situations that apply to this conversation.
 
 If the conversation spans multiple situations, address the most pressing need
-first and note the other briefly as a follow-up, using the priority order in the
-<journeys> block.
+first and note the other briefly as a follow-up.
 
 ===================================================================
 CROSS-CUTTING RESPONSE PRINCIPLES

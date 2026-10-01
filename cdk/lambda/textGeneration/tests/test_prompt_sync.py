@@ -52,13 +52,18 @@ def _migration_022_constants():
     return dict(re.findall(r"const (\w+) = `(.*?)`;", source, re.DOTALL))
 
 
-def _load_024_seed():
+def _load_seed(name):
+    """`exports.seed` of a migration, loaded with node (None without node)."""
     node = shutil.which("node")
     if not node:
         return None
     script = "process.stdout.write(JSON.stringify(require(process.argv[1]).seed))"
-    out = subprocess.run([node, "-e", script, MIGRATION_024], capture_output=True, check=True)
+    out = subprocess.run([node, "-e", script, os.path.join(MIGRATIONS, name)], capture_output=True, check=True)
     return json.loads(out.stdout.decode("utf-8"))
+
+
+def _load_024_seed():
+    return _load_seed(os.path.basename(MIGRATION_024))
 
 
 def _indented(text, prefix="  "):
@@ -134,7 +139,10 @@ class Migration024SyncTests(unittest.TestCase):
 
     def test_base_prompts_match_config(self):
         self.assertEqual(self.seed["detectiveBase"], config.DETECTIVE_PHASE_PROMPT)
-        self.assertEqual(self.seed["suggestionBase"], config.SUGGESTION_PHASE_PROMPT)
+        # Migration 026 then drops the "priority order" reference.
+        old, new = _load_seed("026_drop_cluster_priority.js")["suggestionEdit"]
+        self.assertIn(old, self.seed["suggestionBase"])
+        self.assertEqual(self.seed["suggestionBase"].replace(old, new), config.SUGGESTION_PHASE_PROMPT)
         self.assertNotIn("SITUATION A", config.SUGGESTION_PHASE_PROMPT)
         self.assertNotIn("Journey 1 signals", config.DETECTIVE_PHASE_PROMPT)
 
@@ -155,9 +163,9 @@ class Migration024SyncTests(unittest.TestCase):
             for c in j.clusters:
                 s = clusters[c.key]
                 self.assertEqual(
-                    (s["journey"], s["name"], s["priority"], s["sortOrder"],
+                    (s["journey"], s["name"], s["sortOrder"],
                      s["matchesWhen"], s["responsePattern"]),
-                    (j.key, c.name, c.priority, c.sort_order, c.matches_when, c.response_pattern),
+                    (j.key, c.name, c.sort_order, c.matches_when, c.response_pattern),
                     c.key,
                 )
 
@@ -183,6 +191,15 @@ class Migration024SyncTests(unittest.TestCase):
         partial_022 = _migration_022_constants()["OUTPUT_FORMAT_PARTIAL"]
         edit = next(e for e in self.seed["outputFormatEdits"] if e[1] == "output_format_partial")
         self.assertEqual(partial_022.replace(edit[2], edit[3]), config.OUTPUT_FORMAT_PARTIAL)
+
+
+@unittest.skipIf(shutil.which("node") is None, "node is required to load migration 025")
+class Migration025SyncTests(unittest.TestCase):
+    def test_role_matches_config(self):
+        seed = _load_seed("025_journey_neutral_role.js")
+        self.assertEqual(seed["role"], config.ROLE)
+        self.assertLessEqual(len(seed["role"]), seed["characterLimit"])
+        self.assertNotIn("JOURNEY 1", seed["role"])
 
 
 if __name__ == "__main__":

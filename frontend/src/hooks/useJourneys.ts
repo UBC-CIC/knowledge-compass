@@ -238,7 +238,6 @@ export function useJourneys() {
             key: input.key,
             name: input.name,
             matches_when: input.matches_when,
-            priority: input.priority ?? 5,
             sort_order: input.sort_order ?? journey.clusters.length + 1,
             is_archived: false,
             updated_by_email: DEMO_ADMIN_EMAIL,

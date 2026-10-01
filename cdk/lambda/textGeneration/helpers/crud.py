@@ -227,7 +227,7 @@ def fetch_journey_catalog(db_connection) -> List[Tuple[Any, ...]]:
                     (SELECT v.content FROM journey_prompt_versions v
                       WHERE v.journey_id = j.id AND v.field = 'guidance' AND v.is_active
                       LIMIT 1),
-                    c.key, c.name, c.matches_when, c.priority, c.sort_order,
+                    c.key, c.name, c.matches_when, c.sort_order,
                     (SELECT v.content FROM journey_prompt_versions v
                       WHERE v.cluster_id = c.id AND v.field = 'response_pattern' AND v.is_active
                       LIMIT 1)

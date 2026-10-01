@@ -65,7 +65,6 @@ class Cluster:
     key: str
     name: str
     matches_when: str
-    priority: int
     response_pattern: str
     sort_order: int = 0
 
@@ -118,7 +117,7 @@ def catalog_from_rows(rows: Iterable[Sequence[Any]]) -> JourneyCatalog:
 
       (journey_key, journey_name, description, detection_signals, journey_sort,
        detective_questions, guidance,
-       cluster_key, cluster_name, matches_when, priority, cluster_sort, response_pattern)
+       cluster_key, cluster_name, matches_when, cluster_sort, response_pattern)
 
     Cluster columns are NULL for a journey without clusters (LEFT JOIN).
     Rows with invalid keys are skipped.
@@ -128,7 +127,7 @@ def catalog_from_rows(rows: Iterable[Sequence[Any]]) -> JourneyCatalog:
     clusters = {}
     for row in rows:
         (j_key, j_name, j_desc, j_signals, j_sort, j_questions, j_guidance,
-         c_key, c_name, c_matches, c_priority, c_sort, c_pattern) = row
+         c_key, c_name, c_matches, c_sort, c_pattern) = row
         if not is_valid_key(j_key):
             continue
         if j_key not in heads:
@@ -148,7 +147,6 @@ def catalog_from_rows(rows: Iterable[Sequence[Any]]) -> JourneyCatalog:
                 key=c_key,
                 name=c_name or c_key,
                 matches_when=c_matches or "",
-                priority=int(c_priority) if c_priority is not None else 5,
                 response_pattern=c_pattern or "",
                 sort_order=int(c_sort or 0),
             ))
@@ -240,7 +238,7 @@ def _journey_header(journey: Journey) -> str:
 
 
 def render_cluster(cluster: Cluster) -> str:
-    parts = [f"SITUATION {cluster.key} — {cluster.name.upper()} (priority {cluster.priority})"]
+    parts = [f"SITUATION {cluster.key} — {cluster.name.upper()}"]
     if cluster.matches_when.strip():
         parts.append(f"Matches when: {_one_line(cluster.matches_when)}")
     text = "\n".join(parts)
@@ -249,26 +247,12 @@ def render_cluster(cluster: Cluster) -> str:
     return text
 
 
-def _priority_order(clusters: List[Cluster]) -> str:
-    by_priority = {}
-    for c in clusters:
-        by_priority.setdefault(c.priority, []).append(c)
-    lines = ["Priority order for the situations below (1 is the most pressing):"]
-    for p in sorted(by_priority):
-        names = ", ".join(f"{c.key} ({c.name})" for c in by_priority[p])
-        lines.append(f"  {p}. {names}")
-    return "\n".join(lines)
-
-
 def build_suggestion_block(catalog: JourneyCatalog, route: Any) -> str:
     """<journeys> block for SUGGESTION/PARTIAL turns. Empty if the catalog is."""
     selection = select_for_route(catalog, route)
     if not selection:
         return ""
-    included = [c for _, clusters in selection for c in clusters]
     parts = []
-    if len(included) > 1:
-        parts.append(_priority_order(included))
     for journey, clusters in selection:
         section = [_journey_header(journey)]
         if journey.guidance.strip():
@@ -276,6 +260,23 @@ def build_suggestion_block(catalog: JourneyCatalog, route: Any) -> str:
         section.extend(render_cluster(c) for c in clusters)
         parts.append("\n\n".join(section))
     return "<journeys>\n" + "\n\n".join(parts) + "\n</journeys>"
+
+
+def build_journey_list(catalog: JourneyCatalog) -> str:
+    """
+    <supported_journeys> block appended to the role on every turn: one line
+    per active journey (key, name and description). Route-independent, so the
+    static prompt block stays cacheable. Empty if the catalog is.
+    """
+    if catalog.is_empty:
+        return ""
+    lines = []
+    for journey in catalog.journeys:
+        line = f"{journey.key} — {journey.name}"
+        if journey.description.strip():
+            line += f": {_one_line(journey.description)}"
+        lines.append(line)
+    return "<supported_journeys>\n" + "\n".join(lines) + "\n</supported_journeys>"
 
 
 def build_detective_block(catalog: JourneyCatalog, route: Any) -> str:
@@ -346,7 +347,6 @@ of key concepts, and rights-based advocacy support.
             Cluster(
                 key="A",
                 name="Recognizing and understanding the situation",
-                priority=4,
                 sort_order=1,
                 matches_when=_t("""
 Parent describes a child being sent home early, attending only
@@ -386,7 +386,6 @@ progress, social participation, belonging, and skill development.
             Cluster(
                 key="B",
                 name="Understanding the school's reason",
-                priority=4,
                 sort_order=2,
                 matches_when=_t("""
 Parent wants to know why their child was sent home, excluded
@@ -413,7 +412,6 @@ asking what barriers were identified and what accommodations were considered.
             Cluster(
                 key="C",
                 name="Responding in the moment",
-                priority=1,
                 sort_order=3,
                 matches_when=_t("""
 Parent just received a call to pick up their child, or the
@@ -433,7 +431,6 @@ Response pattern:
             Cluster(
                 key="D",
                 name="Documentation and evidence gathering",
-                priority=3,
                 sort_order=4,
                 matches_when=_t("""
 Parent needs to request the school's decision in writing,
@@ -461,7 +458,6 @@ Response pattern:
             Cluster(
                 key="E",
                 name="Preparing for and navigating school meetings",
-                priority=3,
                 sort_order=5,
                 matches_when=_t("""
 Parent has an upcoming meeting, wants to know what to bring,
@@ -484,7 +480,6 @@ Response pattern:
             Cluster(
                 key="F",
                 name="Support plan implementation",
-                priority=3,
                 sort_order=6,
                 matches_when=_t("""
 Parent believes a support plan, IEP, behaviour plan, or
@@ -508,7 +503,6 @@ Response pattern:
             Cluster(
                 key="G",
                 name="Non-response, denial, and school pushback",
-                priority=2,
                 sort_order=7,
                 matches_when=_t("""
 Parent has not received a response, received a denial, got a
@@ -546,7 +540,6 @@ Understand the reason -> Clarify the decision -> Explore options -> Determine ne
             Cluster(
                 key="H",
                 name="Escalation and appeals",
-                priority=2,
                 sort_order=8,
                 matches_when=_t("""
 Parent has tried multiple discussions without progress, wants
@@ -573,7 +566,6 @@ Response pattern:
             Cluster(
                 key="I",
                 name="Rights, concepts, and advocacy frameworks",
-                priority=4,
                 sort_order=9,
                 matches_when=_t("""
 Parent asks about their child's rights, inclusive education,
@@ -626,7 +618,6 @@ but whether they are included in the opportunities that make up school life."
             Cluster(
                 key="J",
                 name="Finding support and getting involved",
-                priority=5,
                 sort_order=10,
                 matches_when=_t("""
 Parent asks who can help them, wants support navigating the
@@ -680,7 +671,6 @@ that enable inclusion.
             Cluster(
                 key="K",
                 name="Course selection and keeping options open",
-                priority=5,
                 sort_order=1,
                 matches_when=_t("""
 Parent asks about course selection, keeping future options
@@ -708,7 +698,6 @@ Key principle: "Do not make today's decisions based solely on today's challenges
             Cluster(
                 key="L",
                 name="Transition planning and navigation",
-                priority=5,
                 sort_order=2,
                 matches_when=_t("""
 Parent asks about an upcoming transition, what to expect,
@@ -759,7 +748,6 @@ opportunities are lost."
             Cluster(
                 key="M",
                 name="Meaningful learning and quality education",
-                priority=5,
                 sort_order=3,
                 matches_when=_t("""
 Parent asks about learning quality, whether their child is
@@ -793,7 +781,6 @@ Key reframe: "Credits = success" to "Meaningful learning = success"
             Cluster(
                 key="N",
                 name="Support quality and EA advocacy",
-                priority=5,
                 sort_order=4,
                 matches_when=_t("""
 Parent asks about available supports, whether supports are
@@ -838,7 +825,6 @@ the opportunities they create."
             Cluster(
                 key="O",
                 name="Extracurricular and community inclusion",
-                priority=5,
                 sort_order=5,
                 matches_when=_t("""
 Parent asks about field trips, clubs, sports, school events,

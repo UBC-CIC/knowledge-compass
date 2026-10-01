@@ -18,7 +18,6 @@ export type JourneyCluster = {
   key: string;
   name: string;
   matches_when: string;
-  priority: number;
   sort_order: number;
   is_archived: boolean;
   updated_at?: string;
@@ -61,13 +60,12 @@ export type ClusterInput = {
   key: string;
   name: string;
   matches_when: string;
-  priority?: number;
   sort_order?: number;
   response_pattern?: string;
 };
 
 export type ClusterPatch = Partial<
-  Pick<JourneyCluster, "name" | "matches_when" | "priority" | "sort_order" | "is_archived">
+  Pick<JourneyCluster, "name" | "matches_when" | "sort_order" | "is_archived">
 >;
 
 export type FeedbackCount = {
@@ -90,8 +88,6 @@ export type JourneyFeedback = {
 // textGeneration/helpers/journeys.py.
 export const KEY_PATTERN = /^[A-Z0-9_]{1,16}$/;
 export const RESERVED_KEYS = ["BOTH", "UNCLEAR", "UNKNOWN", "NONE"];
-export const MIN_PRIORITY = 1;
-export const MAX_PRIORITY = 5;
 
 export const DEFAULT_PROMPT_LIMITS: Record<JourneyPromptField, number> = {
   detective_questions: 4000,

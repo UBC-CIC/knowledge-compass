@@ -3,7 +3,8 @@
  *
  * Tables (migration 024):
  *   journeys                 key, name, description, detection_signals, sort_order, is_archived
- *   journey_clusters         journey_id, key, name, matches_when, priority, sort_order, is_archived
+ *   journey_clusters         journey_id, key, name, matches_when, sort_order, is_archived
+ *                            (priority was dropped in migration 026)
  *   journey_prompt_versions  versioned prompt text, one active version per (field, owner)
  *                              detective_questions, guidance -> journey_id
  *                              response_pattern              -> cluster_id
@@ -42,9 +43,6 @@ const TEXT_LIMITS = {
   matches_when: 2000,
 };
 
-const MIN_PRIORITY = 1;
-// Urgency 1-5 in the admin UI (the DB constraint allows up to 9).
-const MAX_PRIORITY = 5;
 const MAX_SORT_ORDER = 1000;
 const MAX_FEEDBACK_DAYS = 365;
 
@@ -131,7 +129,6 @@ function validateClusterInput(body, { partial = false } = {}) {
     key: partial ? undefined : validateKey(body.key),
     name: cleanText(body.name, "name", { required: !partial }),
     matches_when: cleanText(body.matches_when, "matches_when", { required: !partial }),
-    priority: cleanInt(body.priority, "priority", MIN_PRIORITY, MAX_PRIORITY),
     sort_order: cleanInt(body.sort_order, "sort_order", 0, MAX_SORT_ORDER),
     is_archived: partial ? cleanBool(body.is_archived, "is_archived") : undefined,
   });
@@ -210,7 +207,6 @@ function shapeTree(journeyRows, clusterRows, versionRows) {
       key: c.key,
       name: c.name,
       matches_when: c.matches_when,
-      priority: c.priority,
       sort_order: c.sort_order,
       is_archived: c.is_archived,
       updated_at: c.updated_at,
@@ -515,9 +511,9 @@ async function route(sql, event, routeKey) {
           throw new InputError(`A situation with key ${input.key} already exists`, 409);
         }
         const [row] = await tx`
-          INSERT INTO journey_clusters (journey_id, key, name, matches_when, priority, sort_order, updated_by)
+          INSERT INTO journey_clusters (journey_id, key, name, matches_when, sort_order, updated_by)
           VALUES (${journeyId}, ${input.key}, ${input.name}, ${input.matches_when},
-                  ${input.priority ?? 5}, ${input.sort_order ?? 0}, ${adminId})
+                  ${input.sort_order ?? 0}, ${adminId})
           RETURNING id
         `;
         if (pattern) await insertVersion(tx, "response_pattern", row.id, pattern, adminId);
