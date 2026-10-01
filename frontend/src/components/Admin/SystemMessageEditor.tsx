@@ -1,14 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Bot,
-  ChevronLeft,
-  ChevronRight,
-  CheckCircle2,
-  Save,
-  Trash2,
-  Power,
-  Map,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { Map } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -17,15 +8,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import VersionedPromptEditor from "@/components/Admin/VersionedPromptEditor";
+import { sortVersions, type PromptVersion } from "@/lib/promptVersions";
 
 export type SystemMessageType =
   | "system_role"
@@ -50,16 +35,9 @@ export type MessagePlacement =
   | "output_format_partial"
   | "ui_only";
 
-export type SystemMessageVersion = {
-  id: string;
+export type SystemMessageVersion = PromptVersion & {
   type: SystemMessageType;
-  content: string;
-  character_limit: number;
-  version: number;
-  is_active: boolean;
   affects_text_generation: boolean;
-  created_by_email?: string | null;
-  created_at?: string;
 };
 
 type Props = {
@@ -82,7 +60,9 @@ type Props = {
 type PromptPhase = "DETECTIVE" | "SUGGESTION";
 
 // Mirrors textGeneration/helpers/logic.py + chat.py: a static system block,
-// then the phase-specific block, then the retrieved knowledge base context.
+// then the phase-specific block (shared base prompt + the routed journey and
+// situation prompts from the Journeys tab), then the retrieved knowledge base
+// context.
 const STACK_ROWS: Array<{
   key: string;
   title: (selectedPhase: PromptPhase) => string;
@@ -106,10 +86,20 @@ const STACK_ROWS: Array<{
   {
     key: "phase",
     title: (selectedPhase) =>
-      selectedPhase === "DETECTIVE" ? "Detective Phase Prompt" : "Suggestion Phase Prompt",
+      selectedPhase === "DETECTIVE"
+        ? "Detective Phase Prompt (shared base)"
+        : "Suggestion Phase Prompt (shared base)",
     isActive: (placement, selectedPhase) =>
       (placement === "phase_detective" && selectedPhase === "DETECTIVE") ||
       (placement === "phase_suggestion" && selectedPhase === "SUGGESTION"),
+  },
+  {
+    key: "journeys",
+    title: (selectedPhase) =>
+      selectedPhase === "DETECTIVE"
+        ? "Journey signals and detective questions (Journeys tab)"
+        : "Routed journey guidance and situation patterns (Journeys tab)",
+    isActive: () => false,
   },
   {
     key: "output_format",
@@ -136,13 +126,6 @@ const PHASE_ONLY_PLACEMENTS: Partial<Record<MessagePlacement, PromptPhase>> = {
   output_format_suggestion: "SUGGESTION",
   output_format_partial: "SUGGESTION",
 };
-
-function formatDate(iso?: string) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
 
 function nextVersionNumber(list: SystemMessageVersion[]) {
   const maxV = list.reduce((m, v) => Math.max(m, v.version ?? 0), 0);
@@ -219,31 +202,7 @@ export default function SystemMessageEditor({
   onDelete,
   onActivate,
 }: Props) {
-  const sorted = useMemo(() => {
-    // Active first, then version desc, then created_at desc
-    return [...versions].sort((a, b) => {
-      if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
-      if ((b.version ?? 0) !== (a.version ?? 0)) return (b.version ?? 0) - (a.version ?? 0);
-      const ad = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const bd = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return bd - ad;
-    });
-  }, [versions]);
-
-  const [idx, setIdx] = useState(0);
-  const current = sorted[idx];
-
-  // draft content for the textarea
-  const [draft, setDraft] = useState(current?.content ?? "");
-  const [isDirty, setIsDirty] = useState(false);
-
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  const [activating, setActivating] = useState(false);
+  const [current, setCurrent] = useState<SystemMessageVersion | undefined>();
 
   const [placementOpen, setPlacementOpen] = useState(false);
   const onlyPhase = PHASE_ONLY_PLACEMENTS[placement];
@@ -251,57 +210,26 @@ export default function SystemMessageEditor({
     onlyPhase ?? "DETECTIVE"
   );
 
-  // character limit
-  const characterLimit = current?.character_limit ?? 700;
-  const currentLength = draft.length;
-  const remainingCharacters = characterLimit - currentLength;
-  const isOverLimit = currentLength > characterLimit;
-
-  useEffect(() => {
-    setDraft(current?.content ?? "");
-    setIsDirty(false);
-    setSaveError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, current?.id]);
-
   useEffect(() => {
     if (onlyPhase) setPlacementPhase(onlyPhase);
   }, [onlyPhase]);
 
-  const canPrev = idx > 0;
-  const canNext = idx < sorted.length - 1;
-
-  // Only allow edits when viewing the active version
-  const canEdit = !!current?.is_active;
-
-  const handleSave = async () => {
-    const trimmed = (draft ?? "").trim();
-
-    if (!trimmed) return;
-    if (trimmed.length > characterLimit) {
-      setSaveError(`Message exceeds the ${characterLimit}-character limit.`);
-      return;
-    }
-
-    setSaving(true);
-    setSaveError(null);
-
+  const handleSave = async (content: string) => {
     try {
       // should return the newly created active version
-      const created = await onSave(type, trimmed);
-
+      const created = await onSave(type, content);
       onCreateVersion(type, created);
-      setIdx(0);
-      setIsDirty(false);
     } catch (e) {
       console.error(e);
 
       // fallback
+      const sorted = sortVersions(versions);
+      const latest = sorted[0];
       const localVersion: SystemMessageVersion = {
         id: `local-${type}-v${nextVersionNumber(sorted)}-${Date.now()}`,
         type,
-        content: trimmed,
-        character_limit: current?.character_limit ?? 700,
+        content,
+        character_limit: latest?.character_limit ?? 700,
         version: nextVersionNumber(sorted),
         is_active: true,
         affects_text_generation: defaultAffectsTextGeneration(type),
@@ -310,310 +238,51 @@ export default function SystemMessageEditor({
       };
 
       onCreateVersion(type, localVersion);
-      setIdx(0);
-      setIsDirty(false);
-
-      setSaveError("Saved locally (backend save failed).");
-    } finally {
-      setSaving(false);
+      return { notice: "Saved locally (backend save failed)." };
     }
   };
 
-  const handleDelete = async () => {
-    if (!current?.id) return;
-    if (current.is_active) return;
-
-    setDeleting(true);
-    setSaveError(null);
-
-    try {
-      await onDelete(type, current.id);
-
-      // Remove from parent state
-      onDeleteVersion(type, current.id);
-
-      // Move index safely after deletion
-      setIdx((prev) => {
-        const nextLength = Math.max(sorted.length - 1, 0);
-        if (nextLength === 0) return 0;
-        return Math.min(prev, nextLength - 1);
-      });
-
-      setDeleteOpen(false);
-    } catch (e) {
-      console.error(e);
-      setSaveError("Failed to delete version.");
-    } finally {
-      setDeleting(false);
-    }
+  const handleDelete = async (versionId: string) => {
+    await onDelete(type, versionId);
+    // Remove from parent state
+    onDeleteVersion(type, versionId);
   };
 
-  const handleActivate = async () => {
-    if (!current?.id) return;
-    if (current.is_active) return;
-
-    setActivating(true);
-    setSaveError(null);
-
-    try {
-      await onActivate(type, current.id);
-
-      // Update parent-local versions state so selected version is active
-      onActivateVersion(type, current.id);
-    } catch (e) {
-      console.error(e);
-      setSaveError("Failed to activate version.");
-    } finally {
-      setActivating(false);
-    }
+  const handleActivate = async (versionId: string) => {
+    await onActivate(type, versionId);
+    // Update parent-local versions state so selected version is active
+    onActivateVersion(type, versionId);
   };
 
   return (
-    <Card className="border-gray-200 shadow-sm w-full">
-      <CardHeader className="space-y-2">
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-          <div className="space-y-2">
-            <CardTitle className="flex items-center gap-2">
-              <Bot className="h-5 w-5 text-primary" />
-              {title}
-            </CardTitle>
-
-            {description ? <CardDescription>{description}</CardDescription> : null}
-          </div>
-
+    <>
+      <VersionedPromptEditor<SystemMessageVersion>
+        title={title}
+        label={title}
+        description={description}
+        versions={versions}
+        onSave={handleSave}
+        onDelete={handleDelete}
+        onActivate={handleActivate}
+        onCurrentChange={setCurrent}
+        headerAction={
           <Button
             type="button"
             variant="outline"
             onClick={() => setPlacementOpen(true)}
             className="shrink-0"
           >
-            <Map className="mr-2 h-4 w-4" />
+            <Map className="mr-2 h-4 w-4" aria-hidden="true" />
             Where does this go?
           </Button>
-        </div>
-
-        <div className="flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIdx((i) => Math.max(0, i - 1))}
-              disabled={!canPrev}
-              className="h-8"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Prev
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIdx((i) => Math.min(sorted.length - 1, i + 1))}
-              disabled={!canNext}
-              className="h-8"
-            >
-              Next
-              <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
-
-          <div className="text-xs text-gray-500">
-            This is version{" "}
-            <span className="font-medium text-gray-700">{current?.version ?? 1}</span>{" "}
-            and you have a total of{" "}
-            <span className="font-medium text-gray-700">{sorted.length}</span>{" "}
-            version{sorted.length > 1 ? "s " : " "}to choose from
-          </div>
-        </div>
-
-        {/* Mini “side-scroll” chips */}
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {sorted.map((v, i) => (
-            <button
-              key={v.id}
-              type="button"
-              onClick={() => setIdx(i)}
-              className={[
-                "shrink-0 rounded-full border px-3 py-1 text-xs transition",
-                i === idx
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50",
-              ].join(" ")}
-              title={`v${v.version}${v.is_active ? " (active)" : ""}`}
-            >
-              v{v.version}
-              {v.is_active ? (
-                <CheckCircle2 className="inline-block h-3.5 w-3.5 ml-1 text-green-600" />
-              ) : null}
-            </button>
-          ))}
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        {/* Metadata row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-          <div className="rounded-lg border border-gray-200 p-3 bg-gray-50">
-            <Label className="text-gray-500">Active</Label>
-            <div className="mt-1 font-medium text-gray-800">
-              {current?.is_active ? "Yes" : "No"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-gray-200 p-3 bg-gray-50">
-            <Label className="text-gray-500">Created by</Label>
-            <div className="mt-1 font-medium text-gray-800">
-              {current?.created_by_email ?? "—"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-gray-200 p-3 bg-gray-50">
-            <Label className="text-gray-500">Created at</Label>
-            <div className="mt-1 font-medium text-gray-800">
-              {formatDate(current?.created_at)}
-            </div>
-          </div>
-        </div>
-
-        {/* Content editor */}
-        <div className="space-y-2">
-          <Label>Message content</Label>
-
-          <div className="space-y-2">
-            <textarea
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setIsDirty(true);
-                if (saveError) setSaveError(null);
-              }}
-              readOnly={!canEdit}
-              className={[
-                "flex min-h-[240px] w-full rounded-md border px-3 py-2 text-sm ring-offset-background font-mono",
-                isOverLimit ? "border-red-300 focus-visible:ring-red-200" : "border-input",
-                !canEdit ? "opacity-70 cursor-not-allowed bg-background" : "bg-background",
-              ].join(" ")}
-            />
-
-            <div className="flex items-center justify-between text-xs">
-              <div>
-                {isOverLimit ? (
-                  <span className="text-red-600 font-medium">
-                    Exceeds limit by {Math.abs(remainingCharacters)} character{Math.abs(remainingCharacters) === 1 ? "" : "s"}.
-                  </span>
-                ) : (
-                  <span className="text-gray-500">
-                    Limit: {characterLimit} characters
-                  </span>
-                )}
-              </div>
-
-              <div className={isOverLimit ? "text-red-600 font-medium" : "text-gray-500"}>
-                {currentLength} / {characterLimit}
-              </div>
-            </div>
-          </div>
-
-          {saveError ? (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              {saveError}
-            </p>
-          ) : null}
-
-          {!canEdit ? (
-            <p className="text-xs text-gray-500">
-              Only the active version can be edited. To change history, create a new version via Save.
-            </p>
-          ) : (
-            <p className="text-xs text-gray-500">
-              Saving creates a new version and makes it active (rollback-safe).
-            </p>
-          )}
-        </div>
-
-        {/* Save and Delete buttons */}
-        <div className="pt-2 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            onClick={handleSave}
-            disabled={
-              saving ||
-              deleting ||
-              !canEdit ||
-              !isDirty ||
-              !(draft ?? "").trim() ||
-              isOverLimit
-            }
-            className="bg-primary hover:bg-primary/90"
-          >
-            <Save className="mr-2 h-4 w-4" />
-            {saving ? "Saving..." : "Save New Version"}
-          </Button>
-
-          {!current?.is_active ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleActivate}
-              disabled={saving || deleting || activating || !current?.id}
-              className="border-green-200 text-green-700 hover:bg-green-50 hover:text-green-800"
-            >
-              <Power className="mr-2 h-4 w-4" />
-              {activating ? "Activating..." : "Activate Version"}
-            </Button>
-          ) : null}
-
-          {!current?.is_active ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setDeleteOpen(true)}
-              disabled={saving || deleting || activating || !current?.id}
-              className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete Version
-            </Button>
-          ) : null}
-        </div>
-      </CardContent>
-
-      <Dialog open={deleteOpen} onOpenChange={(open) => !deleting && setDeleteOpen(open)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Are you sure?</DialogTitle>
-            <DialogDescription>
-              This will permanently remove version{" "}
-              <span className="font-medium">v{current?.version ?? "?"}</span> of{" "}
-              <span className="font-medium">{title}</span>.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setDeleteOpen(false)}
-              disabled={deleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="bg-red-600 hover:bg-red-700 text-white"
-            >
-              {deleting ? "Deleting..." : "Yes, Delete"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        }
+      />
 
       <Dialog open={placementOpen} onOpenChange={setPlacementOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Map className="h-5 w-5 text-primary" />
+              <Map className="h-5 w-5 text-primary" aria-hidden="true" />
               Where does this go?
             </DialogTitle>
             <DialogDescription>
@@ -691,6 +360,6 @@ export default function SystemMessageEditor({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </Card>
+    </>
   );
 }

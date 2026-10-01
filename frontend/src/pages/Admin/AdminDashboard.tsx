@@ -3,17 +3,16 @@ import { useNavigate } from "react-router";
 import { getCurrentUser } from "aws-amplify/auth";
 import { AuthService } from "@/functions/authService";
 import BrandMark from "@/components/BrandMark";
-import AdminSidebar from "@/components/Admin/AdminSidebar";
+import AdminSidebar, { type AdminView } from "@/components/Admin/AdminSidebar";
 import DataSourceManagement from "@/components/Admin/DataSourceManagement";
 import Analytics from "@/components/Admin/Analytics";
+import JourneyManagement from "@/components/Admin/JourneyManagement";
 import SystemSettings from "@/components/Admin/SystemSettings";
 import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const [activeView, setActiveView] = useState<
-    "dashboard" | "analytics" | "system-settings"
-  >("dashboard");
+  const [activeView, setActiveView] = useState<AdminView>("dashboard");
   const [adminEmail, setAdminEmail] = useState("Administrator");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -78,6 +77,7 @@ export default function AdminDashboard() {
               [
                 ["dashboard", "Overview"],
                 ["analytics", "Analytics"],
+                ["journeys", "Journeys"],
                 ["system-settings", "Settings"],
               ] as const
             ).map(([key, label]) => (
@@ -85,6 +85,7 @@ export default function AdminDashboard() {
                 key={key}
                 type="button"
                 onClick={() => setActiveView(key)}
+                aria-current={activeView === key ? "page" : undefined}
                 className={`min-h-11 rounded-[10px] border px-3 text-sm font-semibold ${
                   activeView === key
                     ? "border-primary bg-[oklch(0.96_0.02_268)] text-primary"
@@ -97,6 +98,7 @@ export default function AdminDashboard() {
           </div>
           {activeView === "dashboard" && <DataSourceManagement />}
           {activeView === "analytics" && <Analytics />}
+          {activeView === "journeys" && <JourneyManagement />}
           {activeView === "system-settings" && <SystemSettings />}
         </main>
       </div>

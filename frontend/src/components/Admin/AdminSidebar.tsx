@@ -1,6 +1,8 @@
+export type AdminView = "dashboard" | "analytics" | "journeys" | "system-settings";
+
 type AdminSidebarProps = {
-  activeView: "dashboard" | "analytics" | "system-settings";
-  onViewChange: (view: "dashboard" | "analytics" | "system-settings") => void;
+  activeView: AdminView;
+  onViewChange: (view: AdminView) => void;
 };
 
 const NAV_ITEMS: Array<{
@@ -10,6 +12,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { key: "dashboard", label: "Overview", hint: "Usage and data sources" },
   { key: "analytics", label: "Analytics", hint: "Trends over time" },
+  { key: "journeys", label: "Journeys", hint: "Journey and cluster prompts" },
   { key: "system-settings", label: "Assistant settings", hint: "Limits and wording" },
 ];
 
@@ -29,6 +32,7 @@ export default function AdminSidebar({
             <button
               key={item.key}
               type="button"
+              aria-current={active ? "page" : undefined}
               onClick={() => onViewChange(item.key)}
               className={`min-h-14 w-full rounded-[10px] px-3 py-2.5 text-left ${
                 active

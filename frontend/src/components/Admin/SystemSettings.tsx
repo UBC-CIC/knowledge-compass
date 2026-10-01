@@ -96,15 +96,16 @@ const MESSAGE_META: Record<SystemMessageType, MessageMeta> = {
     placement: "language_guidelines",
   },
   detective_phase_prompt: {
-    title: "Detective Phase Prompt",
+    title: "Detective Phase Prompt (shared base)",
     description:
-      "Instructions for asking one question at a time to identify the family's journey and situation. Keep the {exchange_count} and {readiness_note} placeholders ({min_exchanges} and {may_suggest} are still supported)",
+      "Shared rules for asking one question at a time, used for every journey. Each journey's signals and questions are edited on the Journeys tab and added after this. Keep the {exchange_count} and {readiness_note} placeholders ({min_exchanges} and {may_suggest} are still supported)",
     affectsTextGeneration: true,
     placement: "phase_detective",
   },
   suggestion_phase_prompt: {
-    title: "Suggestion Phase Prompt",
-    description: "Journey stages and the guidance to give once the family's situation is clear",
+    title: "Suggestion Phase Prompt (shared base)",
+    description:
+      "Shared response principles for every guidance reply. The routed journey's guidance and situation patterns are edited on the Journeys tab and added after this",
     affectsTextGeneration: true,
     placement: "phase_suggestion",
   },
@@ -175,11 +176,22 @@ const PROMPT_STACK_ORDER: Array<{
   },
   {
     key: "phase",
-    title: (phase) => (phase === "DETECTIVE" ? "Detective Phase Prompt" : "Suggestion Phase Prompt"),
+    title: (phase) =>
+      phase === "DETECTIVE"
+        ? "Detective Phase Prompt (shared base)"
+        : "Suggestion Phase Prompt (shared base)",
     getPreview: (phase, messages) =>
       phase === "DETECTIVE"
         ? getActiveVersion(messages.detective_phase_prompt)?.content ?? ""
         : getActiveVersion(messages.suggestion_phase_prompt)?.content ?? "",
+  },
+  {
+    key: "journeys",
+    title: () => "Journey & situation prompts (Journeys tab)",
+    getPreview: (phase) =>
+      phase === "DETECTIVE"
+        ? "Every active journey's description, signals and situation list, plus the detective questions for the journey the router picked (all journeys while it is unclear)."
+        : "Only the routed journey's guidance and the response patterns of the one or two situations the router picked (everything while it is unclear).",
   },
   {
     key: "output_format",
@@ -243,7 +255,7 @@ function PromptAssemblyCard({
           How a reply is assembled
         </CardTitle>
         <CardDescription>
-          Blocks are stacked in this fixed order. Role, guardrails and language guidelines are always sent; the phase and output format blocks switch when the conversation moves to the suggestion phase.
+          Blocks are stacked in this fixed order. Role, guardrails and language guidelines are always sent; the phase, journey and output format blocks switch when the conversation moves to the suggestion phase.
         </CardDescription>
       </CardHeader>
 

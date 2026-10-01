@@ -9,7 +9,7 @@ from helpers.crud import (
     get_session_context, save_routing_state
 )
 from helpers.logic import get_current_prompt
-from helpers.routing import RoutingState, decide_phase, route_turn
+from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
 from helpers.retrieval import retrieve_from_pgvector, to_public_source
 from helpers.citations import parse_cited_indices, select_cited_sources, strip_internal_links
@@ -131,6 +131,7 @@ def _prepare_conversation(
         previous_state=journey_state,
         llm_region=llm_region,
         model_id=config.HAIKU_ARN,
+        catalog=config.JOURNEY_CATALOG,
     )
     search_query = route.search_query if route else query
 
@@ -498,7 +499,13 @@ def get_response(
     # generation does not count as a question asked or guidance given.
     if answer_text and not answer_text.startswith("I encountered an error"):
         try:
-            next_state = routing_ctx["state"].advance(routing_ctx["phase"])
+            # Journey/situation keys only (no text) for feedback analytics.
+            journeys_touched, clusters_touched = touched_keys(
+                routing_ctx["route"], routing_ctx["phase"], config.JOURNEY_CATALOG
+            )
+            next_state = routing_ctx["state"].advance(
+                routing_ctx["phase"], journeys_touched, clusters_touched
+            )
             save_routing_state(
                 db_connection,
                 chat_session_id,

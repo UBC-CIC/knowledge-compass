@@ -207,6 +207,46 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
     return config
 
 
+def fetch_journey_catalog(db_connection) -> List[Tuple[Any, ...]]:
+    """
+    Active (non-archived) journeys and clusters with their active prompt
+    versions, one row per cluster (journeys without clusters appear once with
+    NULL cluster columns). Row shape matches journeys.catalog_from_rows.
+
+    Returns [] on any error (for example before migration 024 has run). The
+    transaction is rolled back so later queries on the shared connection work.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    j.key, j.name, j.description, j.detection_signals, j.sort_order,
+                    (SELECT v.content FROM journey_prompt_versions v
+                      WHERE v.journey_id = j.id AND v.field = 'detective_questions' AND v.is_active
+                      LIMIT 1),
+                    (SELECT v.content FROM journey_prompt_versions v
+                      WHERE v.journey_id = j.id AND v.field = 'guidance' AND v.is_active
+                      LIMIT 1),
+                    c.key, c.name, c.matches_when, c.priority, c.sort_order,
+                    (SELECT v.content FROM journey_prompt_versions v
+                      WHERE v.cluster_id = c.id AND v.field = 'response_pattern' AND v.is_active
+                      LIMIT 1)
+                FROM journeys j
+                LEFT JOIN journey_clusters c
+                       ON c.journey_id = j.id AND c.is_archived = false
+                WHERE j.is_archived = false
+                ORDER BY j.sort_order, j.key, c.sort_order, c.key
+            """)
+            return list(cur.fetchall())
+    except Exception as e:
+        logger.error(f"fetch_journey_catalog failed: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        return []
+
+
 def get_journey_state(db_connection, chat_session_id: str) -> Optional[str]:
     """
     Retrieve the journey_state string stored in chat_sessions.metadata.

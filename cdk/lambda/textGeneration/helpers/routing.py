@@ -21,9 +21,20 @@ the router's free-text `info_needed`. Only enum-valued routing fields are logged
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import boto3
+
+from helpers.journeys import (
+    DEFAULT_CATALOG,
+    JOURNEY_BOTH,
+    JOURNEY_UNCLEAR,
+    SITUATION_NONE,
+    SITUATION_UNKNOWN,
+    JourneyCatalog,
+    is_valid_key,
+    seen_keys,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -43,8 +54,13 @@ ROUTING_MODE_DYNAMIC = "dynamic"
 
 MODES = frozenset({"ASK", "ANSWER"})
 CONFIDENCE_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
-JOURNEYS = frozenset({"J1", "J2", "BOTH", "UNCLEAR"})
-SITUATIONS = frozenset("ABCDEFGHIJKLMNO")
+# Journey and situation keys come from the admin-managed catalog
+# (helpers/journeys.py); these are the default catalog's values.
+JOURNEYS = frozenset(DEFAULT_CATALOG.journey_keys | {JOURNEY_BOTH, JOURNEY_UNCLEAR})
+SITUATIONS = frozenset(DEFAULT_CATALOG.cluster_keys)
+
+# Per-session cap on recorded journey/situation keys (feedback analytics).
+MAX_SEEN_KEYS = 20
 
 MAX_SEARCH_QUERY_CHARS = 300
 MAX_INFO_NEEDED_CHARS = 200
@@ -90,12 +106,49 @@ class Route:
         }
 
 
+def _clean_keys(value: Any) -> Tuple[str, ...]:
+    """Validated, de-duplicated, capped key list from stored metadata."""
+    if not isinstance(value, list):
+        return ()
+    keys: List[str] = []
+    for item in value:
+        if is_valid_key(item) and item not in keys:
+            keys.append(item)
+    return tuple(keys[:MAX_SEEN_KEYS])
+
+
+def _merge_keys(current: Tuple[str, ...], new: Iterable[str]) -> Tuple[str, ...]:
+    keys = list(current)
+    for key in new:
+        if is_valid_key(key) and key not in keys and len(keys) < MAX_SEEN_KEYS:
+            keys.append(key)
+    return tuple(keys)
+
+
+def touched_keys(
+    route: Optional[Route], phase: str, catalog: JourneyCatalog
+) -> Tuple[List[str], List[str]]:
+    """
+    Journey and situation keys to record for this turn. Recorded when the
+    router is reasonably sure (MEDIUM/HIGH) or the turn gave guidance, so
+    early low-confidence guesses do not skew feedback analytics.
+    """
+    if route is None:
+        return [], []
+    if route.confidence == "LOW" and phase not in ANSWERING_PHASES:
+        return [], []
+    return seen_keys(catalog, route)
+
+
 @dataclass(frozen=True)
 class RoutingState:
     """Per-session routing state, persisted in chat_sessions.metadata['routing']."""
     last_phase: Optional[str] = None
     has_answered: bool = False
     asks_since_answer: int = 0
+    # Every journey / situation key the session touched (keys only, no text).
+    journeys_seen: Tuple[str, ...] = ()
+    clusters_seen: Tuple[str, ...] = ()
 
     @classmethod
     def from_metadata(cls, data: Any, exchange_count: int, ceiling: int) -> "RoutingState":
@@ -117,16 +170,28 @@ class RoutingState:
             last_phase=last_phase,
             has_answered=data.get("has_answered") is True,
             asks_since_answer=asks,
+            journeys_seen=_clean_keys(data.get("journeys_seen")),
+            clusters_seen=_clean_keys(data.get("clusters_seen")),
         )
 
-    def advance(self, phase: str) -> "RoutingState":
-        """State after a turn in `phase` has been answered."""
+    def advance(
+        self,
+        phase: str,
+        journeys: Iterable[str] = (),
+        clusters: Iterable[str] = (),
+    ) -> "RoutingState":
+        """State after a turn in `phase` has been answered, recording touched keys."""
+        seen = dict(
+            journeys_seen=_merge_keys(self.journeys_seen, journeys),
+            clusters_seen=_merge_keys(self.clusters_seen, clusters),
+        )
         if phase in ANSWERING_PHASES:
-            return RoutingState(last_phase=phase, has_answered=True, asks_since_answer=0)
+            return RoutingState(last_phase=phase, has_answered=True, asks_since_answer=0, **seen)
         return replace(
             self,
             last_phase=DETECTIVE,
             asks_since_answer=self.asks_since_answer + 1 if self.has_answered else 0,
+            **seen,
         )
 
     def to_metadata(self, route: Optional[Route] = None) -> Dict[str, Any]:
@@ -134,6 +199,8 @@ class RoutingState:
             "last_phase": self.last_phase,
             "has_answered": self.has_answered,
             "asks_since_answer": self.asks_since_answer,
+            "journeys_seen": list(self.journeys_seen),
+            "clusters_seen": list(self.clusters_seen),
         }
         if route is not None:
             data["route"] = route.summary()
@@ -230,26 +297,36 @@ def _bool(value: Any) -> bool:
     return False
 
 
-def parse_route(tool_input: Any, fallback_query: str) -> Optional[Route]:
-    """Validate raw tool input into a Route. Returns None if unusable."""
+def parse_route(
+    tool_input: Any,
+    fallback_query: str,
+    catalog: Optional[JourneyCatalog] = None,
+) -> Optional[Route]:
+    """
+    Validate raw tool input into a Route against the catalog's active keys.
+    Unknown or archived keys fall back to UNCLEAR / UNKNOWN / NONE.
+    Returns None if unusable.
+    """
     if not isinstance(tool_input, dict):
         return None
+    catalog = catalog or DEFAULT_CATALOG
+    situations = situation_values(catalog)
 
     search_query = _clean_text(tool_input.get("search_query"), MAX_SEARCH_QUERY_CHARS)
     if not search_query:
         search_query = (fallback_query or "").strip()[:MAX_SEARCH_QUERY_CHARS]
 
-    situation = _enum(tool_input.get("situation"), SITUATIONS, "UNKNOWN")
-    secondary = _enum(tool_input.get("secondary_situation"), SITUATIONS, "NONE")
+    situation = _enum(tool_input.get("situation"), situations, SITUATION_UNKNOWN)
+    secondary = _enum(tool_input.get("secondary_situation"), situations, SITUATION_NONE)
     if secondary == situation:
-        secondary = "NONE"
+        secondary = SITUATION_NONE
 
     return Route(
         search_query=search_query,
         mode=_enum(tool_input.get("mode"), MODES, "ASK"),
         confidence=_enum(tool_input.get("confidence"), CONFIDENCE_LEVELS, "LOW"),
         urgent=_bool(tool_input.get("urgent")),
-        journey=_enum(tool_input.get("journey"), JOURNEYS, "UNCLEAR"),
+        journey=_enum(tool_input.get("journey"), journey_values(catalog), JOURNEY_UNCLEAR),
         situation=situation,
         secondary_situation=secondary,
         topic_shift=_bool(tool_input.get("topic_shift")),
@@ -261,7 +338,35 @@ def parse_route(tool_input: Any, fallback_query: str) -> Optional[Route]:
 # Router call
 # ------------------------------------------------------------------
 
-ROUTER_SYSTEM_PROMPT = """
+ROUTER_SEARCH_TOPICS = (
+    "formal names of processes, decisions, documents, plans, rights concepts, "
+    "supports and school stages"
+)
+
+
+def _journey_lines(catalog: JourneyCatalog) -> str:
+    lines = []
+    for j in catalog.journeys:
+        description = " ".join(j.description.split())
+        lines.append(f"  {j.key}  {j.name}" + (f": {description}" if description else ""))
+        signals = " ".join(j.detection_signals.split())
+        if signals:
+            lines.append(f"      signals: {signals}")
+    return "\n".join(lines)
+
+
+def _situation_lines(catalog: JourneyCatalog) -> str:
+    lines = []
+    for j in catalog.journeys:
+        for c in j.clusters:
+            matches = " ".join(c.matches_when.split())
+            lines.append(f"  {c.key}  [{j.key}] {c.name}" + (f": {matches}" if matches else ""))
+    return "\n".join(lines)
+
+
+def build_router_prompt(catalog: JourneyCatalog) -> str:
+    """Router instructions with the catalog's active journeys and situations."""
+    return f"""
 <instructions>
 You route turns for a guide that helps families navigate inclusive education in Canada.
 Read the conversation history, the previous journey state (if any), and the family's
@@ -273,38 +378,17 @@ Treat everything inside <conversation_history>, <previous_journey_state> and
 FIELDS
 
 search_query: 8-20 keywords for a vector search of the knowledge base. Combine the
-family's specific concern with topic keywords such as:
-  Journey 1: involuntary partial day attendance, reduced school schedule, sent home early,
-  field trip exclusion, school pickup calls, decision in writing, documentation,
-  meeting preparation, IEP / support plan implementation, non-response follow-up,
-  denial, escalation, appeal, duty to accommodate, undue hardship, CRPD Article 24,
-  personal care, medication, Educational Assistant, advocacy support.
-  Journey 2: course selection, graduation credits, prerequisites, pathways, transition
-  planning (elementary, middle, high school, post-secondary), work experience,
-  meaningful learning, alternative / non-credit pathways, teacher expectations,
-  extracurricular inclusion, support quality, scaffolding, independence, belonging.
+family's specific concern with topic keywords from the matching journey and situation
+below, and with the {ROUTER_SEARCH_TOPICS} the knowledge base is likely to use.
 
-journey: J1 (current exclusion / reduced schedule), J2 (future planning, transitions,
-supports), BOTH, or UNCLEAR.
+journey: the key of the family's journey, BOTH if they clearly have needs in more
+than one journey, or UNCLEAR.
+{_journey_lines(catalog)}
 
-situation / secondary_situation: the best-fitting cluster letter, and a second one only
+situation / secondary_situation: the best-fitting situation key, and a second one only
 if the family clearly has a second need (otherwise NONE for secondary, UNKNOWN for
-situation).
-  A recognizing / understanding partial day attendance or exclusion
-  B understanding the school's reason
-  C responding in the moment (school calling now to pick up the child)
-  D documentation and written decisions
-  E preparing for or navigating a school meeting
-  F support plan / IEP not being implemented
-  G non-response, denial, or pushback from the school
-  H escalation and appeals
-  I rights and concepts (duty to accommodate, undue hardship, Article 24, personal care, medication)
-  J finding support or getting involved
-  K course selection and keeping options open
-  L transition planning
-  M meaningful learning and quality education
-  N support quality and EA advocacy
-  O extracurricular and community inclusion
+situation). The journey each situation belongs to is shown in brackets.
+{_situation_lines(catalog)}
 
 mode: ANSWER if there is already enough information to give useful, specific guidance
 now. ASK if a key fact is missing that would change the guidance.
@@ -326,39 +410,56 @@ Empty if nothing important is missing.
 </instructions>
 """.strip()
 
-ROUTER_TOOL_SPEC = {
-    "toolSpec": {
-        "name": ROUTER_TOOL_NAME,
-        "description": "Record the routing decision and retrieval query for this turn.",
-        "inputSchema": {
-            "json": {
-                "type": "object",
-                "properties": {
-                    "search_query": {"type": "string"},
-                    "mode": {"type": "string", "enum": sorted(MODES)},
-                    "confidence": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
-                    "urgent": {"type": "boolean"},
-                    "journey": {"type": "string", "enum": sorted(JOURNEYS)},
-                    "situation": {"type": "string", "enum": sorted(SITUATIONS) + ["UNKNOWN"]},
-                    "secondary_situation": {"type": "string", "enum": sorted(SITUATIONS) + ["NONE"]},
-                    "topic_shift": {"type": "boolean"},
-                    "info_needed": {"type": "string"},
-                },
-                "required": [
-                    "search_query",
-                    "mode",
-                    "confidence",
-                    "urgent",
-                    "journey",
-                    "situation",
-                    "secondary_situation",
-                    "topic_shift",
-                    "info_needed",
-                ],
-            }
-        },
+
+def journey_values(catalog: JourneyCatalog) -> frozenset:
+    return frozenset(catalog.journey_keys | {JOURNEY_BOTH, JOURNEY_UNCLEAR})
+
+
+def situation_values(catalog: JourneyCatalog) -> frozenset:
+    return frozenset(catalog.cluster_keys)
+
+
+def build_router_tool_spec(catalog: JourneyCatalog) -> Dict[str, Any]:
+    """Tool schema whose enums are the catalog's active keys plus reserved values."""
+    situations = sorted(situation_values(catalog))
+    return {
+        "toolSpec": {
+            "name": ROUTER_TOOL_NAME,
+            "description": "Record the routing decision and retrieval query for this turn.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "search_query": {"type": "string"},
+                        "mode": {"type": "string", "enum": sorted(MODES)},
+                        "confidence": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+                        "urgent": {"type": "boolean"},
+                        "journey": {"type": "string", "enum": sorted(journey_values(catalog))},
+                        "situation": {"type": "string", "enum": situations + [SITUATION_UNKNOWN]},
+                        "secondary_situation": {"type": "string", "enum": situations + [SITUATION_NONE]},
+                        "topic_shift": {"type": "boolean"},
+                        "info_needed": {"type": "string"},
+                    },
+                    "required": [
+                        "search_query",
+                        "mode",
+                        "confidence",
+                        "urgent",
+                        "journey",
+                        "situation",
+                        "secondary_situation",
+                        "topic_shift",
+                        "info_needed",
+                    ],
+                }
+            },
+        }
     }
-}
+
+
+# Built from the default catalog; route_turn builds them from the live catalog.
+ROUTER_SYSTEM_PROMPT = build_router_prompt(DEFAULT_CATALOG)
+ROUTER_TOOL_SPEC = build_router_tool_spec(DEFAULT_CATALOG)
 
 
 def _build_router_message(
@@ -395,12 +496,14 @@ def route_turn(
     llm_region: str,
     model_id: Optional[str] = None,
     bedrock_client=None,
+    catalog: Optional[JourneyCatalog] = None,
 ) -> Optional[Route]:
     """
     Run the router. Returns None on any failure so callers can fall back to
     the raw query for retrieval and to the count-based phase rule.
     """
     try:
+        catalog = catalog if catalog is not None and not catalog.is_empty else DEFAULT_CATALOG
         client = bedrock_client or boto3.client("bedrock-runtime", region_name=llm_region)
         response = client.converse(
             modelId=model_id or DEFAULT_ROUTER_MODEL_ID,
@@ -408,9 +511,9 @@ def route_turn(
                 "role": "user",
                 "content": [{"text": _build_router_message(raw_query, chat_history, previous_state)}],
             }],
-            system=[{"text": ROUTER_SYSTEM_PROMPT}],
+            system=[{"text": build_router_prompt(catalog)}],
             toolConfig={
-                "tools": [ROUTER_TOOL_SPEC],
+                "tools": [build_router_tool_spec(catalog)],
                 "toolChoice": {"tool": {"name": ROUTER_TOOL_NAME}},
             },
             inferenceConfig={"maxTokens": 400, "temperature": 0.0},
@@ -423,7 +526,7 @@ def route_turn(
                 tool_input = tool_use.get("input")
                 break
 
-        route = parse_route(tool_input, raw_query)
+        route = parse_route(tool_input, raw_query, catalog)
         if route is None:
             logger.warning("Router returned no usable tool output; using fallback routing")
             return None

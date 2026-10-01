@@ -13,6 +13,7 @@
 const postgres = require("postgres");
 const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
+const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
 const {
   SecretsManagerClient,
   GetSecretValueCommand,
@@ -125,6 +126,12 @@ exports.handler = async (event) => {
     // event.httpMethod: GET, POST, PUT, DELETE
     // event.resource: URL pattern like /admin/users or /admin/exampleEndpoint
     const pathData = event.httpMethod + " " + event.resource;
+
+    // Journeys, situation clusters, their prompt versions and feedback counts
+    // (utils/journeyPrompts.js). Handles its own errors.
+    if (await handleJourneyRequest(sqlConnection, event, pathData, response)) {
+      return logAndReturn(event, response);
+    }
 
     // Handle different API endpoints using switch statement
     switch (pathData) {
@@ -1446,14 +1453,17 @@ exports.handler = async (event) => {
     }
   }
 
-  // Log response for debugging (visible in AWS CloudWatch Logs).
-  // Analytics now includes user-written feedback comments; log status only.
-  if (event.resource === "/admin/analytics") {
+  return logAndReturn(event, response);
+};
+
+// Log response for debugging (visible in AWS CloudWatch Logs), then return it
+// to API Gateway. Analytics includes user-written feedback comments and journey
+// routes return large prompt trees; log status only for those.
+function logAndReturn(event, response) {
+  if (event.resource === "/admin/analytics" || isJourneyRoute(`${event.httpMethod} ${event.resource}`)) {
     console.log({ statusCode: response.statusCode, resource: event.resource });
   } else {
     console.log(response);
   }
-
-  // Return HTTP response to API Gateway, which forwards it to the client
   return response;
-};
+}

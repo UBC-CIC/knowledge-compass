@@ -1,6 +1,7 @@
 
 from typing import Optional, Tuple
 import helpers.config as config
+from helpers.journeys import build_detective_block, build_suggestion_block
 from helpers.routing import (
     DETECTIVE,
     PARTIAL,
@@ -64,6 +65,8 @@ def get_current_prompt(
     Inclusion Canada structure:
       static  = <role> + <guardrails> + <language_guidelines>
       dynamic = <phase> + <output_format>   (retrieved_context is appended by chat.py)
+      <phase> = shared base prompt + <journeys> block for the routed journey
+                and clusters (helpers/journeys.py) + hint/state/focus blocks
     """
     if phase == DETECTIVE:
         retrieval_count = DETECTIVE_RETRIEVAL_COUNT
@@ -77,6 +80,11 @@ def get_current_prompt(
             readiness_note=_readiness_note(exchange_count),
             may_suggest=False,
         )
+        # Journey content is appended after .format() so admin-written
+        # journey text may contain braces.
+        journeys_block = build_detective_block(config.JOURNEY_CATALOG, route)
+        if journeys_block:
+            detective_body = f"{detective_body}\n\n{journeys_block}"
         phase_instructions = (
             f"<phase>\n{detective_body}{_focus_block(route)}\n</phase>\n\n"
             f"<output_format>\n{config.OUTPUT_FORMAT_DETECTIVE}\n</output_format>"
@@ -102,8 +110,15 @@ def get_current_prompt(
         else:
             output_format = config.OUTPUT_FORMAT_SUGGESTION
 
+        # Only the routed journey and situation clusters (all of them when
+        # routing is unclear); see helpers/journeys.select_for_route.
+        suggestion_body = config.SUGGESTION_PHASE_PROMPT
+        journeys_block = build_suggestion_block(config.JOURNEY_CATALOG, route)
+        if journeys_block:
+            suggestion_body = f"{suggestion_body}\n\n{journeys_block}"
+
         phase_instructions = (
-            f"<phase>\n{config.SUGGESTION_PHASE_PROMPT}{state_block}{extra_blocks}\n</phase>\n\n"
+            f"<phase>\n{suggestion_body}{state_block}{extra_blocks}\n</phase>\n\n"
             f"<output_format>\n{output_format}\n</output_format>"
         )
 

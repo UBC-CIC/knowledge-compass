@@ -1583,6 +1583,397 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  # Journeys and situation clusters (handlers/utils/journeyPrompts.js, migration 024).
+  /admin/journeys:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: List journeys with their situation clusters and prompt versions (archived included)
+      operationId: get_admin_journeys
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: Journey tree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  journeys:
+                    type: array
+                    description: >-
+                      Journeys (id, key, name, description, detection_signals, sort_order,
+                      is_archived, prompts.{detective_questions,guidance}[], clusters[] with
+                      id, key, name, matches_when, priority, sort_order, is_archived,
+                      prompts.response_pattern[]). Each prompt version has id, field,
+                      owner_id, content, character_limit, version, is_active,
+                      created_by_email, created_at.
+                    items:
+                      type: object
+        "403":
+          description: Forbidden - Not an admin
+        "503":
+          description: Journey tables are not set up yet (migration 024 not run)
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      tags: [Admin]
+      summary: Create a journey (optionally with its first detective questions and guidance versions)
+      operationId: create_admin_journey
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name]
+              properties:
+                key:
+                  type: string
+                  pattern: "^[A-Z0-9_]{1,16}$"
+                  description: Immutable key; BOTH, UNCLEAR, UNKNOWN and NONE are reserved
+                name:
+                  type: string
+                  maxLength: 120
+                description:
+                  type: string
+                  maxLength: 2000
+                detection_signals:
+                  type: string
+                  maxLength: 4000
+                sort_order:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                detective_questions:
+                  type: string
+                guidance:
+                  type: string
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+        "400":
+          description: Invalid input
+        "409":
+          description: Key already exists
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/feedback:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Thumbs up/down counts per journey and situation cluster (counts only, no message text)
+      operationId: get_admin_journey_feedback
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: timeRange
+          in: query
+          required: false
+          description: Window such as 7d, 30d (default), 3m, 1y (max 365 days) or "all"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Feedback counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days:
+                    type: integer
+                    description: Window in days (null for all time)
+                  journeys:
+                    type: array
+                    description: "{ key, name, is_archived, up, down, sessions }"
+                    items:
+                      type: object
+                  clusters:
+                    type: array
+                    description: "{ key, name, journey_key, is_archived, up, down, sessions }"
+                    items:
+                      type: object
+                  untagged:
+                    type: object
+                    description: "{ up, down, sessions } for sessions with no journey recorded"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/{journey_id}:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Update journey metadata or archive/restore it
+      operationId: update_admin_journey
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: journey_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                detection_signals:
+                  type: string
+                sort_order:
+                  type: integer
+                is_archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated
+        "400":
+          description: Invalid input, or archiving the last active journey
+        "404":
+          description: Journey not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/{journey_id}/clusters:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Add a situation cluster to a journey (optionally with its first response pattern version)
+      operationId: create_admin_journey_cluster
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: journey_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name, matches_when]
+              properties:
+                key:
+                  type: string
+                  pattern: "^[A-Z0-9_]{1,16}$"
+                name:
+                  type: string
+                  maxLength: 120
+                matches_when:
+                  type: string
+                  maxLength: 2000
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 9
+                sort_order:
+                  type: integer
+                response_pattern:
+                  type: string
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Invalid input
+        "404":
+          description: Journey not found
+        "409":
+          description: Key already exists
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/clusters/{cluster_id}:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Update situation cluster metadata or archive/restore it
+      operationId: update_admin_cluster
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: cluster_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                matches_when:
+                  type: string
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 9
+                sort_order:
+                  type: integer
+                is_archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated
+        "400":
+          description: Invalid input
+        "404":
+          description: Situation not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Save a new active version of a journey or situation prompt field
+      operationId: create_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [field, owner_id, content]
+              properties:
+                field:
+                  type: string
+                  enum: [detective_questions, guidance, response_pattern]
+                owner_id:
+                  type: string
+                  format: uuid
+                  description: Journey id for detective_questions/guidance, cluster id for response_pattern
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Created version
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The new version (id, field, owner_id, content, character_limit, version, is_active, created_by_email, created_at)
+        "400":
+          description: Invalid input or content exceeds character_limit
+        "404":
+          description: Journey or situation not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts/{version_id}:
+    <<: *commonOptions
+    delete:
+      tags: [Admin]
+      summary: Delete a non-active journey or situation prompt version
+      operationId: delete_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted
+        "400":
+          description: Cannot delete the active version
+        "404":
+          description: Version not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts/{version_id}/activate:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Activate a journey or situation prompt version (deactivates the previous one)
+      operationId: activate_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Activated (or already active)
+        "404":
+          description: Version not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/analytics:
     <<: *commonOptions
     get:
