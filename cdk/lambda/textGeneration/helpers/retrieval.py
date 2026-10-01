@@ -23,11 +23,20 @@ Output contract
         "source_type": "web" | "video" | "document" | "csv_link",
         "metadata":    { ... },                       # csv_link chunks: csv_rows (linking rows' columns)
     }
+
+`url`/`uri` are only ever public http(s) links. Internal storage identities
+(`upload://...`, legacy `s3://bucket/key`, `csvlink://...`) are blanked so they
+never reach the prompt, the client, or persisted chat history.
+
+`to_public_source` is the smaller projection sent to the browser and stored in
+chat_messages.sources; the full dict above stays server-side for the prompt
+and the grounding verifier.
 """
 
 import json
 import logging
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import boto3
 
@@ -45,6 +54,15 @@ EMBED_MODEL_ID = "cohere.embed-english-v3"
 # can collapse many row-specific variants of one fetched page.
 CANDIDATE_MULTIPLIER = 8
 MAX_CANDIDATE_PAGES = 20
+
+# HNSW returns at most hnsw.ef_search rows per scan (pgvector default 40), and
+# the WHERE filters plus de-duplication run after the scan, so the defaults cap
+# a 120-row page at 40 and stop OFFSET paging. ef_search sizes the first batch;
+# iterative scan (pgvector >= 0.8.0, migration 023) lets the scan keep going
+# until LIMIT/OFFSET are satisfied. strict_order keeps exact distance order so
+# successive OFFSET pages neither overlap nor skip rows.
+HNSW_EF_SEARCH = 200
+HNSW_ITERATIVE_SCAN = "strict_order"
 
 
 def embed_query(query: str, region: str, embed_model_id: str = EMBED_MODEL_ID) -> List[float]:
@@ -74,10 +92,64 @@ def _vector_literal(embedding: List[float]) -> str:
     return "[" + ",".join(str(x) for x in embedding) + "]"
 
 
+def public_http_url(url: Any) -> str:
+    """Return `url` if it is an absolute http(s) link, otherwise ''."""
+    if not isinstance(url, str):
+        return ""
+    candidate = url.strip()
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() in ("http", "https") and parsed.netloc:
+        return candidate
+    return ""
+
+
+# Characters of chunk text sent to the client for the resource card preview.
+# The frontend truncates to 320 characters, so this leaves a little headroom.
+PUBLIC_PREVIEW_CHARS = 400
+# Only video timestamps are rendered from chunk metadata.
+_PUBLIC_METADATA_KEYS = ("chunk_start", "chunk_end")
+
+
+def to_public_source(source: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Project a retrieval source dict onto the fields the chat UI renders.
+
+    Drops the full chunk body, similarity score, and internal chunk metadata
+    (CSV columns, fetch URLs, file names, canonical keys) so they are neither
+    streamed to anonymous users nor persisted with every message.
+    """
+    url = public_http_url(source.get("url") or source.get("uri"))
+    content = source.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    if len(content) > PUBLIC_PREVIEW_CHARS:
+        content = content[:PUBLIC_PREVIEW_CHARS].rstrip() + "…"
+    metadata = source.get("metadata") or {}
+    public_metadata = {
+        key: metadata[key]
+        for key in _PUBLIC_METADATA_KEYS
+        if isinstance(metadata, dict) and isinstance(metadata.get(key), str)
+    }
+    public = {
+        "type": source.get("type") or "",
+        "source_type": source.get("source_type") or "",
+        "title": source.get("title") or url or "Untitled resource",
+        "url": url,
+        "uri": url,
+        "content": content,
+    }
+    if public_metadata:
+        public["metadata"] = public_metadata
+    return public
+
+
 def _row_to_source(body, metadata, url, title, source_type, score) -> Dict[str, Any]:
     """Map a DB row to the legacy-compatible source dict."""
     st = (source_type or "web")
-    public_url = url or ""
+    public_url = public_http_url(url)
     return {
         # Legacy keys consumed by bedrock.format_context_for_prompt / chat.py
         "type": st.upper(),
@@ -117,6 +189,39 @@ def _distinct_candidate_count(rows: list) -> int:
     return count
 
 
+def _apply_search_settings(cur) -> None:
+    """
+    Raise the HNSW candidate limits for this transaction only.
+
+    SET LOCAL ends with the transaction, so nothing leaks to later queries on
+    the cached connection. Each setting runs in its own savepoint: an older
+    pgvector without hnsw.iterative_scan rejects that parameter, and without
+    the savepoint the error would abort the transaction and the search after it.
+    """
+    for statement in (
+        f"SET LOCAL hnsw.ef_search = {int(HNSW_EF_SEARCH)}",
+        f"SET LOCAL hnsw.iterative_scan = {HNSW_ITERATIVE_SCAN}",
+    ):
+        cur.execute("SAVEPOINT retrieval_settings")
+        try:
+            cur.execute(statement)
+        except Exception as e:  # noqa: BLE001 - keep searching with defaults
+            cur.execute("ROLLBACK TO SAVEPOINT retrieval_settings")
+            logger.warning("Retrieval setting skipped (%s): %s", statement, type(e).__name__)
+        cur.execute("RELEASE SAVEPOINT retrieval_settings")
+
+
+def _rollback_quietly(db_connection) -> None:
+    """End an aborted transaction so later writes on this connection still work."""
+    rollback = getattr(db_connection, "rollback", None)
+    if rollback is None:
+        return
+    try:
+        rollback()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def retrieve_from_pgvector(
     query: str,
     db_connection,
@@ -153,6 +258,7 @@ def retrieve_from_pgvector(
             # csvrow:// identities are never exposed as public links, and the
             # canonical csvlink cache is hidden once row variants are available.
             page_size = max(num_results * CANDIDATE_MULTIPLIER, min_results)
+            _apply_search_settings(cur)
             rows = []
             for page_number in range(MAX_CANDIDATE_PAGES):
                 cur.execute(
@@ -192,6 +298,9 @@ def retrieve_from_pgvector(
                     break
     except Exception as e:  # noqa: BLE001
         logger.error(f"pgvector retrieval query failed: {e}")
+        # A failed statement aborts the transaction; roll back so chat.py can
+        # still save the AI response on this connection.
+        _rollback_quietly(db_connection)
         return []
 
     # Keep one chunk per row/source and one row variant per canonical fetched

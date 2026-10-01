@@ -114,8 +114,8 @@ const markdownComponents = {
         {children}
       </a>
     ) : (
-      // Non-web links (e.g. s3:// document URIs) aren't clickable; the
-      // document is listed under "More resources" instead.
+      // Non-web links (e.g. internal upload:// identities in older replies)
+      // aren't clickable; the source is listed under "More resources" instead.
       <span className="font-semibold">{children}</span>
     ),
   blockquote: ({ ...props }) => (
@@ -166,19 +166,6 @@ function isResourceSource(source: SourceItem | string) {
   return isHttpSource(source) || type === "document" || type === "csv_row";
 }
 
-function withResourceLinks(text: string, sources: (SourceItem | string)[]) {
-  const links = sources.map(sourceLabel).filter((item) => isSafeUrl(item.url));
-  if (links.length === 0) return text;
-
-  const missing = links.filter((item) => !text.includes(item.url));
-  if (missing.length === 0) return text;
-
-  const block = missing
-    .map((item) => `- [${item.title}](${item.url})`)
-    .join("\n");
-  return `${text}\n\n**More resources**\n${block}`;
-}
-
 export default function AIChatMessage({
   text,
   question,
@@ -191,11 +178,8 @@ export default function AIChatMessage({
   const showFooter = Boolean(footer) && !isTyping;
   const body = displayGuideText(text);
   const suggestion = isSuggestionPhase(phase, sources, body);
+  // Cited sources are listed once, as cards under "More resources" below.
   const resourceSources = sources.filter(isResourceSource);
-  const displayBody =
-    !isTyping && resourceSources.length > 0
-      ? withResourceLinks(body, resourceSources.filter(isHttpSource))
-      : body;
 
   const sourcesBlock =
     !isTyping && resourceSources.length > 0 ? (
@@ -289,7 +273,7 @@ export default function AIChatMessage({
         <TypingIndicator />
       ) : (
         <>
-          <GuideMarkdown text={displayBody} />
+          <GuideMarkdown text={body} />
           {!isTyping && question ? (
             <p className="mt-3 font-semibold leading-relaxed">{question}</p>
           ) : null}

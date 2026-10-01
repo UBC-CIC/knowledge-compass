@@ -5,6 +5,7 @@ const {
   validateEnum,
   sanitizeString,
 } = require("./utils/validation.js");
+const { toPublicMessage } = require("./utils/publicSources.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -273,7 +274,7 @@ exports.handler = async (event) => {
 
         data = {
           chat_session_id: chatSessionResult[0].id,
-          messages,
+          messages: messages.map(toPublicMessage),
         };
 
         response.statusCode = 200;

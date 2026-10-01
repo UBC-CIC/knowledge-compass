@@ -11,7 +11,8 @@ from helpers.crud import (
 from helpers.logic import get_current_prompt
 from helpers.routing import RoutingState, decide_phase, route_turn
 from helpers.bedrock import format_context_for_prompt
-from helpers.retrieval import retrieve_from_pgvector
+from helpers.retrieval import retrieve_from_pgvector, to_public_source
+from helpers.citations import parse_cited_indices, select_cited_sources, strip_internal_links
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import check_limit, record_message_sent
@@ -202,19 +203,13 @@ def _save_ai_response(
     warning_text: Optional[str] = None,
 ):
     try:
-        sources_for_db = []
-        for s in sources:
-            s_copy = s.copy()
-            if 'content' in s_copy and isinstance(s_copy['content'], str):
-                s_copy['content'] = s_copy['content']
-            sources_for_db.append(s_copy)
-
+        # `sources` is already the trimmed public projection (to_public_source).
         insert_message(
             db_connection,
             chat_session_id,
             "AI",
             answer_text,
-            sources_for_db,
+            list(sources),
             warning_text
         )
         update_last_active_session(db_connection, chat_session_id)
@@ -417,25 +412,28 @@ def get_response(
             # Detective phase: strip any trailing <detective_state> tag from saved text
             answer_text = re.split(r'<(?:cited_indices|detective_state)', full_response_text)[0].strip()
             
-        # Parse cited_indices
-        indices_match = re.search(r'<cited_indices>\s*\[(.*?)\]\s*</cited_indices>', full_response_text, re.DOTALL)
-        if indices_match:
-            indices_str = indices_match.group(1).strip()
-            if indices_str:
-                try:
-                    cited_indices = [int(x.strip()) for x in indices_str.split(',')]
-                except ValueError:
-                    pass
+        # Parse cited_indices tolerantly: one malformed token must not drop
+        # every citation.
+        parsed_indices = parse_cited_indices(full_response_text)
+        if parsed_indices is not None:
+            cited_indices = parsed_indices
+        elif sources and "<answer>" in full_response_text:
+            # Guidance reply without the citation block: sources can't be shown.
+            logger.warning(
+                "Guidance reply had no <cited_indices> block (phase=%s, retrieved=%d)",
+                phase_name,
+                len(sources),
+            )
 
     except Exception as e:
         logger.error(f"Generation Failed: {e}")
         answer_text = "I encountered an error generating the response."
         cited_indices = []
 
-    used_sources = []
-    for i, source in enumerate(sources, 1):
-        if i in cited_indices:
-            used_sources.append(source)
+    # Full cited sources feed the grounding verifier; only the trimmed public
+    # projection is streamed to the client and persisted with the message.
+    used_sources = select_cited_sources(sources, cited_indices)
+    public_sources = [to_public_source(source) for source in used_sources]
 
     warning_text = None
     intervention_result = None
@@ -454,13 +452,14 @@ def get_response(
             warning_text = None
             intervention_result = None
             
-    final_answer_text = answer_text
+    # Older history turns may contain internal links the model could echo.
+    final_answer_text = strip_internal_links(answer_text)
 
     _save_ai_response(
         db_connection,
         chat_session_id,
         final_answer_text,
-        used_sources,
+        public_sources,
         warning_text
     )
 
@@ -527,7 +526,7 @@ def get_response(
     return {
         "response": final_answer_text,
         "raw_response": answer_text,
-        "sources_used": used_sources,
+        "sources_used": public_sources,
         "sessionId": chat_session_id,
         "is_first_message": False,
         "message_usage": usage_info,
