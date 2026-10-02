@@ -402,6 +402,9 @@ exports.handler = async (event) => {
           ON CONFLICT (chat_session_id) DO UPDATE SET
             rating = EXCLUDED.rating,
             comment = EXCLUDED.comment,
+            -- An edit brings dismissed feedback back to the admin Recent list
+            -- so the new text is seen; an admin's star is kept (migration 029).
+            dismissed_at = NULL,
             updated_at = now()
           RETURNING rating, updated_at
         `;

@@ -15,6 +15,11 @@ const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
 const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
 const {
+  handleFeedbackTriageRequest,
+  isFeedbackTriageRoute,
+  fetchFeedbackLists,
+} = require("./utils/feedbackTriage.js");
+const {
   SecretsManagerClient,
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
@@ -130,6 +135,11 @@ exports.handler = async (event) => {
     // Journeys, situation clusters, their prompt versions and feedback counts
     // (utils/journeyPrompts.js). Handles its own errors.
     if (await handleJourneyRequest(sqlConnection, event, pathData, response)) {
+      return logAndReturn(event, response);
+    }
+
+    // Star / dismiss user feedback (utils/feedbackTriage.js). Handles its own errors.
+    if (await handleFeedbackTriageRequest(sqlConnection, event, pathData, response)) {
       return logAndReturn(event, response);
     }
 
@@ -925,23 +935,19 @@ exports.handler = async (event) => {
 
         const totals = await fetchTotals(startDateIso, endDateIso);
 
-        // Most recent written feedback in the window (admin-only view).
-        const recentFeedback = await sqlConnection`
-          SELECT
-            sf.chat_session_id::text AS chat_session_id,
-            sf.rating,
-            sf.comment,
-            sf.updated_at
-          FROM session_feedback sf
-          WHERE sf.updated_at >= ${startDateIso}
-            AND sf.updated_at < ${endDateIso}
-            AND sf.comment IS NOT NULL
-          ORDER BY sf.updated_at DESC
-          LIMIT 50
-        `;
+        // Written feedback for the admin view: recent (not dismissed), starred
+        // (any date) and dismissed. Totals above still include dismissed rows.
+        const { recentFeedback, starredFeedback, dismissedFeedback } =
+          await fetchFeedbackLists(sqlConnection, startDateIso, endDateIso);
 
         response.statusCode = 200;
-        response.body = JSON.stringify({ timeSeries, totals, recentFeedback });
+        response.body = JSON.stringify({
+          timeSeries,
+          totals,
+          recentFeedback,
+          starredFeedback,
+          dismissedFeedback,
+        });
         break;
       }
 
@@ -1458,9 +1464,15 @@ exports.handler = async (event) => {
 
 // Log response for debugging (visible in AWS CloudWatch Logs), then return it
 // to API Gateway. Analytics includes user-written feedback comments and journey
-// routes return large prompt trees; log status only for those.
+// routes return large prompt trees; log status only for those. Feedback triage
+// is status-only too so it stays consistent with the feedback privacy rules.
 function logAndReturn(event, response) {
-  if (event.resource === "/admin/analytics" || isJourneyRoute(`${event.httpMethod} ${event.resource}`)) {
+  const routeKey = `${event.httpMethod} ${event.resource}`;
+  if (
+    event.resource === "/admin/analytics" ||
+    isJourneyRoute(routeKey) ||
+    isFeedbackTriageRoute(routeKey)
+  ) {
     console.log({ statusCode: response.statusCode, resource: event.resource });
   } else {
     console.log(response);

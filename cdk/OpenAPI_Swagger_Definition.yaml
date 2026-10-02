@@ -288,6 +288,56 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/feedback/{chat_session_id}:
+    <<: *commonOptions
+    put:
+      tags:
+        - Admin
+      summary: Star or dismiss a conversation's feedback (shared by all admins)
+      description: >-
+        Dismissing also removes the star. Dismissed feedback still counts in
+        analytics totals. The response never includes the comment text.
+      operationId: put_admin_feedback_triage
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                starred:
+                  type: boolean
+                dismissed:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated triage state ({ chat_session_id, starred, dismissed })
+        "400":
+          description: Invalid id or body
+        "401":
+          description: Unauthorized
+        "404":
+          description: Feedback not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/data_sources:
     <<: *commonOptions
     get:

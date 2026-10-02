@@ -36,6 +36,7 @@ cdk/containers/**/global-bundle.pem
 !.env.example
 
 new frontend
+Prompts 2a Simplified (standalone).html
 
 __pycache__/
 *.py[cod]

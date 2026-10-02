@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Card,
@@ -24,13 +24,20 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { AuthService } from "@/functions/authService";
-import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { EyeOff, Star, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import MetricCard from "@/components/Admin/MetricCard";
 import {
   DEMO_ANALYTICS_SERIES,
+  DEMO_DISMISSED_FEEDBACK,
   DEMO_RECENT_FEEDBACK,
+  DEMO_STARRED_FEEDBACK,
   isDemoMode,
 } from "@/lib/demo";
+import {
+  useFeedbackTriage,
+  type FeedbackEntry,
+  type FeedbackLists,
+} from "@/hooks/useFeedbackTriage";
 
 type TimeSeriesData = {
   date: string;
@@ -50,13 +57,6 @@ type AnalyticsTotals = {
   thumbs_down?: number;
 };
 
-type FeedbackEntry = {
-  chat_session_id: string;
-  rating: "up" | "down";
-  comment: string;
-  updated_at: string;
-};
-
 type ConversationMessage = {
   id: string;
   chat_session_id: string;
@@ -69,7 +69,99 @@ type AnalyticsData = {
   timeSeries: TimeSeriesData[];
   totals?: AnalyticsTotals;
   recentFeedback?: FeedbackEntry[];
+  starredFeedback?: FeedbackEntry[];
+  dismissedFeedback?: FeedbackEntry[];
 };
+
+type FeedbackTab = keyof FeedbackLists;
+
+const FEEDBACK_TABS: Array<{
+  id: FeedbackTab;
+  label: string;
+  description: string;
+  empty: string;
+}> = [
+  {
+    id: "recent",
+    label: "Recent",
+    description: "Latest written feedback in this range (up to 50)",
+    empty: "No written feedback in this range yet.",
+  },
+  {
+    id: "starred",
+    label: "Starred",
+    description: "Starred by any admin, from any date (up to 100)",
+    empty: "Nothing starred yet. Star a comment to keep it here.",
+  },
+  {
+    id: "dismissed",
+    label: "Dismissed",
+    description: "Dismissed in this range (up to 50). Ratings still count in totals",
+    empty: "No dismissed feedback in this range.",
+  },
+];
+
+const iconButtonClass =
+  "inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50";
+
+type TriageActionsProps = {
+  starred: boolean;
+  dismissed: boolean;
+  disabled: boolean;
+  onStar: (starred: boolean) => void;
+  onDismiss: (dismissed: boolean) => void;
+};
+
+function TriageActions({
+  starred,
+  dismissed,
+  disabled,
+  onStar,
+  onDismiss,
+}: TriageActionsProps) {
+  if (dismissed) {
+    return (
+      <button
+        type="button"
+        className={iconButtonClass}
+        disabled={disabled}
+        onClick={() => onDismiss(false)}
+        aria-label="Restore this feedback to Recent"
+        title="Restore"
+      >
+        <Undo2 className="h-4 w-4" aria-hidden="true" />
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className={iconButtonClass}
+        disabled={disabled}
+        onClick={() => onStar(!starred)}
+        aria-pressed={starred}
+        aria-label={starred ? "Unstar this feedback" : "Star this feedback"}
+        title={starred ? "Unstar" : "Star"}
+      >
+        <Star
+          className={`h-4 w-4 ${starred ? "fill-amber-400 text-amber-500" : ""}`}
+          aria-hidden="true"
+        />
+      </button>
+      <button
+        type="button"
+        className={iconButtonClass}
+        disabled={disabled}
+        onClick={() => onDismiss(true)}
+        aria-label="Dismiss this feedback"
+        title="Dismiss"
+      >
+        <EyeOff className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </>
+  );
+}
 
 type ChartCardProps = {
   title: string;
@@ -120,7 +212,34 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
   const down = data.totals?.thumbs_down ?? 0;
   const total = up + down;
   const positive = total > 0 ? `${Math.round((up / total) * 100)}%` : "—";
-  const comments = data.recentFeedback ?? [];
+
+  const initialLists = useMemo<FeedbackLists>(
+    () => ({
+      recent: data.recentFeedback ?? [],
+      starred: data.starredFeedback ?? [],
+      dismissed: data.dismissedFeedback ?? [],
+    }),
+    [data.recentFeedback, data.starredFeedback, data.dismissedFeedback]
+  );
+  const triage = useFeedbackTriage(initialLists);
+  const [activeTab, setActiveTab] = useState<FeedbackTab>("recent");
+  const tabRefs = useRef<Record<FeedbackTab, HTMLButtonElement | null>>({
+    recent: null,
+    starred: null,
+    dismissed: null,
+  });
+  const activeTabInfo = FEEDBACK_TABS.find((t) => t.id === activeTab)!;
+  const comments = triage.lists[activeTab];
+
+  const onTabKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const index = FEEDBACK_TABS.findIndex((t) => t.id === activeTab);
+    const step = e.key === "ArrowRight" ? 1 : -1;
+    const next = FEEDBACK_TABS[(index + step + FEEDBACK_TABS.length) % FEEDBACK_TABS.length].id;
+    setActiveTab(next);
+    tabRefs.current[next]?.focus();
+  };
 
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackEntry | null>(
     null
@@ -248,27 +367,71 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
         </ChartCard>
 
         <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
-          <CardHeader className="border-b border-foreground/10 pb-3">
-            <CardTitle className="text-base font-bold tracking-[-0.005em] text-foreground">
-              Recent comments
-            </CardTitle>
-            <CardDescription className="text-[13px]">
-              Latest written feedback in this range (up to 50)
-            </CardDescription>
+          <CardHeader className="space-y-3 border-b border-foreground/10 pb-3">
+            <div>
+              <CardTitle className="text-base font-bold tracking-[-0.005em] text-foreground">
+                Comments
+              </CardTitle>
+              <CardDescription className="text-[13px]">
+                {activeTabInfo.description}
+              </CardDescription>
+            </div>
+            <div
+              role="tablist"
+              aria-label="Feedback comments"
+              className="flex w-fit rounded-[10px] border border-foreground/14 bg-white p-1 text-[13px] font-semibold"
+            >
+              {FEEDBACK_TABS.map((tab) => {
+                const selected = tab.id === activeTab;
+                return (
+                  <button
+                    key={tab.id}
+                    ref={(el) => {
+                      tabRefs.current[tab.id] = el;
+                    }}
+                    type="button"
+                    role="tab"
+                    id={`feedback-tab-${tab.id}`}
+                    aria-selected={selected}
+                    aria-controls="feedback-tabpanel"
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => setActiveTab(tab.id)}
+                    onKeyDown={onTabKeyDown}
+                    className={`rounded-md px-3 py-1 transition-colors ${
+                      selected
+                        ? "bg-primary text-primary-foreground"
+                        : "text-foreground/70 hover:text-foreground"
+                    }`}
+                  >
+                    {tab.label} ({triage.lists[tab.id].length})
+                  </button>
+                );
+              })}
+            </div>
+            {triage.error && (
+              <p role="alert" className="text-[12.5px] text-red-700">
+                {triage.error}
+              </p>
+            )}
           </CardHeader>
-          <CardContent className="h-[300px] overflow-y-auto p-0">
+          <CardContent
+            id="feedback-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`feedback-tab-${activeTab}`}
+            className="h-[300px] overflow-y-auto p-0"
+          >
             {comments.length === 0 ? (
               <p className="p-5 text-[13.5px] text-foreground/70">
-                No written feedback in this range yet.
+                {activeTabInfo.empty}
               </p>
             ) : (
               <ul className="divide-y divide-foreground/10">
                 {comments.map((entry) => (
-                  <li key={entry.chat_session_id}>
+                  <li key={entry.chat_session_id} className="flex items-start">
                     <button
                       type="button"
                       onClick={() => openFeedback(entry)}
-                      className="flex w-full gap-3 px-5 py-3 text-left transition-colors hover:bg-foreground/[0.04] focus-visible:bg-foreground/[0.04] focus-visible:outline-none"
+                      className="flex min-w-0 flex-1 gap-3 py-3 pl-5 pr-2 text-left transition-colors hover:bg-foreground/[0.04] focus-visible:bg-foreground/[0.04] focus-visible:outline-none"
                       aria-label="View the conversation this feedback was left on"
                     >
                       {entry.rating === "up" ? (
@@ -291,6 +454,15 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
                         </p>
                       </div>
                     </button>
+                    <div className="flex shrink-0 gap-0.5 py-2 pr-3">
+                      <TriageActions
+                        starred={activeTab === "starred" || Boolean(entry.starred)}
+                        dismissed={activeTab === "dismissed"}
+                        disabled={triage.isPending(entry.chat_session_id)}
+                        onStar={(s) => triage.setStarred(entry, s)}
+                        onDismiss={(d) => triage.setDismissed(entry, d)}
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -310,7 +482,18 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
         }}
       >
         <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
-          <DialogHeader className="border-b border-foreground/10 p-5 text-left">
+          <DialogHeader className="border-b border-foreground/10 p-5 pr-12 text-left">
+            {selectedFeedback && (
+              <div className="float-right ml-3 flex gap-0.5">
+                <TriageActions
+                  starred={triage.isStarred(selectedFeedback.chat_session_id)}
+                  dismissed={triage.isDismissed(selectedFeedback.chat_session_id)}
+                  disabled={triage.isPending(selectedFeedback.chat_session_id)}
+                  onStar={(s) => triage.setStarred(selectedFeedback, s)}
+                  onDismiss={(d) => triage.setDismissed(selectedFeedback, d)}
+                />
+              </div>
+            )}
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               {selectedFeedback?.rating === "up" ? (
                 <ThumbsUp className="h-4 w-4 text-[oklch(0.55_0.13_150)]" />
@@ -421,6 +604,8 @@ export default function Analytics() {
           thumbs_down: DEMO_ANALYTICS_SERIES.reduce((sum, d) => sum + d.thumbs_down, 0),
         },
         recentFeedback: DEMO_RECENT_FEEDBACK,
+        starredFeedback: DEMO_STARRED_FEEDBACK,
+        dismissedFeedback: DEMO_DISMISSED_FEEDBACK,
       });
       setLoading(false);
       setError(null);
@@ -461,8 +646,8 @@ export default function Analytics() {
             Analytics
           </h1>
           <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-            Volume and feedback over time. No conversation content is shown
-            here, only comments people chose to leave as feedback.
+            Volume and feedback over time. Select a comment to review the
+            conversation it was left on.
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
