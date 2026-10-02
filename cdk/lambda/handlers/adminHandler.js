@@ -1047,7 +1047,8 @@ exports.handler = async (event) => {
           LEFT JOIN users u ON u.id = latest.updated_by
         `;
 
-        // But keep a safe fallback to avoid crashing UI.
+        // But keep a safe fallback to avoid crashing UI. Keep in sync with
+        // textGeneration/helpers/config.py and frontend lib/assistantSettings.ts.
         const fallback = {
           max_messages_per_day: 45,
           min_messages_before_suggest: 4,
@@ -1055,8 +1056,8 @@ exports.handler = async (event) => {
           min_exchanges_before_answer: 0,
           max_characters_per_user_message: 2000,
           max_characters_per_ai_message: 5000,
-          temperature: 0.2,
-          top_p: 0.9,
+          temperature: 0.15,
+          top_p: 0.5,
           support_score_threshold: 0.25,
           scope_alignment_score_threshold: 0.25,
           grounded_threshold: 0.75,

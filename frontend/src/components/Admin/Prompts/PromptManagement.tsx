@@ -4,7 +4,9 @@ import { PreviewDrawer } from "@/components/Admin/Prompts/Drawers";
 import { AddJourneyDialog, AddSituationDialog } from "@/components/Admin/Prompts/PromptDialogs";
 import { JourneyPagePane, SharedPagePane, SituationPagePane } from "@/components/Admin/Prompts/PromptPanes";
 import { Alert, SELECTED_BG, Spinner } from "@/components/Admin/Prompts/parts";
+import DeveloperSwitch from "@/components/Admin/DeveloperSwitch";
 import { useJourneyFeedback, useJourneys } from "@/hooks/useJourneys";
+import { useDeveloperSettings } from "@/lib/developerSettings";
 import { useSystemMessages } from "@/hooks/useSystemMessages";
 import {
   SHARED_PAGES,
@@ -23,24 +25,6 @@ type Page =
   | { type: "situation"; id: string };
 
 const pageKey = (p: Page) => `${p.type}:${p.id}`;
-
-const DEVELOPER_KEY = "kc.prompts.showDeveloper";
-
-function readDeveloperSetting(): boolean {
-  try {
-    return window.localStorage.getItem(DEVELOPER_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeDeveloperSetting(on: boolean) {
-  try {
-    window.localStorage.setItem(DEVELOPER_KEY, on ? "true" : "false");
-  } catch {
-    // Storage unavailable (private mode): the toggle still works for this visit.
-  }
-}
 
 const isKeyConflict = (e: unknown) => e instanceof Error && /already exists/i.test(e.message);
 
@@ -77,7 +61,7 @@ export default function PromptManagement() {
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
-  const [showDeveloper, setShowDeveloper] = useState(readDeveloperSetting);
+  const [showDeveloper, setShowDeveloper] = useDeveloperSettings();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [dialog, setDialog] = useState<"addJourney" | "addSituation" | null>(null);
 
@@ -118,7 +102,6 @@ export default function PromptManagement() {
     // Leaving Reply layouts open after hiding it would be confusing.
     if (!next && page.type === "shared" && page.id === "advanced" && !go({ type: "shared", id: "assistant" })) return;
     setShowDeveloper(next);
-    writeDeveloperSetting(next);
   };
 
   const onDirtyChange = useCallback((d: boolean) => setDirty(d), []);
@@ -339,22 +322,7 @@ export default function PromptManagement() {
                 )}
               </ul>
             ) : null}
-            <label className="flex cursor-pointer items-center gap-2.5 px-2 py-1 text-[12.5px] font-semibold text-foreground/72">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={showDeveloper}
-                onClick={toggleDeveloper}
-                className="relative h-[18px] w-[32px] flex-none rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                style={{ background: showDeveloper ? "oklch(0.42 0.10 268)" : "rgba(22,24,29,0.22)" }}
-              >
-                <span
-                  className="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-[left]"
-                  style={{ left: showDeveloper ? 16 : 2 }}
-                />
-              </button>
-              Show developer settings
-            </label>
+            <DeveloperSwitch checked={showDeveloper} onChange={toggleDeveloper} />
           </div>
         </nav>
 

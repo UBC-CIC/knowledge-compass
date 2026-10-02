@@ -179,27 +179,29 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
             if row and isinstance(row[0], dict):
                 s = row[0]
 
-                def _float(key, default):
+                # NULL columns become None and are dropped below, so the
+                # recommended defaults in helpers/config.py apply (one source).
+                def _float(key):
                     value = s.get(key)
-                    return float(value) if value is not None else default
+                    return float(value) if value is not None else None
 
                 settings = {
                     'max_messages_per_day': s.get('max_messages_per_day'),
                     'min_messages_before_suggest': s.get('min_messages_before_suggest'),
                     'max_characters_per_user_message': s.get('max_characters_per_user_message'),
                     'max_characters_per_ai_message': s.get('max_characters_per_ai_message'),
-                    'temperature': _float('temperature', 0.7),
-                    'top_p': _float('top_p', 0.9),
-                    'support_score_threshold': _float('support_score_threshold', 0.25),
-                    'scope_alignment_score_threshold': _float('scope_alignment_score_threshold', 0.25),
-                    'grounded_threshold': _float('grounded_threshold', 0.75),
-                    'partially_grounded_threshold': _float('partially_grounded_threshold', 0.50),
+                    'temperature': _float('temperature'),
+                    'top_p': _float('top_p'),
+                    'support_score_threshold': _float('support_score_threshold'),
+                    'scope_alignment_score_threshold': _float('scope_alignment_score_threshold'),
+                    'grounded_threshold': _float('grounded_threshold'),
+                    'partially_grounded_threshold': _float('partially_grounded_threshold'),
                 }
                 if s.get('routing_mode') in ('fixed', 'dynamic'):
                     settings['routing_mode'] = s['routing_mode']
                 if isinstance(s.get('min_exchanges_before_answer'), int):
                     settings['min_exchanges_before_answer'] = s['min_exchanges_before_answer']
-                # Drop NULL integer columns so config.py keeps its defaults.
+                # Drop NULL columns so config.py keeps its defaults.
                 config['settings'] = {k: v for k, v in settings.items() if v is not None}
     except Exception as e:
         logger.error(f"fetch_system_config failed: {e}")
