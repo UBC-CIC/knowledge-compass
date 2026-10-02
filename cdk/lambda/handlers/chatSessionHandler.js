@@ -5,7 +5,6 @@ const {
   validateEnum,
   sanitizeString,
 } = require("./utils/validation.js");
-const { toPublicMessage } = require("./utils/publicSources.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -221,63 +220,6 @@ exports.handler = async (event) => {
 
         response.statusCode = 200;
         data = updated[0];
-        response.body = JSON.stringify(data);
-        break;
-      }
-
-      case "GET /chat_sessions/{chat_session_id}/chat_history": {
-        const chatSessionId = event.pathParameters?.chat_session_id;
-        const authenticatedUserId = event?.requestContext?.authorizer?.userId;
-
-        if (!chatSessionId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "chat_session_id is required" });
-          break;
-        }
-
-        if (!authenticatedUserId) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Authentication required" });
-          break;
-        }
-
-        const chatSessionResult = await sqlConnection`
-          SELECT id, user_id
-          FROM chat_sessions
-          WHERE id = ${chatSessionId}
-        `;
-
-        if (chatSessionResult.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Chat session not found" });
-          break;
-        }
-
-        // Ownership validation (mandatory)
-        const ownerId = chatSessionResult[0].user_id;
-        if (ownerId !== authenticatedUserId) {
-          response.statusCode = 403;
-          response.body = JSON.stringify({
-            error: "Access denied",
-            message: "You do not have permission to access this chat session",
-          });
-          break;
-        }
-
-        // Fetch messages
-        const messages = await sqlConnection`
-          SELECT id, chat_session_id, sender, content, sources, created_at
-          FROM chat_messages
-          WHERE chat_session_id = ${chatSessionId}
-          ORDER BY created_at ASC, id ASC
-        `;
-
-        data = {
-          chat_session_id: chatSessionResult[0].id,
-          messages: messages.map(toPublicMessage),
-        };
-
-        response.statusCode = 200;
         response.body = JSON.stringify(data);
         break;
       }

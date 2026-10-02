@@ -129,7 +129,7 @@ exports.handler = async (event) => {
   try {
     // Route requests based on HTTP method and URL path
     // event.httpMethod: GET, POST, PUT, DELETE
-    // event.resource: URL pattern like /admin/users or /admin/exampleEndpoint
+    // event.resource: URL pattern like /admin/users
     const pathData = event.httpMethod + " " + event.resource;
 
     // Journeys, situation clusters, their prompt versions and feedback counts
@@ -145,13 +145,6 @@ exports.handler = async (event) => {
 
     // Handle different API endpoints using switch statement
     switch (pathData) {
-      // GET /admin/exampleEndpoint - Test endpoint for development and debugging
-      case "GET /admin/exampleEndpoint":
-        // Simple test response to verify Lambda function is working
-        data = "Example endpoint invoked";
-        response.body = JSON.stringify(data);
-        break;
-
       // POST /admin/promote_user - Ensure the signed-in admin exists in users
       case "POST /admin/promote_user": {
         let body;

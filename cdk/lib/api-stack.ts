@@ -147,7 +147,7 @@ export class ApiGatewayStack extends cdk.Stack {
         email: true,
       },
       userVerification: {
-        emailSubject: "Specialization Explorer - Verify your email",
+        emailSubject: "Knowledge Compass - Verify your email",
         emailBody: `
                     <html>
                         <head>
@@ -209,17 +209,17 @@ export class ApiGatewayStack extends cdk.Stack {
                         <body>
                             <div class="email-container">
                             <div class="header">
-                                <h1>Specialization Explorer</h1>
+                                <h1>Knowledge Compass</h1>
                             </div>
                             <div class="main-content">
-                                <p>Thank you for signing up for Specialization Explorer!</p>
+                                <p>Thank you for signing up for Knowledge Compass.</p>
                                 <p>Verify your email by using the code below:</p>
                                 <div class="code">{####}</div>
                                 <p>If you did not request this verification, please ignore this email.</p>
                             </div>
                             <div class="footer">
                                 <p>Please do not reply to this email.</p>
-                                <p>Specialization Explorer, 2025</p>
+                                <p>Knowledge Compass, Inclusion Canada</p>
                             </div>
                             </div>
                         </body>
@@ -1096,12 +1096,12 @@ export class ApiGatewayStack extends cdk.Stack {
       piiInputAction: 'ANONYMIZE',
       piiInputEnabled: true,
       promptAttackStrength: 'HIGH',
-      blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
+      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
     };
 
     const inputGuardrail = new bedrock.CfnGuardrail(this, 'InputGuardrail', {
       name: `${id}-input-guardrail`,
-      blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
+      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
       blockedOutputsMessaging: 'Response blocked.',
       sensitiveInformationPolicyConfig: {
         piiEntitiesConfig: [

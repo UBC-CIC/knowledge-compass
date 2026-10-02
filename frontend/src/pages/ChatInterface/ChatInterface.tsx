@@ -27,7 +27,10 @@ type MaxCharactersResponse = {
 
 const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 50000;
 
-const WELCOME_PROMPT = `Hello! Please act as the Specialization Explorer.
+// Legacy (pre-Inclusion Canada) auto-sent opener. No longer sent; kept verbatim
+// only so older chat histories that start with it hide that first message.
+// Do not edit the text or the match will stop working.
+const LEGACY_WELCOME_PROMPT = `Hello! Please act as the Specialization Explorer.
 1. Introduce yourself briefly.
 2. Ask the student these 1 of these starter questions, and use some variation of these in the later responses to complete the checklist:
    - What are your academic interests?
@@ -503,8 +506,8 @@ export default function AIChatPage({
         const data: { messages: ChatMessageRow[] } = await response.json();
 
         const rawMessages = data.messages || [];
-        // Optimized check: Skip first message ONLY if it matches the system prompt
-        const startIndex = (rawMessages.length > 0 && rawMessages[0].content === WELCOME_PROMPT) ? 1 : 0;
+        // Hide the legacy auto-sent opener in older sessions.
+        const startIndex = (rawMessages.length > 0 && rawMessages[0].content === LEGACY_WELCOME_PROMPT) ? 1 : 0;
 
         const chatMessages: Message[] = rawMessages.slice(startIndex).map((m) => {
           let parsedSources: any[] = [];
