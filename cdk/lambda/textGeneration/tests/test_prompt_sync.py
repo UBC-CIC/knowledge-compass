@@ -23,7 +23,7 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 
 import helpers.config as config  # noqa: E402
-from helpers.journeys import DEFAULT_CATALOG  # noqa: E402
+from helpers.journeys import DEFAULT_CATALOG, clean_steps  # noqa: E402
 
 MIGRATIONS = os.path.abspath(os.path.join(HERE, "..", "..", "db_setup", "migrations"))
 MIGRATION_024 = os.path.join(MIGRATIONS, "024_journey_cluster_prompts.js")
@@ -108,12 +108,15 @@ class Pre024PromptTests(unittest.TestCase):
         )
         self.assertEqual(reverted, original)
 
+    @unittest.skipIf(shutil.which("node") is None, "node is required to load migration 024")
     def test_default_catalog_carries_the_pre_024_cluster_text(self):
         live = self.live_suggestion()
+        seeded = {c["key"]: c["responsePattern"] for c in _load_024_seed()["clusters"]}
         for journey in DEFAULT_CATALOG.journeys:
             for c in journey.clusters:
                 self.assertIn(f"SITUATION {c.key} — {c.name.upper()}\n", live)
-                self.assertIn(_indented(c.response_pattern), live, f"cluster {c.key} pattern")
+                # The 024 seed carried the pre-024 text (028 later re-wrapped it).
+                self.assertIn(_indented(seeded[c.key]), live, f"cluster {c.key} pattern")
                 first_line = c.matches_when.splitlines()[0]
                 self.assertIn(f"Matches when: {first_line}", live, f"cluster {c.key} matches_when")
 
@@ -127,8 +130,12 @@ class Pre024PromptTests(unittest.TestCase):
         live_suggestion = self.live_suggestion()
         principles = config.SUGGESTION_PHASE_PROMPT.split("=" * 67, 1)[1]
         self.assertIn(principles, live_suggestion)
+        # Every strict rule admins now edit was already live before 024
+        # (027 only moved the <focus> rule into code).
         rules = config.DETECTIVE_PHASE_PROMPT.split("STRICT RULES:", 1)[1]
-        self.assertTrue(self.live_detective().endswith(rules))
+        live_rules = self.live_detective().split("STRICT RULES:", 1)[1]
+        for rule in rules.strip().split("\n- "):
+            self.assertIn(rule.strip().lstrip("- "), live_rules)
 
 
 @unittest.skipIf(shutil.which("node") is None, "node is required to load migration 024")
@@ -137,14 +144,27 @@ class Migration024SyncTests(unittest.TestCase):
     def setUpClass(cls):
         cls.seed = _load_024_seed()
 
-    def test_base_prompts_match_config(self):
-        self.assertEqual(self.seed["detectiveBase"], config.DETECTIVE_PHASE_PROMPT)
-        # Migration 026 then drops the "priority order" reference.
+    def test_base_prompts_chain_to_config(self):
+        # 024 base -> 026 edit -> 027 plain text == config.py fallbacks.
         old, new = _load_seed("026_drop_cluster_priority.js")["suggestionEdit"]
         self.assertIn(old, self.seed["suggestionBase"])
-        self.assertEqual(self.seed["suggestionBase"].replace(old, new), config.SUGGESTION_PHASE_PROMPT)
+        plain = _load_seed("027_plain_conversation_prompts.js")
+        self.assertEqual(plain["detectiveOld"], self.seed["detectiveBase"])
+        self.assertEqual(plain["suggestionOld"], self.seed["suggestionBase"].replace(old, new))
+        self.assertEqual(plain["detective"], config.DETECTIVE_PHASE_PROMPT)
+        self.assertEqual(plain["suggestion"], config.SUGGESTION_PHASE_PROMPT)
         self.assertNotIn("SITUATION A", config.SUGGESTION_PHASE_PROMPT)
         self.assertNotIn("Journey 1 signals", config.DETECTIVE_PHASE_PROMPT)
+
+    def test_plain_prompts_have_no_machinery(self):
+        plain = _load_seed("027_plain_conversation_prompts.js")
+        for key in ("detective", "suggestion"):
+            self.assertNotIn("{", plain[key], key)
+            self.assertNotIn("<", plain[key], key)
+            self.assertLessEqual(len(plain[key]), plain["characterLimits"][f"{key}_phase_prompt"])
+        # The suggestion text keeps everything after its opening paragraph.
+        self.assertTrue(plain["suggestionOld"].endswith(plain["suggestion"]))
+        self.assertIn("CROSS-CUTTING RESPONSE PRINCIPLES", plain["suggestion"])
 
     def test_seed_matches_default_catalog(self):
         journeys = {j["key"]: j for j in self.seed["journeys"]}
@@ -163,11 +183,20 @@ class Migration024SyncTests(unittest.TestCase):
             for c in j.clusters:
                 s = clusters[c.key]
                 self.assertEqual(
-                    (s["journey"], s["name"], s["sortOrder"],
-                     s["matchesWhen"], s["responsePattern"]),
-                    (j.key, c.name, c.sort_order, c.matches_when, c.response_pattern),
+                    (s["journey"], s["name"], s["sortOrder"], s["matchesWhen"]),
+                    (j.key, c.name, c.sort_order, c.matches_when),
                     c.key,
                 )
+
+    def test_default_steps_are_the_028_cleanup_of_the_seed(self):
+        cleaned = _load_seed("028_plain_situation_steps.js")["steps"]
+        seeded = {c["key"]: c["responsePattern"] for c in self.seed["clusters"]}
+        for j in DEFAULT_CATALOG.journeys:
+            for c in j.clusters:
+                self.assertEqual(c.response_pattern, cleaned[c.key], c.key)
+                # Python port and JS cleanSteps agree, and are idempotent.
+                self.assertEqual(clean_steps(seeded[c.key]), cleaned[c.key], c.key)
+                self.assertEqual(clean_steps(cleaned[c.key]), cleaned[c.key], c.key)
 
     def test_seed_fits_character_limits(self):
         limits = self.seed["characterLimits"]

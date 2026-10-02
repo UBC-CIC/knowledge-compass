@@ -13,6 +13,24 @@ from helpers.routing import (
 DETECTIVE_RETRIEVAL_COUNT = 5
 ANSWER_RETRIEVAL_COUNT = 15
 
+# Placeholders used by detective prompt versions before migration 027. Text
+# that contains any of them is treated as a legacy prompt.
+LEGACY_PLACEHOLDERS = ("{exchange_count}", "{readiness_note}", "{min_exchanges}", "{may_suggest}")
+
+
+def is_legacy_prompt(text: str) -> bool:
+    return any(p in (text or "") for p in LEGACY_PLACEHOLDERS)
+
+
+def fill_placeholders(text: str, values: dict) -> str:
+    """
+    Replace the known {name} placeholders only. Unlike str.format, any other
+    braces an admin typed are left alone instead of raising.
+    """
+    for name, value in values.items():
+        text = text.replace("{" + name + "}", str(value))
+    return text
+
 
 def _readiness_note(exchange_count: int) -> str:
     if config.ROUTING_MODE == ROUTING_MODE_DYNAMIC:
@@ -72,19 +90,31 @@ def get_current_prompt(
         retrieval_count = DETECTIVE_RETRIEVAL_COUNT
         model_arn = config.HAIKU_ARN
 
-        # All legacy placeholders are still supplied so older or admin-edited
-        # prompt versions keep formatting; unused keyword arguments are ignored.
-        detective_body = config.DETECTIVE_PHASE_PROMPT.format(
-            exchange_count=exchange_count + 1,
-            min_exchanges=config.MIN_EXCHANGES_BEFORE_SUGGEST,
-            readiness_note=_readiness_note(exchange_count),
-            may_suggest=False,
-        )
-        # Journey content is appended after .format() so admin-written
-        # journey text may contain braces.
+        values = {
+            "exchange_count": exchange_count + 1,
+            "min_exchanges": config.MIN_EXCHANGES_BEFORE_SUGGEST,
+            "readiness_note": _readiness_note(exchange_count),
+            "may_suggest": False,
+        }
+        base = config.DETECTIVE_PHASE_PROMPT
         journeys_block = build_detective_block(config.JOURNEY_CATALOG, route)
+        if is_legacy_prompt(base):
+            # Older versions carry the status line and block references
+            # themselves; fill their placeholders and add nothing else.
+            parts = [fill_placeholders(base, values)]
+        else:
+            # Plain admin text (migration 027): the app owns the status line,
+            # the journey instructions and the focus rule. The admin text is
+            # used verbatim, so it may contain braces.
+            guide = [config.DETECTIVE_JOURNEY_GUIDE] if journeys_block else []
+            parts = [
+                config.DETECTIVE_STATUS.format(**values),
+                base.strip(),
+                "\n".join(guide + [config.DETECTIVE_FOCUS_RULE]),
+            ]
         if journeys_block:
-            detective_body = f"{detective_body}\n\n{journeys_block}"
+            parts.append(journeys_block)
+        detective_body = "\n\n".join(p for p in parts if p)
         phase_instructions = (
             f"<phase>\n{detective_body}{_focus_block(route)}\n</phase>\n\n"
             f"<output_format>\n{config.OUTPUT_FORMAT_DETECTIVE}\n</output_format>"
@@ -115,6 +145,9 @@ def get_current_prompt(
         suggestion_body = config.SUGGESTION_PHASE_PROMPT
         journeys_block = build_suggestion_block(config.JOURNEY_CATALOG, route)
         if journeys_block:
+            # Plain admin text no longer explains the blocks; the app does.
+            if "<journeys>" not in suggestion_body:
+                suggestion_body = f"{suggestion_body}\n\n{config.SUGGESTION_JOURNEYS_PREFACE}"
             suggestion_body = f"{suggestion_body}\n\n{journeys_block}"
 
         phase_instructions = (

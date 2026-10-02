@@ -30,22 +30,31 @@ export function PreviewDrawer({
   const guiding = phase === "guiding";
   const layer = situationLayer(journeys, journeyKey, situation);
   const situationOptions = selected ? activeClusters(selected) : [];
+  // Names only; keys stay internal.
+  const layerText =
+    layer.mode === "matched"
+      ? `${layer.clusters[0].name} only`
+      : layer.mode === "journey-fallback"
+        ? layer.clusters.length
+          ? `All ${layer.clusters.length} situations in this journey`
+          : "This journey has no situations yet"
+        : `All ${layer.clusters.length} situations in every journey`;
 
   const rows: Array<{ name: string; detail: string; safety?: boolean }> = [
     { name: "The assistant", detail: "Who it is, boundaries and preferred language, plus the journey list" },
     { name: `How it talks · ${guiding ? "giving guidance" : "asking questions"}`, detail: "Shared by every journey" },
     guiding
       ? selected
-        ? { name: `${selected.key} · How to guide`, detail: "This journey's guidance" }
+        ? { name: `${selected.name} · How to guide`, detail: "This journey's guidance" }
         : { name: "How to guide · every journey", detail: "Journey not clear yet, so every journey is included", safety: true }
       : {
           name: "Journeys to listen for",
           detail: selected
-            ? `Every journey's description and words, plus ${selected.key}'s questions`
+            ? "Every journey's description and words, plus this journey's questions"
             : "Every journey's description, words and questions",
           safety: !selected,
         },
-    ...(guiding ? [{ name: "Situation steps", detail: layer.text, safety: layer.mode !== "matched" }] : []),
+    ...(guiding ? [{ name: "Situation steps", detail: layerText, safety: layer.mode !== "matched" }] : []),
     { name: "Reply layout", detail: guiding ? "Full guidance" : "While asking" },
     {
       name: "Knowledge base passages",
@@ -56,8 +65,8 @@ export function PreviewDrawer({
   let safety = "";
   if (guiding && selected && layer.mode === "journey-fallback") {
     safety = layer.clusters.length
-      ? `No situation picked yet, so the assistant gets the steps for all ${layer.clusters.length} situations in ${selected.key}. Once one fits, only its steps are sent.`
-      : `${selected.key} has no situations yet, so the assistant uses its guidance plus the shared pages.`;
+      ? `No situation picked yet, so the assistant gets the steps for all ${layer.clusters.length} situations in this journey. Once one fits, only its steps are sent.`
+      : "This journey has no situations yet, so the assistant uses its guidance plus the shared pages.";
   } else if (guiding && layer.mode === "all-fallback") {
     safety =
       "The journey isn't clear yet, so the assistant gets every journey and every situation. It still answers; it just has more to choose from.";
@@ -103,7 +112,7 @@ export function PreviewDrawer({
             <option value="UNCLEAR">Not clear yet</option>
             {live.map((j) => (
               <option key={j.key} value={j.key}>
-                {j.key} · {j.name}
+                {j.name}
               </option>
             ))}
           </select>
@@ -120,7 +129,7 @@ export function PreviewDrawer({
             <option value="UNKNOWN">Not known yet</option>
             {situationOptions.map((c) => (
               <option key={c.key} value={c.key}>
-                {c.key} · {c.name}
+                {c.name}
               </option>
             ))}
           </select>

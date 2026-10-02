@@ -1,5 +1,16 @@
-import { useId, type ReactNode } from "react";
-import { ChevronLeft, Info, LifeBuoy, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronLeft,
+  Info,
+  LifeBuoy,
+  Plus,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,10 +20,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SAFETY, STAGE_STYLE, type PromptStage } from "@/lib/promptCatalog";
+import { SAFETY, STAGE_STYLE, formatQuestions, parseQuestions, showCounter, type PromptStage } from "@/lib/promptCatalog";
+import { changedBy, type PromptVersion } from "@/lib/promptVersions";
 import type { FeedbackCount } from "@/types/journeys";
 
-export const ACCENT = "oklch(0.42 0.10 268)";
 export const SELECTED_BG = "oklch(0.96 0.02 268)";
 
 export const outlineButton =
@@ -41,18 +52,37 @@ export function StageTag({ stage }: { stage: PromptStage }) {
   );
 }
 
-export function KeyPill({ value, solid = false }: { value: string; solid?: boolean }) {
+/**
+ * "Last changed by … · date" (or "Original version") with a permanent
+ * "Go back to the previous version" link for one versioned text.
+ */
+export function HistoryLine({
+  live,
+  canGoBack,
+  disabled,
+  onGoBack,
+}: {
+  live?: PromptVersion;
+  canGoBack: boolean;
+  disabled?: boolean;
+  onGoBack: () => void;
+}) {
+  if (!live) return null;
   return (
-    <span
-      className={
-        solid
-          ? "shrink-0 rounded-full px-[7px] py-px font-mono text-[11.5px] font-medium text-white"
-          : "shrink-0 rounded-full border border-foreground/16 px-2 py-px font-mono text-xs font-medium"
-      }
-      style={solid ? { background: ACCENT } : undefined}
-    >
-      {value}
-    </span>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-foreground/65">
+      <span>{changedBy(live.created_by_email, live.created_at) ?? "Original version"}</span>
+      {canGoBack ? (
+        <button
+          type="button"
+          onClick={onGoBack}
+          disabled={disabled}
+          title={disabled ? "Publish or discard your changes first" : undefined}
+          className="font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground/45 disabled:no-underline"
+        >
+          Go back to the previous version
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -160,46 +190,59 @@ export function PageHeader({
   );
 }
 
-/** One editable text on a page: title, tag, help, textarea, counter and notes. */
-export function FieldSection({
-  title,
-  stage,
-  help,
-  value,
-  onChange,
-  limit,
-  placeholder,
-  rows = 6,
-  mono = false,
-  autoInsert,
-  warning,
-  note,
-  error,
-}: {
+/** Character count: visible only near (80%+) or over the limit; always for screen readers. */
+function Counter({ id, length, limit }: { id: string; length: number; limit: number }) {
+  const over = length > limit;
+  const text = `${length.toLocaleString()} / ${limit.toLocaleString()}`;
+  if (!showCounter(length, limit)) {
+    return (
+      <span id={id} className="sr-only">
+        {text} characters
+      </span>
+    );
+  }
+  return (
+    <span
+      id={id}
+      className={`text-[12.5px] tabular-nums ${over ? "font-bold text-red-700" : "font-medium text-amber-800"}`}
+    >
+      {text}
+      <span className="sr-only">{over ? " characters, over the limit" : " characters, close to the limit"}</span>
+    </span>
+  );
+}
+
+type SectionChrome = {
   title: string;
   stage?: PromptStage;
   help?: string;
-  value: string;
-  onChange: (value: string) => void;
-  limit: number;
-  placeholder?: string;
-  rows?: number;
-  mono?: boolean;
   autoInsert?: string;
-  warning?: string;
   note?: string;
   error?: string | null;
+  /** Shown under the field, e.g. the history line. */
+  footer?: ReactNode;
+};
+
+/** Title, tag, help, note; then the field; then auto-insert pill, counter, error and footer. */
+function Section({
+  id,
+  labelFor,
+  chrome,
+  counter,
+  children,
+}: {
+  id: string;
+  labelFor?: string;
+  chrome: SectionChrome;
+  counter: ReactNode;
+  children: ReactNode;
 }) {
-  const id = useId();
-  const over = value.length > limit;
-  const describedBy = [help ? `${id}-help` : null, `${id}-count`, error ? `${id}-error` : null]
-    .filter(Boolean)
-    .join(" ");
+  const { title, stage, help, autoInsert, note, error, footer } = chrome;
   return (
     <section className="flex flex-col gap-2" aria-labelledby={`${id}-title`}>
       <div className="flex flex-wrap items-center gap-2.5">
         <h3 id={`${id}-title`} className="text-[15px] font-bold">
-          <label htmlFor={id}>{title}</label>
+          {labelFor ? <label htmlFor={labelFor}>{title}</label> : title}
         </h3>
         {stage && stage !== "every" ? <StageTag stage={stage} /> : null}
       </div>
@@ -209,67 +252,183 @@ export function FieldSection({
         </p>
       ) : null}
       {note ? (
-        <div className="rounded-[9px] border px-3 py-2.5 text-[13px] leading-normal" style={{ background: SAFETY.bg, borderColor: SAFETY.border, color: SAFETY.fg }}>
+        <div
+          className="rounded-[9px] border px-3 py-2.5 text-[13px] leading-normal"
+          style={{ background: SAFETY.bg, borderColor: SAFETY.border, color: SAFETY.fg }}
+        >
           {note}
         </div>
       ) : null}
-      {warning ? <Alert tone="warning">{warning}</Alert> : null}
+      {children}
+      {autoInsert || counter ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {autoInsert ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-[3px] text-[12px] font-semibold"
+              style={{ borderColor: "rgba(22,24,29,0.28)", color: "rgba(22,24,29,0.72)" }}
+            >
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              {autoInsert}
+            </span>
+          ) : (
+            <span />
+          )}
+          {counter}
+        </div>
+      ) : null}
+      {error ? (
+        <p id={`${id}-error`} className="text-xs text-red-700">
+          {error}
+        </p>
+      ) : null}
+      {footer}
+    </section>
+  );
+}
+
+const describedBy = (id: string, chrome: SectionChrome) =>
+  [chrome.help ? `${id}-help` : null, `${id}-count`, chrome.error ? `${id}-error` : null].filter(Boolean).join(" ");
+
+/** One editable text on a page. */
+export function FieldSection({
+  value,
+  onChange,
+  limit,
+  placeholder,
+  rows = 6,
+  mono = false,
+  ...chrome
+}: SectionChrome & {
+  value: string;
+  onChange: (value: string) => void;
+  limit: number;
+  placeholder?: string;
+  rows?: number;
+  mono?: boolean;
+}) {
+  const id = useId();
+  const over = value.length > limit;
+  return (
+    <Section id={id} labelFor={id} chrome={chrome} counter={<Counter id={`${id}-count`} length={value.length} limit={limit} />}>
       <textarea
         id={id}
         value={value}
         rows={rows}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        aria-invalid={over || error ? true : undefined}
-        aria-describedby={describedBy}
+        aria-invalid={over || chrome.error ? true : undefined}
+        aria-describedby={describedBy(id, chrome)}
         className={`${textareaClass} ${mono ? "font-mono text-[12.5px]" : ""}`}
       />
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {autoInsert ? (
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-[3px] text-[12px] font-semibold"
-            style={{ borderColor: "rgba(22,24,29,0.28)", color: "rgba(22,24,29,0.72)" }}
-          >
-            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-            {autoInsert}
-          </span>
-        ) : (
-          <span />
-        )}
-        <span
-          id={`${id}-count`}
-          className={`text-[12.5px] tabular-nums ${over ? "font-bold text-red-700" : "font-medium text-foreground/65"}`}
-        >
-          {value.length.toLocaleString()} / {limit.toLocaleString()}
-          <span className="sr-only">{over ? " characters, over the limit" : " characters"}</span>
-        </span>
-      </div>
-      {error ? (
-        <p id={`${id}-error`} className="text-xs text-red-700">
-          {error}
-        </p>
-      ) : null}
-    </section>
+    </Section>
   );
 }
 
-/** Sticky footer: unsaved count, undo, discard, save and publish. */
+/**
+ * Numbered questions edited as rows. `value` / `onChange` use the saved text
+ * format ("1. …\n2. …"); empty rows are kept while editing but not saved.
+ */
+export function QuestionListField({
+  value,
+  onChange,
+  limit,
+  ...chrome
+}: SectionChrome & {
+  value: string;
+  onChange: (value: string) => void;
+  limit: number;
+}) {
+  const id = useId();
+  const [rows, setRows] = useState<string[]>(() => parseQuestions(value));
+  const [emitted, setEmitted] = useState(value);
+  // Re-sync when the value changes from outside (discard, publish, go back).
+  if (value !== emitted) {
+    setEmitted(value);
+    setRows(parseQuestions(value));
+  }
+  const update = (next: string[]) => {
+    const text = formatQuestions(next);
+    setRows(next);
+    setEmitted(text);
+    onChange(text);
+  };
+  const move = (i: number, by: number) => {
+    const next = [...rows];
+    [next[i], next[i + by]] = [next[i + by], next[i]];
+    update(next);
+  };
+  const shown = rows.length ? rows : [""];
+
+  return (
+    <Section id={id} chrome={chrome} counter={<Counter id={`${id}-count`} length={value.length} limit={limit} />}>
+      <ol className="flex flex-col gap-2" aria-describedby={describedBy(id, chrome)}>
+        {shown.map((q, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <span className="mt-2.5 w-6 flex-none text-right text-[13.5px] font-bold text-foreground/60" aria-hidden="true">
+              {i + 1}.
+            </span>
+            <textarea
+              value={q}
+              rows={2}
+              aria-label={`Question ${i + 1}`}
+              placeholder="What would you like to ask?"
+              onChange={(e) => update(shown.map((x, j) => (j === i ? e.target.value : x)))}
+              className={`${textareaClass} flex-1 py-2`}
+            />
+            <div className="flex flex-none flex-col gap-1">
+              <button
+                type="button"
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                aria-label={`Move question ${i + 1} up`}
+                className={`${outlineButton} h-7 px-1.5`}
+              >
+                <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => move(i, 1)}
+                disabled={i === shown.length - 1}
+                aria-label={`Move question ${i + 1} down`}
+                className={`${outlineButton} h-7 px-1.5`}
+              >
+                <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => update(shown.filter((_, j) => j !== i))}
+              aria-label={`Remove question ${i + 1}`}
+              className={`${outlineButton} mt-0.5 h-[30px] px-1.5`}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </li>
+        ))}
+      </ol>
+      <button
+        type="button"
+        onClick={() => update([...shown, ""])}
+        className="inline-flex items-center gap-1 self-start pl-8 text-[13px] font-semibold text-primary hover:underline"
+      >
+        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+        Add question
+      </button>
+    </Section>
+  );
+}
+
+/** Sticky footer: unsaved count, discard, save and publish. */
 export function PageFooter({
   changes,
   canSave,
   saving,
-  undoLabel,
-  undoing,
-  onUndo,
   onDiscard,
   onSave,
 }: {
   changes: number;
   canSave: boolean;
   saving: boolean;
-  undoLabel?: string | null;
-  undoing?: boolean;
-  onUndo?: () => void;
   onDiscard: () => void;
   onSave: () => void;
 }) {
@@ -283,16 +442,6 @@ export function PageFooter({
             ? `${changes} unsaved change${changes === 1 ? "" : "s"} on this page.`
             : "All changes published."}
         </span>
-        {!dirty && undoLabel && onUndo ? (
-          <button
-            type="button"
-            onClick={onUndo}
-            disabled={undoing}
-            className="font-semibold text-primary hover:underline disabled:opacity-60"
-          >
-            {undoing ? "Undoing..." : undoLabel}
-          </button>
-        ) : null}
       </div>
       <div className="flex items-center gap-2.5">
         {dirty ? (

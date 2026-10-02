@@ -151,3 +151,21 @@ export const DEFAULT_SYSTEM_MESSAGES: Record<SystemMessageType, SystemMessageVer
     },
   ],
 };
+
+// Migration 027: plain "How it talks" text. The app adds the status line and
+// the journeys/focus/routing-hint instructions itself (helpers/logic.py).
+const PLAIN_DETECTIVE =
+  "Ask exactly ONE warm, focused question. Acknowledge what the parent said first.\n\nSTEP 1 — IDENTIFY THE JOURNEY using the signals listed for each journey below.\n\nRights/concept signals (can appear in any journey):\n  \"rights,\" \"Article 24,\" \"undue hardship,\" \"duty to accommodate,\"\n  \"personal care,\" \"medication,\" \"appeal,\" \"lawyer,\" \"legal,\"\n  \"inclusive education,\" \"what is PDA\"\n\nSTEP 2 — UNDERSTAND WHERE THEY ARE by asking the questions listed for the\nfamily's journey (in order, if unknown). If the journey is not clear yet, ask\nthe question that best tells the journeys apart.\n\nSTRICT RULES:\n- ONE question only per turn. Never list multiple questions.\n- Do NOT suggest resources, next steps, or actions on this turn. The system moves to\n  guidance automatically once the family's situation is clear.\n- Never assume gender, disability type, or province without the parent mentioning it.\n- Never assume the family requested the reduced schedule.";
+
+function addPlainVersion(type: "detective_phase_prompt" | "suggestion_phase_prompt", content: string) {
+  const previous = DEFAULT_SYSTEM_MESSAGES[type][0];
+  DEFAULT_SYSTEM_MESSAGES[type] = [
+    { ...previous, id: `seed-${type}-v3`, content, version: 3, is_active: true },
+    { ...previous, is_active: false },
+  ];
+}
+
+const shippedSuggestion = DEFAULT_SYSTEM_MESSAGES.suggestion_phase_prompt[0].content;
+addPlainVersion("detective_phase_prompt", PLAIN_DETECTIVE);
+// Same as 027: drop the opening paragraph that described the prompt blocks.
+addPlainVersion("suggestion_phase_prompt", shippedSuggestion.slice(shippedSuggestion.indexOf("\n\n") + 2));

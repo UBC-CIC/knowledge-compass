@@ -4,19 +4,24 @@ import {
   Alert,
   BackLink,
   FieldSection,
-  KeyPill,
+  HistoryLine,
   PageFooter,
   PageHeader,
   Pill,
+  QuestionListField,
   Rating,
   SafetyBox,
   outlineButton,
 } from "@/components/Admin/Prompts/parts";
+import { changedBy } from "@/lib/promptVersions";
+import { DEFAULT_SYSTEM_MESSAGES } from "@/components/Admin/defaultSystemMessages";
 import {
-  CLEANUPS,
+  CLEANUP_NOTES,
   TECH_NOTE,
   activeClusters,
   bySortOrder,
+  formatQuestions,
+  parseQuestions,
   signalChips,
   signalsFromWords,
   wordsKey,
@@ -34,14 +39,8 @@ import {
 } from "@/types/journeys";
 import type { SystemMessageType, SystemMessages } from "@/types/systemMessages";
 
-/** Reverts the last publish on a page. Kept by the parent for this session. */
-export type UndoAction = () => Promise<void>;
-
 /** Shared props every editor page receives from PromptManagement. */
 type PageProps = {
-  /** Undo for the last publish on this page, if any (session only). */
-  undo: UndoAction | null;
-  onPublished: (undo: UndoAction | null) => void;
   onDirtyChange: (dirty: boolean) => void;
 };
 
@@ -55,7 +54,7 @@ const errorMessage = (e: unknown, fallback: string) => (e instanceof Error && e.
 
 const liveVersion = <V extends PromptVersion>(versions: V[] | undefined) => versions?.find((v) => v.is_active);
 
-/** The newest version older than the live one (what "undo" goes back to). */
+/** The newest version older than the live one (what "Go back" restores). */
 const previousVersion = <V extends PromptVersion>(versions: V[] | undefined) => {
   const live = liveVersion(versions);
   if (!live || !versions) return undefined;
@@ -79,12 +78,13 @@ function useDraft<K extends string>(live: Record<K, string>, equals: Partial<Rec
   const [edits, setEdits] = useState<Partial<Record<K, string>>>({});
   const value = (k: K) => edits[k] ?? live[k];
   const set = (k: K) => (v: string) => setEdits((e) => ({ ...e, [k]: v }));
-  const changed = (Object.keys(edits) as K[]).filter((k) => {
+  const isChanged = (k: K) => {
     const draft = edits[k];
     if (draft === undefined) return false;
     const eq = equals[k] ?? strictEquals;
     return !eq(draft.trim(), live[k].trim());
-  });
+  };
+  const changed = (Object.keys(edits) as K[]).filter(isChanged);
   const clear = (keys?: K[]) =>
     setEdits((e) => {
       if (!keys) return {};
@@ -92,31 +92,36 @@ function useDraft<K extends string>(live: Record<K, string>, equals: Partial<Rec
       keys.forEach((k) => delete next[k]);
       return next;
     });
-  return { value, set, changed, clear };
+  return { value, set, changed, isChanged, clear };
 }
 
 function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 }
 
-/** Save/undo wiring shared by every page. */
-function usePublish() {
-  const [saving, setSaving] = useState(false);
-  const [undoing, setUndoing] = useState(false);
+/** Busy/error wiring shared by every page. */
+function useRunner() {
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const run = async (kind: "save" | "undo", fn: () => Promise<void>) => {
-    const setBusy = kind === "save" ? setSaving : setUndoing;
+  const run = async (fn: () => Promise<unknown>, fallback = "Could not publish. Please try again.") => {
     setBusy(true);
     setError(null);
     try {
       await fn();
     } catch (e) {
-      setError(errorMessage(e, kind === "save" ? "Could not publish. Please try again." : "Could not undo. Please try again."));
+      setError(errorMessage(e, fallback));
     } finally {
       setBusy(false);
     }
   };
-  return { saving, undoing, error, run };
+  return { busy, error, run };
+}
+
+/** Confirm, then make the previous version live again. Nothing is deleted. */
+function confirmGoBack(title: string) {
+  return window.confirm(
+    `Go back to the previous version of “${title}”? It becomes live for new messages within about five minutes. The current text stays in history.`
+  );
 }
 
 function Scroll({ children }: { children: ReactNode }) {
@@ -154,17 +159,30 @@ function ArchiveLink({ what, archived, onToggle }: { what: string; archived: boo
   );
 }
 
+/** "Details last changed by …" for unversioned fields (name, descriptions). */
+function DetailsChanged({ email, at }: { email?: string | null; at?: string }) {
+  const text = changedBy(email, at);
+  return text ? <p className="mt-1.5 text-[12.5px] text-foreground/65">Details {text.charAt(0).toLowerCase() + text.slice(1)}</p> : null;
+}
+
 // ------------------------------------------------------------------
 // Shared pages: The assistant, How it talks, Welcome and disclaimer, Reply layouts
 // ------------------------------------------------------------------
+
+/** Note shown while the live text is a migration clean-up with an older version behind it. */
+function cleanupNote(id: SystemMessageType, versions: PromptVersion[] | undefined) {
+  const note = CLEANUP_NOTES[id];
+  const live = liveVersion(versions);
+  const shipped = liveVersion(DEFAULT_SYSTEM_MESSAGES[id]);
+  if (!note || !live || !shipped || !previousVersion(versions)) return undefined;
+  return live.content.trim() === shipped.content.trim() ? note : undefined;
+}
 
 export function SharedPagePane({
   page,
   messages,
   publish,
   activate,
-  undo,
-  onPublished,
   onDirtyChange,
 }: PageProps & {
   page: SharedPage;
@@ -178,50 +196,25 @@ export function SharedPagePane({
     string
   >;
   const draft = useDraft(live);
-  const { saving, undoing, error, run } = usePublish();
+  const { busy, error, run } = useRunner();
   useReportDirty(draft.changed.length > 0, onDirtyChange);
 
   const limitOf = (id: SystemMessageType) => liveVersion(messages[id])?.character_limit ?? SHARED_DEFAULT_LIMIT;
   const problems = ids.filter((id) => draft.value(id).length > limitOf(id) || !draft.value(id).trim());
 
-  // Migration-published clean-ups (for example system_role in 025) can be undone.
-  const cleanups = ids.flatMap((id) => {
-    const c = CLEANUPS[id];
-    const prev = previousVersion(messages[id]);
-    return c && prev && live[id].trim() === c.content.trim() ? [{ id, note: c.note, prev }] : [];
-  });
-
   const save = () =>
-    run("save", async () => {
-      const reverts: Array<[SystemMessageType, string]> = [];
+    run(async () => {
       for (const id of draft.changed) {
-        const prev = liveVersion(messages[id]);
         await publish(id, draft.value(id).trim());
         draft.clear([id]);
-        if (prev) reverts.push([id, prev.id]);
       }
-      onPublished(
-        reverts.length
-          ? async () => {
-              for (const [id, versionId] of reverts) await activate(id, versionId);
-            }
-          : null
-      );
     });
 
-  const undoCleanup = () =>
-    run("undo", async () => {
-      for (const c of cleanups) await activate(c.id, c.prev.id);
-    });
-
-  const undoLabel = undo ? "Undo last publish" : cleanups.length ? "Undo cleanup" : null;
-  const onUndo = undo
-    ? () =>
-        run("undo", async () => {
-          await undo();
-          onPublished(null);
-        })
-    : undoCleanup;
+  const goBack = (id: SystemMessageType, title: string) => {
+    const prev = previousVersion(messages[id]);
+    if (!prev || !confirmGoBack(title)) return;
+    run(() => activate(id, prev.id), "Could not go back. Please try again.");
+  };
 
   return (
     <>
@@ -240,19 +233,23 @@ export function SharedPagePane({
             rows={page.technical ? 12 : s.id === "suggestion_phase_prompt" ? 14 : 8}
             mono={page.technical}
             autoInsert={s.autoInsert}
-            warning={s.warning}
-            note={cleanups.find((c) => c.id === s.id)?.note}
+            note={cleanupNote(s.id, messages[s.id])}
             error={!draft.value(s.id).trim() ? "This can't be empty." : null}
+            footer={
+              <HistoryLine
+                live={liveVersion(messages[s.id])}
+                canGoBack={!!previousVersion(messages[s.id])}
+                disabled={busy || draft.isChanged(s.id)}
+                onGoBack={() => goBack(s.id, s.title)}
+              />
+            }
           />
         ))}
       </Scroll>
       <PageFooter
         changes={draft.changed.length}
         canSave={problems.length === 0}
-        saving={saving}
-        undoLabel={undoLabel}
-        undoing={undoing}
-        onUndo={onUndo}
+        saving={busy}
         onDiscard={() => draft.clear()}
         onSave={save}
       />
@@ -274,8 +271,6 @@ export function JourneyPagePane({
   updateJourney,
   onOpenSituation,
   onAddSituation,
-  undo,
-  onPublished,
   onDirtyChange,
 }: PageProps & {
   journey: Journey;
@@ -283,28 +278,30 @@ export function JourneyPagePane({
   saveVersion: (field: JourneyPromptField, ownerId: string, content: string) => Promise<unknown>;
   activateVersion: (versionId: string) => Promise<unknown>;
   updateJourney: (id: string, patch: JourneyPatch) => Promise<unknown>;
-  onOpenSituation: (key: string) => void;
+  onOpenSituation: (clusterId: string) => void;
   onAddSituation: () => void;
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  const questions = liveVersion(journey.prompts.detective_questions);
+  const guidance = liveVersion(journey.prompts.guidance);
   const live: Record<JourneyKey, string> = {
     name: journey.name,
     description: journey.description,
     words: signalChips(journey.detection_signals).join(", "),
-    detective_questions: liveVersion(journey.prompts.detective_questions)?.content ?? "",
-    guidance: liveVersion(journey.prompts.guidance)?.content ?? "",
+    // Normalised to the list editor's format so first load isn't a change.
+    detective_questions: formatQuestions(parseQuestions(questions?.content ?? "")),
+    guidance: guidance?.content ?? "",
   };
   const draft = useDraft(live, { words: (a, b) => wordsKey(a) === wordsKey(b) });
-  const { saving, undoing, error, run } = usePublish();
+  const { busy, error, run } = useRunner();
   useReportDirty(draft.changed.length > 0, onDirtyChange);
 
   const limits: Record<JourneyKey, number> = {
     name: NAME_LIMIT,
     description: DESCRIPTION_LIMIT,
     words: SIGNALS_LIMIT,
-    detective_questions:
-      liveVersion(journey.prompts.detective_questions)?.character_limit ?? DEFAULT_PROMPT_LIMITS.detective_questions,
-    guidance: liveVersion(journey.prompts.guidance)?.character_limit ?? DEFAULT_PROMPT_LIMITS.guidance,
+    detective_questions: questions?.character_limit ?? DEFAULT_PROMPT_LIMITS.detective_questions,
+    guidance: guidance?.character_limit ?? DEFAULT_PROMPT_LIMITS.guidance,
   };
   const length = (k: JourneyKey) => (k === "words" ? signalsFromWords(draft.value(k)).length : draft.value(k).length);
   // Versioned prompt text can't be published empty once it exists.
@@ -320,59 +317,49 @@ export function JourneyPagePane({
   const rows = showArchived ? [...clusters, ...archived] : clusters;
 
   const save = () =>
-    run("save", async () => {
+    run(async () => {
       const changed = draft.changed;
       const patch: JourneyPatch = {};
-      const oldPatch: JourneyPatch = {};
-      if (changed.includes("name")) {
-        patch.name = draft.value("name").trim();
-        oldPatch.name = journey.name;
-      }
-      if (changed.includes("description")) {
-        patch.description = draft.value("description").trim();
-        oldPatch.description = journey.description;
-      }
-      if (changed.includes("words")) {
-        patch.detection_signals = signalsFromWords(draft.value("words"));
-        oldPatch.detection_signals = journey.detection_signals;
-      }
-      const reverts: string[] = [];
-      let metaSaved = false;
+      if (changed.includes("name")) patch.name = draft.value("name").trim();
+      if (changed.includes("description")) patch.description = draft.value("description").trim();
+      if (changed.includes("words")) patch.detection_signals = signalsFromWords(draft.value("words"));
       if (Object.keys(patch).length) {
         await updateJourney(journey.id, patch);
-        metaSaved = true;
         draft.clear(["name", "description", "words"]);
       }
       for (const field of ["detective_questions", "guidance"] as const) {
         if (!changed.includes(field)) continue;
-        const prev = liveVersion(journey.prompts[field]);
         await saveVersion(field, journey.id, draft.value(field).trim());
         draft.clear([field]);
-        if (prev) reverts.push(prev.id);
       }
-      onPublished(
-        metaSaved || reverts.length
-          ? async () => {
-              if (metaSaved) await updateJourney(journey.id, oldPatch);
-              for (const id of reverts) await activateVersion(id);
-            }
-          : null
-      );
     });
+
+  const goBack = (field: "detective_questions" | "guidance", title: string) => {
+    const prev = previousVersion(journey.prompts[field]);
+    if (!prev || !confirmGoBack(title)) return;
+    run(() => activateVersion(prev.id), "Could not go back. Please try again.");
+  };
+
+  const history = (field: "detective_questions" | "guidance", title: string) => (
+    <HistoryLine
+      live={liveVersion(journey.prompts[field])}
+      canGoBack={!!previousVersion(journey.prompts[field])}
+      disabled={busy || draft.isChanged(field)}
+      onGoBack={() => goBack(field, title)}
+    />
+  );
 
   const toggleArchive = () => {
     const archiving = !journey.is_archived;
     if (
       archiving &&
       !window.confirm(
-        `Archive ${journey.key}? The assistant stops using this journey and its situations. You can restore it later.`
+        `Archive “${journey.name}”? The assistant stops using this journey and its situations. You can restore it later.`
       )
     ) {
       return;
     }
-    run("save", async () => {
-      await updateJourney(journey.id, { is_archived: archiving });
-    });
+    run(() => updateJourney(journey.id, { is_archived: archiving }), "Could not update the journey.");
   };
 
   const n = clusters.length;
@@ -383,7 +370,6 @@ export function JourneyPagePane({
         <PageHeader
           title={
             <>
-              <KeyPill value={journey.key} solid />
               <NameInput label="Journey name" value={draft.value("name")} onChange={draft.set("name")} />
               {journey.is_archived ? (
                 <Pill bg="rgba(22,24,29,0.07)" fg="rgba(22,24,29,0.75)">
@@ -397,6 +383,7 @@ export function JourneyPagePane({
           <div className="mt-2">
             <Rating count={feedback} />
           </div>
+          <DetailsChanged email={journey.updated_by_email} at={journey.updated_at} />
         </PageHeader>
 
         {journey.is_archived ? (
@@ -423,15 +410,15 @@ export function JourneyPagePane({
           limit={limits.words}
           rows={3}
         />
-        <FieldSection
+        <QuestionListField
           title="Questions to ask"
           stage="asking"
           help="Asked one at a time, in this order, while the assistant learns where the family is."
           value={draft.value("detective_questions")}
           onChange={draft.set("detective_questions")}
           limit={limits.detective_questions}
-          rows={7}
-          error={emptyPrompt("detective_questions") ? "This can't be empty." : null}
+          error={emptyPrompt("detective_questions") ? "Add at least one question." : null}
+          footer={history("detective_questions", "Questions to ask")}
         />
         <FieldSection
           title="How to guide"
@@ -442,6 +429,7 @@ export function JourneyPagePane({
           limit={limits.guidance}
           rows={4}
           error={emptyPrompt("guidance") ? "This can't be empty." : null}
+          footer={history("guidance", "How to guide")}
         />
 
         <section className="flex flex-col gap-2.5" aria-labelledby={`${journey.id}-situations`}>
@@ -463,7 +451,7 @@ export function JourneyPagePane({
             <ul className="overflow-hidden rounded-[11px] border border-foreground/12">
               {rows.map((c) => (
                 <li key={c.id}>
-                  <SituationRow cluster={c} onOpen={() => onOpenSituation(c.key)} />
+                  <SituationRow cluster={c} onOpen={() => onOpenSituation(c.id)} />
                 </li>
               ))}
             </ul>
@@ -496,15 +484,7 @@ export function JourneyPagePane({
       <PageFooter
         changes={draft.changed.length}
         canSave={!problems}
-        saving={saving}
-        undoLabel={undo ? "Undo last publish" : null}
-        undoing={undoing}
-        onUndo={() =>
-          run("undo", async () => {
-            await undo?.();
-            onPublished(null);
-          })
-        }
+        saving={busy}
         onDiscard={() => draft.clear()}
         onSave={save}
       />
@@ -517,11 +497,8 @@ function SituationRow({ cluster, onOpen }: { cluster: JourneyCluster; onOpen: ()
     <button
       type="button"
       onClick={onOpen}
-      className="grid w-full grid-cols-[44px_minmax(0,1fr)_18px] items-center gap-3 border-b border-foreground/8 bg-white px-3.5 py-[11px] text-left last:border-b-0 hover:bg-muted"
+      className="grid w-full grid-cols-[minmax(0,1fr)_18px] items-center gap-3 border-b border-foreground/8 bg-white px-4 py-[11px] text-left last:border-b-0 hover:bg-muted"
     >
-      <span className="justify-self-start">
-        <KeyPill value={cluster.key} />
-      </span>
       <span className="min-w-0">
         <span className="block text-sm font-semibold leading-snug">
           {cluster.name}
@@ -550,8 +527,6 @@ export function SituationPagePane({
   activateVersion,
   updateCluster,
   onBack,
-  undo,
-  onPublished,
   onDirtyChange,
 }: PageProps & {
   journey: Journey;
@@ -562,14 +537,15 @@ export function SituationPagePane({
   updateCluster: (id: string, patch: ClusterPatch) => Promise<unknown>;
   onBack: () => void;
 }) {
-  const steps = liveVersion(cluster.prompts.response_pattern);
+  const versions = cluster.prompts.response_pattern;
+  const steps = liveVersion(versions);
   const live: Record<SituationKey, string> = {
     name: cluster.name,
     matches_when: cluster.matches_when,
     response_pattern: steps?.content ?? "",
   };
   const draft = useDraft(live);
-  const { saving, undoing, error, run } = usePublish();
+  const { busy, error, run } = useRunner();
   useReportDirty(draft.changed.length > 0, onDirtyChange);
 
   const stepsLimit = steps?.character_limit ?? DEFAULT_PROMPT_LIMITS.response_pattern;
@@ -582,61 +558,45 @@ export function SituationPagePane({
     emptySteps;
 
   const save = () =>
-    run("save", async () => {
+    run(async () => {
       const changed = draft.changed;
       const patch: ClusterPatch = {};
-      const oldPatch: ClusterPatch = {};
-      if (changed.includes("name")) {
-        patch.name = draft.value("name").trim();
-        oldPatch.name = cluster.name;
-      }
-      if (changed.includes("matches_when")) {
-        patch.matches_when = draft.value("matches_when").trim();
-        oldPatch.matches_when = cluster.matches_when;
-      }
-      let metaSaved = false;
-      let revert: string | null = null;
+      if (changed.includes("name")) patch.name = draft.value("name").trim();
+      if (changed.includes("matches_when")) patch.matches_when = draft.value("matches_when").trim();
       if (Object.keys(patch).length) {
         await updateCluster(cluster.id, patch);
-        metaSaved = true;
         draft.clear(["name", "matches_when"]);
       }
       if (changed.includes("response_pattern")) {
         await saveVersion("response_pattern", cluster.id, draft.value("response_pattern").trim());
         draft.clear(["response_pattern"]);
-        revert = steps?.id ?? null;
       }
-      onPublished(
-        metaSaved || revert
-          ? async () => {
-              if (metaSaved) await updateCluster(cluster.id, oldPatch);
-              if (revert) await activateVersion(revert);
-            }
-          : null
-      );
     });
+
+  const goBack = () => {
+    const prev = previousVersion(versions);
+    if (!prev || !confirmGoBack("Steps to follow")) return;
+    run(() => activateVersion(prev.id), "Could not go back. Please try again.");
+  };
 
   const toggleArchive = () => {
     const archiving = !cluster.is_archived;
     if (
       archiving &&
-      !window.confirm(`Archive ${cluster.key}? The assistant stops using this situation. You can restore it later.`)
+      !window.confirm(`Archive “${cluster.name}”? The assistant stops using this situation. You can restore it later.`)
     ) {
       return;
     }
-    run("save", async () => {
-      await updateCluster(cluster.id, { is_archived: archiving });
-    });
+    run(() => updateCluster(cluster.id, { is_archived: archiving }), "Could not update the situation.");
   };
 
   return (
     <>
       <Scroll>
         <PageHeader
-          crumb={<BackLink label={`${journey.key} · ${journey.name}`} onClick={onBack} />}
+          crumb={<BackLink label={journey.name} onClick={onBack} />}
           title={
             <>
-              <KeyPill value={cluster.key} />
               <NameInput label="Situation name" value={draft.value("name")} onChange={draft.set("name")} />
               {cluster.is_archived ? (
                 <Pill bg="rgba(22,24,29,0.07)" fg="rgba(22,24,29,0.75)">
@@ -650,6 +610,7 @@ export function SituationPagePane({
           <div className="mt-2">
             <Rating count={feedback} />
           </div>
+          <DetailsChanged email={cluster.updated_by_email} at={cluster.updated_at} />
         </PageHeader>
 
         {cluster.is_archived ? (
@@ -676,6 +637,14 @@ export function SituationPagePane({
           limit={stepsLimit}
           rows={14}
           error={emptySteps ? "This can't be empty." : null}
+          footer={
+            <HistoryLine
+              live={steps}
+              canGoBack={!!previousVersion(versions)}
+              disabled={busy || draft.isChanged("response_pattern")}
+              onGoBack={goBack}
+            />
+          }
         />
 
         <ArchiveLink what="situation" archived={cluster.is_archived} onToggle={toggleArchive} />
@@ -683,15 +652,7 @@ export function SituationPagePane({
       <PageFooter
         changes={draft.changed.length}
         canSave={!problems}
-        saving={saving}
-        undoLabel={undo ? "Undo last publish" : null}
-        undoing={undoing}
-        onUndo={() =>
-          run("undo", async () => {
-            await undo?.();
-            onPublished(null);
-          })
-        }
+        saving={busy}
         onDiscard={() => draft.clear()}
         onSave={save}
       />

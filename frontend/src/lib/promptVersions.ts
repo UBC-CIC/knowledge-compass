@@ -26,3 +26,14 @@ export function sortVersions<V extends PromptVersion>(versions: V[]): V[] {
     return bd - ad;
   });
 }
+
+/** "Last changed by name@example.org · 1 Oct 2026", or null when no admin is recorded. */
+export function changedBy(email?: string | null, at?: string): string | null {
+  if (!email) return null;
+  const d = at ? new Date(at) : null;
+  const when =
+    d && !Number.isNaN(d.getTime())
+      ? d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+      : "";
+  return `Last changed by ${email}${when ? ` · ${when}` : ""}`;
+}

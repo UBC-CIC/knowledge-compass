@@ -208,6 +208,49 @@ class PromptAssemblyTests(unittest.TestCase):
         self.assertIn("SITUATION P — APPLYING TO COLLEGE\n", instructions)
         self.assertNotIn("JOURNEY J1", instructions)
 
+    def test_plain_detective_gets_app_owned_parts_once_in_order(self):
+        _, _, _, instructions, _ = logic.get_current_prompt(DETECTIVE, 0, None, _route(journey="J1"))
+        order = [
+            "CURRENT STATUS: Exchange 1.",
+            "Ask exactly ONE warm, focused question.",
+            config.DETECTIVE_JOURNEY_GUIDE,
+            config.DETECTIVE_FOCUS_RULE,
+            "<journeys>\n",
+        ]
+        positions = [instructions.index(p) for p in order]
+        self.assertEqual(positions, sorted(positions))
+        for p in order:
+            self.assertEqual(instructions.count(p), 1, p)
+        self.assertIn(logic._readiness_note(0), instructions)
+
+    def test_legacy_detective_text_is_filled_as_before(self):
+        legacy = "CURRENT STATUS: Exchange {exchange_count} of at least {min_exchanges}.\n{readiness_note}\n\nAsk one."
+        with mock.patch.object(config, "DETECTIVE_PHASE_PROMPT", legacy):
+            _, _, _, instructions, _ = logic.get_current_prompt(DETECTIVE, 2, None, None)
+        self.assertIn("CURRENT STATUS: Exchange 3 of at least 4.", instructions)
+        self.assertEqual(instructions.count("CURRENT STATUS"), 1)
+        self.assertNotIn(config.DETECTIVE_JOURNEY_GUIDE, instructions)
+        self.assertNotIn("{", instructions.split("<journeys>")[0])
+
+    def test_admin_braces_are_safe_in_both_paths(self):
+        for text in ("Ask about {topic}.", "{readiness_note} then {topic} and {"):
+            with mock.patch.object(config, "DETECTIVE_PHASE_PROMPT", text):
+                _, _, _, instructions, _ = logic.get_current_prompt(DETECTIVE, 0, None, None)
+            self.assertIn("{topic}", instructions)
+
+    def test_suggestion_preface_added_once_for_plain_text_only(self):
+        route = _route(journey="J1", situation="C")
+        _, _, _, plain, _ = logic.get_current_prompt(SUGGESTION, 5, None, route)
+        self.assertEqual(plain.count(config.SUGGESTION_JOURNEYS_PREFACE), 1)
+        self.assertLess(plain.index(config.SUGGESTION_JOURNEYS_PREFACE), plain.index("<journeys>\n"))
+        legacy = "Identify which situation in the <journeys> block below best fits."
+        with mock.patch.object(config, "SUGGESTION_PHASE_PROMPT", legacy):
+            _, _, _, instructions, _ = logic.get_current_prompt(SUGGESTION, 5, None, route)
+        self.assertNotIn(config.SUGGESTION_JOURNEYS_PREFACE, instructions)
+        with mock.patch.object(config, "JOURNEY_CATALOG", JourneyCatalog()):
+            _, _, _, empty, _ = logic.get_current_prompt(SUGGESTION, 5, None, route)
+        self.assertNotIn(config.SUGGESTION_JOURNEYS_PREFACE, empty)
+
     def test_role_lists_every_journey_in_both_phases(self):
         for phase in (DETECTIVE, SUGGESTION):
             static, _, _, _, _ = logic.get_current_prompt(phase, 0, None, _route(journey="J1", situation="C"))

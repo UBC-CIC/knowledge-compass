@@ -1,5 +1,6 @@
 // Generated from cdk/lambda/db_setup/migrations/024_journey_cluster_prompts.js
 // (the J1/J2 + A-O seed). Used in demo mode and as the offline fallback.
+import { cleanSteps } from "@/lib/promptCatalog";
 import type { Journey } from "@/types/journeys";
 
 export const DEFAULT_JOURNEYS: Journey[] = [
@@ -476,3 +477,21 @@ export const DEFAULT_JOURNEYS: Journey[] = [
     ]
   }
 ];
+
+// Migration 028: each seeded situation gets a formatting-only cleanup of its
+// steps as version 2 (version 1 stays in history, so "Go back" works in demo).
+for (const journey of DEFAULT_JOURNEYS) {
+  for (const cluster of journey.clusters) {
+    const list = cluster.prompts.response_pattern;
+    const seeded = list[0];
+    if (!seeded) continue;
+    list.unshift({
+      ...seeded,
+      id: seeded.id.replace(/-v1$/, "-v2"),
+      content: cleanSteps(seeded.content),
+      version: 2,
+      created_at: "2026-10-01T00:00:00.000Z",
+    });
+    seeded.is_active = false;
+  }
+}

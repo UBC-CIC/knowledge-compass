@@ -1,27 +1,21 @@
-import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, Eye, Lock, Plus, Search } from "lucide-react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Eye, Lock, Plus, Search } from "lucide-react";
 import { PreviewDrawer } from "@/components/Admin/Prompts/Drawers";
 import { AddJourneyDialog, AddSituationDialog } from "@/components/Admin/Prompts/PromptDialogs";
-import {
-  JourneyPagePane,
-  SharedPagePane,
-  SituationPagePane,
-  type UndoAction,
-} from "@/components/Admin/Prompts/PromptPanes";
-import { Alert, KeyPill, SELECTED_BG, Spinner, outlineButton } from "@/components/Admin/Prompts/parts";
+import { JourneyPagePane, SharedPagePane, SituationPagePane } from "@/components/Admin/Prompts/PromptPanes";
+import { Alert, SELECTED_BG, Spinner } from "@/components/Admin/Prompts/parts";
 import { useJourneyFeedback, useJourneys } from "@/hooks/useJourneys";
 import { useSystemMessages } from "@/hooks/useSystemMessages";
 import {
   SHARED_PAGES,
-  STAGE_CARDS,
-  STAGE_STYLE,
+  STAGE_SUMMARY,
   activeClusters,
   bySortOrder,
-  type NavGroup,
-  type PromptStage,
+  nextJourneyKey,
+  nextSituationKey,
   type SharedPageId,
 } from "@/lib/promptCatalog";
-import type { FeedbackCount } from "@/types/journeys";
+import type { FeedbackCount, Journey } from "@/types/journeys";
 
 type Page =
   | { type: "shared"; id: SharedPageId }
@@ -30,27 +24,68 @@ type Page =
 
 const pageKey = (p: Page) => `${p.type}:${p.id}`;
 
+const DEVELOPER_KEY = "kc.prompts.showDeveloper";
+
+function readDeveloperSetting(): boolean {
+  try {
+    return window.localStorage.getItem(DEVELOPER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeDeveloperSetting(on: boolean) {
+  try {
+    window.localStorage.setItem(DEVELOPER_KEY, on ? "true" : "false");
+  } catch {
+    // Storage unavailable (private mode): the toggle still works for this visit.
+  }
+}
+
+const isKeyConflict = (e: unknown) => e instanceof Error && /already exists/i.test(e.message);
+
+/**
+ * Create something with an internal key the admin never sees. If another
+ * admin took the key first, refresh the list and retry once with the next one.
+ */
+async function withFreshKey<T>(
+  keys: string[],
+  pick: (taken: string[]) => string,
+  reload: () => Promise<Journey[] | null>,
+  takenIn: (journeys: Journey[]) => string[],
+  create: (key: string) => Promise<T>
+): Promise<T> {
+  try {
+    return await create(pick(keys));
+  } catch (e) {
+    if (!isKeyConflict(e)) throw e;
+    const fresh = await reload();
+    if (!fresh) throw e;
+    return create(pick(takenIn(fresh)));
+  }
+}
+
+const journeyKeysIn = (journeys: Journey[]) => journeys.map((j) => j.key);
+const clusterKeysIn = (journeys: Journey[]) => journeys.flatMap((j) => j.clusters.map((c) => c.key));
+
 export default function PromptManagement() {
   const sys = useSystemMessages();
   const jr = useJourneys();
   const { feedback } = useJourneyFeedback("30d");
 
   const [page, setPage] = useState<Page>({ type: "shared", id: "assistant" });
-  const [stage, setStage] = useState<PromptStage | null>(null);
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [showDeveloper, setShowDeveloper] = useState(readDeveloperSetting);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [dialog, setDialog] = useState<"addJourney" | "addSituation" | null>(null);
-  const [undos, setUndos] = useState<Record<string, UndoAction>>({});
 
   const journeys = useMemo(() => [...jr.journeys].sort(bySortOrder), [jr.journeys]);
   const activeJourneys = journeys.filter((j) => !j.is_archived);
   const archivedCount = journeys.length - activeJourneys.length;
   const q = query.trim().toLowerCase();
-  const listed = (showArchived ? journeys : activeJourneys).filter(
-    (j) => !q || j.key.toLowerCase().includes(q) || j.name.toLowerCase().includes(q)
-  );
+  const listed = (showArchived ? journeys : activeJourneys).filter((j) => !q || j.name.toLowerCase().includes(q));
 
   const feedbackByJourney = useMemo(
     () => new Map<string, FeedbackCount>((feedback?.journeys ?? []).map((f) => [f.key, f])),
@@ -69,30 +104,27 @@ export default function PromptManagement() {
     return null;
   };
 
+  /** Navigate, asking first if the current page has unsaved changes. */
   const go = (next: Page) => {
-    if (pageKey(next) === pageKey(page)) return;
-    if (dirty && !window.confirm("You have unsaved changes on this page. Discard them?")) return;
+    if (pageKey(next) === pageKey(page)) return true;
+    if (dirty && !window.confirm("You have unsaved changes on this page. Discard them?")) return false;
     setDirty(false);
     setPage(next);
+    return true;
+  };
+
+  const toggleDeveloper = () => {
+    const next = !showDeveloper;
+    // Leaving Reply layouts open after hiding it would be confusing.
+    if (!next && page.type === "shared" && page.id === "advanced" && !go({ type: "shared", id: "assistant" })) return;
+    setShowDeveloper(next);
+    writeDeveloperSetting(next);
   };
 
   const onDirtyChange = useCallback((d: boolean) => setDirty(d), []);
   const key = pageKey(page);
-  const onPublished = useCallback(
-    (undo: UndoAction | null) =>
-      setUndos((u) => {
-        const next = { ...u };
-        if (undo) next[key] = undo;
-        else delete next[key];
-        return next;
-      }),
-    [key]
-  );
-  const pageProps = { undo: undos[key] ?? null, onPublished, onDirtyChange };
 
   // ---- navigation ----
-  const dim = (g: NavGroup) => (stage && !STAGE_CARDS.find((c) => c.k === stage)!.uses.includes(g) ? "opacity-40" : "");
-
   const itemClass = (on: boolean) =>
     `w-full rounded-[9px] border px-2.5 py-[9px] text-left ${
       on ? "border-foreground/14 text-primary" : "border-transparent text-foreground hover:bg-muted"
@@ -103,7 +135,7 @@ export default function PromptManagement() {
     const p = SHARED_PAGES[id];
     const on = page.type === "shared" && page.id === id;
     return (
-      <li key={id} className={dim(id)}>
+      <li key={id}>
         <button
           type="button"
           aria-current={on ? "page" : undefined}
@@ -147,7 +179,7 @@ export default function PromptManagement() {
         messages={sys.messages}
         publish={sys.publish}
         activate={sys.activate}
-        {...pageProps}
+        onDirtyChange={onDirtyChange}
       />
     );
   } else if (currentJourney) {
@@ -159,12 +191,9 @@ export default function PromptManagement() {
         saveVersion={jr.saveVersion}
         activateVersion={jr.activateVersion}
         updateJourney={jr.updateJourney}
-        onOpenSituation={(clusterKey) => {
-          const c = currentJourney.clusters.find((x) => x.key === clusterKey);
-          if (c) go({ type: "situation", id: c.id });
-        }}
+        onOpenSituation={(id) => go({ type: "situation", id })}
         onAddSituation={() => setDialog("addSituation")}
-        {...pageProps}
+        onDirtyChange={onDirtyChange}
       />
     );
   } else if (currentSituation) {
@@ -178,7 +207,7 @@ export default function PromptManagement() {
         activateVersion={jr.activateVersion}
         updateCluster={jr.updateCluster}
         onBack={() => go({ type: "journey", id: currentSituation.journey.id })}
-        {...pageProps}
+        onDirtyChange={onDirtyChange}
       />
     );
   } else {
@@ -194,64 +223,22 @@ export default function PromptManagement() {
             Shared pages hold rules for every journey. Anything about a specific journey lives only in that journey.
             Changes reach new messages within about five minutes.
           </p>
+          <p className="mt-1 max-w-[720px] text-[13.5px] leading-relaxed text-foreground/70">{STAGE_SUMMARY}</p>
         </div>
-        <button type="button" onClick={() => setPreviewOpen(true)} className={`${outlineButton} h-10 px-4 text-sm`}>
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          className="inline-flex h-10 items-center gap-2 rounded-[9px] bg-primary px-4 text-sm font-semibold text-white shadow-sm hover:bg-primary/90"
+        >
           <Eye className="h-4 w-4" aria-hidden="true" />
           Preview a reply
         </button>
       </div>
 
-      {/* Conversation stages: highlight the pages each step uses. */}
-      <div
-        className="grid grid-cols-1 items-stretch gap-2 lg:grid-cols-[minmax(0,1fr)_24px_minmax(0,1fr)_24px_minmax(0,1fr)] lg:gap-0"
-        role="group"
-        aria-label="Highlight the pages a conversation step uses"
-      >
-        {STAGE_CARDS.map((d, i) => {
-          const on = stage === d.k;
-          const color = STAGE_STYLE[d.k];
-          return (
-            <Fragment key={d.k}>
-              {i > 0 ? (
-                <div className="hidden items-center justify-center text-foreground/45 lg:flex" aria-hidden="true">
-                  <ArrowRight className="h-[18px] w-[18px]" />
-                </div>
-              ) : null}
-              <button
-                type="button"
-                aria-pressed={on}
-                onClick={() => setStage((s) => (s === d.k ? null : d.k))}
-                className="rounded-[11px] border-[1.5px] px-[15px] py-[13px] text-left shadow-[0_1px_8px_rgba(22,24,29,0.05)]"
-                style={{ background: on ? color.bg : "#fff", borderColor: on ? color.fg : "rgba(22,24,29,0.12)" }}
-              >
-                <span className="flex items-center gap-2">
-                  {d.num ? (
-                    <span
-                      className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-full text-xs font-bold text-white"
-                      style={{ background: color.fg }}
-                      aria-hidden="true"
-                    >
-                      {d.num}
-                    </span>
-                  ) : (
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: color.fg }} aria-hidden="true" />
-                  )}
-                  <span className="text-[15px] font-bold">
-                    {d.num ? `${d.num} · ` : ""}
-                    {d.title}
-                  </span>
-                </span>
-                <span className="mt-1.5 block text-[13px] leading-normal text-foreground/80">{d.body}</span>
-              </button>
-            </Fragment>
-          );
-        })}
-      </div>
-
       {sys.error ? <Alert>{sys.error}</Alert> : null}
       {jr.error ? <Alert>{jr.error}</Alert> : null}
 
-      <div className="flex min-h-[620px] flex-col overflow-hidden rounded-[13px] border border-foreground/12 bg-white shadow-[0_1px_8px_rgba(22,24,29,0.05)] lg:h-[calc(100vh-330px)] lg:flex-row">
+      <div className="flex min-h-[620px] flex-col overflow-hidden rounded-[13px] border border-foreground/12 bg-white shadow-[0_1px_8px_rgba(22,24,29,0.05)] lg:h-[calc(100vh-260px)] lg:flex-row">
         <nav
           aria-label="Prompt pages"
           className="flex flex-none flex-col border-b border-foreground/10 lg:w-[320px] lg:overflow-y-auto lg:border-r lg:border-b-0"
@@ -264,7 +251,7 @@ export default function PromptManagement() {
             </ul>
           </section>
 
-          <section className={`px-3 pt-3.5 pb-1.5 ${dim("journeys")}`} aria-label="Journeys">
+          <section className="px-3 pt-3.5 pb-1.5" aria-label="Journeys">
             {groupTitle(
               `Journeys · ${activeJourneys.length}`,
               <button
@@ -306,7 +293,6 @@ export default function PromptManagement() {
                       style={itemStyle(on)}
                     >
                       <span className="flex items-center gap-2">
-                        <KeyPill value={j.key} solid />
                         <span className="min-w-0 flex-1 text-sm font-semibold leading-snug">{j.name}</span>
                         {j.is_archived ? (
                           <span className="flex-none rounded-full bg-foreground/7 px-[7px] py-px text-[11px] font-semibold text-foreground/72">
@@ -343,14 +329,32 @@ export default function PromptManagement() {
           </section>
 
           <div className="mt-auto border-t border-foreground/10 px-3 py-2.5">
-            <ul>
-              {sharedItem(
-                "advanced",
-                <span className="flex-none rounded-full bg-foreground/7 px-[7px] py-px text-[11px] font-semibold text-foreground/72">
-                  Developers
-                </span>
-              )}
-            </ul>
+            {showDeveloper ? (
+              <ul className="pb-2">
+                {sharedItem(
+                  "advanced",
+                  <span className="flex-none rounded-full bg-foreground/7 px-[7px] py-px text-[11px] font-semibold text-foreground/72">
+                    Developers
+                  </span>
+                )}
+              </ul>
+            ) : null}
+            <label className="flex cursor-pointer items-center gap-2.5 px-2 py-1 text-[12.5px] font-semibold text-foreground/72">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showDeveloper}
+                onClick={toggleDeveloper}
+                className="relative h-[18px] w-[32px] flex-none rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                style={{ background: showDeveloper ? "oklch(0.42 0.10 268)" : "rgba(22,24,29,0.22)" }}
+              >
+                <span
+                  className="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-[left]"
+                  style={{ left: showDeveloper ? 16 : 2 }}
+                />
+              </button>
+              Show developer settings
+            </label>
           </div>
         </nav>
 
@@ -364,10 +368,11 @@ export default function PromptManagement() {
       <AddJourneyDialog
         open={dialog === "addJourney"}
         onOpenChange={(o) => setDialog(o ? "addJourney" : null)}
-        takenKeys={journeys.map((j) => j.key)}
-        nextSortOrder={journeys.reduce((m, j) => Math.max(m, j.sort_order), 0) + 1}
-        onCreate={async (input) => {
-          const { id } = await jr.createJourney(input);
+        onCreate={async ({ name, description }) => {
+          const sortOrder = journeys.reduce((m, j) => Math.max(m, j.sort_order), 0) + 1;
+          const { id } = await withFreshKey(journeyKeysIn(journeys), nextJourneyKey, jr.reload, journeyKeysIn, (k) =>
+            jr.createJourney({ key: k, name, description, sort_order: sortOrder })
+          );
           setQuery("");
           go({ type: "journey", id });
         }}
@@ -377,9 +382,15 @@ export default function PromptManagement() {
           open={dialog === "addSituation"}
           onOpenChange={(o) => setDialog(o ? "addSituation" : null)}
           journey={currentJourney}
-          takenKeys={journeys.flatMap((j) => j.clusters.map((c) => c.key))}
-          onCreate={async (input) => {
-            const { id } = await jr.createCluster(currentJourney.id, input);
+          onCreate={async ({ name, matches_when }) => {
+            const { id } = await withFreshKey(clusterKeysIn(journeys), nextSituationKey, jr.reload, clusterKeysIn, (k) =>
+              jr.createCluster(currentJourney.id, {
+                key: k,
+                name,
+                matches_when,
+                sort_order: currentJourney.clusters.length + 1,
+              })
+            );
             go({ type: "situation", id });
           }}
         />

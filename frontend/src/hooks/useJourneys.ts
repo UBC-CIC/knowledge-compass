@@ -129,19 +129,24 @@ export function useJourneys() {
   const [loading, setLoading] = useState(!isDemoMode);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  /** Refetch the tree. Resolves to the fresh list, or null if loading failed. */
+  const reload = useCallback(async (): Promise<Journey[] | null> => {
     if (isDemoMode) {
-      setJourneys(structuredClone(demoJourneys));
-      return;
+      const tree = structuredClone(demoJourneys);
+      setJourneys(tree);
+      return tree;
     }
     try {
       setLoading(true);
       const data = await adminFetch<{ journeys: Journey[] }>("/admin/journeys");
-      setJourneys(data.journeys ?? []);
+      const list = data.journeys ?? [];
+      setJourneys(list);
       setError(null);
+      return list;
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : "Failed to load journeys");
+      return null;
     } finally {
       setLoading(false);
     }

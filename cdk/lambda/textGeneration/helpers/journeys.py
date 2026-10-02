@@ -26,7 +26,7 @@ router.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 KEY_PATTERN = re.compile(r"^[A-Z0-9_]{1,16}$")
@@ -846,4 +846,45 @@ Response pattern:
             ),
         ),
     ),
+))
+
+
+# ------------------------------------------------------------------
+# Situation steps formatting (mirrors cleanSteps in migration 028)
+# ------------------------------------------------------------------
+
+_ITEM = re.compile(r"^(\d+\.|[-*•])\s")
+
+
+def clean_steps(text: str) -> str:
+    """
+    Formatting-only cleanup of seeded situation steps: drop a leading
+    "Response pattern:" line and join hard-wrapped lines onto their item or
+    paragraph. No words change; idempotent.
+    """
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    if lines and lines[0].strip() == "Response pattern:":
+        lines = lines[1:]
+    out: List[str] = []
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            out.append("")
+            continue
+        prev = out[-1] if out else ""
+        indented = line[:1].isspace()
+        continues = prev != "" and not _ITEM.match(stripped) and (indented or not prev.endswith(":"))
+        if continues:
+            out[-1] = f"{prev} {stripped}"
+        else:
+            out.append(stripped)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+# Migration 028 published the cleaned steps for the seeded situations; the
+# fallback catalog matches what the database holds after it.
+DEFAULT_CATALOG = JourneyCatalog(tuple(
+    replace(j, clusters=tuple(replace(c, response_pattern=clean_steps(c.response_pattern)) for c in j.clusters))
+    for j in DEFAULT_CATALOG.journeys
 ))

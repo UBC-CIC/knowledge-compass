@@ -8,6 +8,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   LineChart,
   Line,
   XAxis,
@@ -48,6 +55,14 @@ type FeedbackEntry = {
   rating: "up" | "down";
   comment: string;
   updated_at: string;
+};
+
+type ConversationMessage = {
+  id: string;
+  chat_session_id: string;
+  sender: string;
+  content: string;
+  created_at: string;
 };
 
 type AnalyticsData = {
@@ -106,6 +121,62 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
   const total = up + down;
   const positive = total > 0 ? `${Math.round((up / total) * 100)}%` : "—";
   const comments = data.recentFeedback ?? [];
+
+  const [selectedFeedback, setSelectedFeedback] = useState<FeedbackEntry | null>(
+    null
+  );
+  const [conversation, setConversation] = useState<ConversationMessage[]>([]);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+
+  const openFeedback = async (entry: FeedbackEntry) => {
+    setSelectedFeedback(entry);
+    setConversation([]);
+    setConversationError(null);
+
+    if (isDemoMode) {
+      setConversation([
+        {
+          id: "demo-msg-1",
+          chat_session_id: entry.chat_session_id,
+          sender: "user",
+          content: "Can I ask the school for a reduced schedule for my child?",
+          created_at: entry.updated_at,
+        },
+        {
+          id: "demo-msg-2",
+          chat_session_id: entry.chat_session_id,
+          sender: "bot",
+          content:
+            "Yes. A reduced schedule should be a short-term, collaborative plan. Here are steps you can take and questions to bring to the school.",
+          created_at: entry.updated_at,
+        },
+      ]);
+      return;
+    }
+
+    try {
+      setConversationLoading(true);
+      const token = await AuthService.getAdminIdToken();
+      const res = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/chat_sessions/${entry.chat_session_id}/messages`,
+        {
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (!res.ok) throw new Error("Failed to load conversation");
+      const rows: ConversationMessage[] = await res.json();
+      setConversation(rows);
+    } catch {
+      console.error("Error fetching conversation for feedback");
+      setConversationError("Failed to load the conversation for this feedback.");
+    } finally {
+      setConversationLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -193,26 +264,33 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
             ) : (
               <ul className="divide-y divide-foreground/10">
                 {comments.map((entry) => (
-                  <li key={entry.chat_session_id} className="flex gap-3 px-5 py-3">
-                    {entry.rating === "up" ? (
-                      <ThumbsUp
-                        className="mt-0.5 h-4 w-4 shrink-0 text-[oklch(0.55_0.13_150)]"
-                        aria-label="Thumbs up"
-                      />
-                    ) : (
-                      <ThumbsDown
-                        className="mt-0.5 h-4 w-4 shrink-0 text-[oklch(0.58_0.16_30)]"
-                        aria-label="Thumbs down"
-                      />
-                    )}
-                    <div className="min-w-0">
-                      <p className="whitespace-pre-line break-words text-[14px] leading-normal">
-                        {entry.comment}
-                      </p>
-                      <p className="mt-1 text-xs text-foreground/65">
-                        {new Date(entry.updated_at).toLocaleString()}
-                      </p>
-                    </div>
+                  <li key={entry.chat_session_id}>
+                    <button
+                      type="button"
+                      onClick={() => openFeedback(entry)}
+                      className="flex w-full gap-3 px-5 py-3 text-left transition-colors hover:bg-foreground/[0.04] focus-visible:bg-foreground/[0.04] focus-visible:outline-none"
+                      aria-label="View the conversation this feedback was left on"
+                    >
+                      {entry.rating === "up" ? (
+                        <ThumbsUp
+                          className="mt-0.5 h-4 w-4 shrink-0 text-[oklch(0.55_0.13_150)]"
+                          aria-label="Thumbs up"
+                        />
+                      ) : (
+                        <ThumbsDown
+                          className="mt-0.5 h-4 w-4 shrink-0 text-[oklch(0.58_0.16_30)]"
+                          aria-label="Thumbs down"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="whitespace-pre-line break-words text-[14px] leading-normal">
+                          {entry.comment}
+                        </p>
+                        <p className="mt-1 text-xs text-foreground/65">
+                          {new Date(entry.updated_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -220,6 +298,89 @@ function FeedbackSection({ data }: { data: AnalyticsData }) {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={selectedFeedback !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedFeedback(null);
+            setConversation([]);
+            setConversationError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="border-b border-foreground/10 p-5 text-left">
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              {selectedFeedback?.rating === "up" ? (
+                <ThumbsUp className="h-4 w-4 text-[oklch(0.55_0.13_150)]" />
+              ) : (
+                <ThumbsDown className="h-4 w-4 text-[oklch(0.58_0.16_30)]" />
+              )}
+              Conversation for this feedback
+            </DialogTitle>
+            <DialogDescription className="text-[13px]">
+              {selectedFeedback
+                ? `Rated ${selectedFeedback.rating === "up" ? "helpful" : "not helpful"} on ${new Date(
+                    selectedFeedback.updated_at
+                  ).toLocaleString()}`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedFeedback && (
+            <div className="border-b border-foreground/10 bg-foreground/[0.03] px-5 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground/55">
+                Comment left
+              </p>
+              <p className="mt-1 whitespace-pre-line break-words text-[14px] leading-normal">
+                {selectedFeedback.comment}
+              </p>
+            </div>
+          )}
+
+          <div className="max-h-[52vh] overflow-y-auto p-5">
+            {conversationLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
+              </div>
+            ) : conversationError ? (
+              <p className="text-[13.5px] text-red-700">{conversationError}</p>
+            ) : conversation.length === 0 ? (
+              <p className="text-[13.5px] text-foreground/70">
+                No messages found for this conversation.
+              </p>
+            ) : (
+              <ul className="space-y-3">
+                {conversation.map((msg) => {
+                  const isUser = msg.sender === "user";
+                  return (
+                    <li
+                      key={msg.id}
+                      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[80%] rounded-[12px] px-3.5 py-2.5 ${
+                          isUser
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-foreground/[0.06] text-foreground"
+                        }`}
+                      >
+                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                          {isUser ? "User" : "Assistant"}
+                        </p>
+                        <p className="whitespace-pre-line break-words text-[14px] leading-normal">
+                          {msg.content}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

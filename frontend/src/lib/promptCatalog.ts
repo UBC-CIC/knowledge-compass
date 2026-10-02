@@ -23,17 +23,12 @@ export const SAFETY = { bg: "oklch(0.97 0.02 160)", border: "oklch(0.70 0.08 160
 /** Shared pages in the left navigation. */
 export type SharedPageId = "assistant" | "talks" | "screen" | "advanced";
 
-/** Navigation groups that the stage cards can highlight. */
-export type NavGroup = SharedPageId | "journeys";
-
 export type SharedSection = {
   id: SystemMessageType;
   title: string;
   stage?: Exclude<PromptStage, "every">;
   /** Dashed pill under the text: what the app adds automatically. */
   autoInsert?: string;
-  /** Amber note above the text. */
-  warning?: string;
 };
 
 export type SharedPage = {
@@ -72,14 +67,13 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
         id: "detective_phase_prompt",
         title: "Asking questions",
         stage: "asking",
-        autoInsert: "Every journey's description, words and questions added here automatically",
-        warning: "Keep the words in {curly brackets}. The app fills them in with the conversation's progress.",
+        autoInsert: "The conversation's progress and every journey's description, words and questions added automatically",
       },
       {
         id: "suggestion_phase_prompt",
         title: "Giving guidance",
         stage: "guiding",
-        autoInsert: "The journey's guidance and matching situation steps added here automatically",
+        autoInsert: "The journey's guidance and matching situation steps added automatically",
       },
     ],
   },
@@ -108,41 +102,20 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
   },
 };
 
-/** Stage cards above the editor. Clicking one dims the nav groups it doesn't use. */
-export const STAGE_CARDS: Array<{ k: PromptStage; num: string; title: string; body: string; uses: NavGroup[] }> = [
-  {
-    k: "every",
-    num: "",
-    title: "Every reply",
-    body: "“The assistant”: who it is, its boundaries and preferred language.",
-    uses: ["assistant"],
-  },
-  {
-    k: "asking",
-    num: "1",
-    title: "Asking questions",
-    body: "“How it talks” + the journey's questions. One at a time, to find where the family is.",
-    uses: ["talks", "journeys"],
-  },
-  {
-    k: "guiding",
-    num: "2",
-    title: "Giving guidance",
-    body: "“How it talks” + the journey's guidance + the steps for the situations that fit.",
-    uses: ["talks", "journeys"],
-  },
-];
+/** One line under the page title, in place of a diagram of the conversation steps. */
+export const STAGE_SUMMARY =
+  "Every reply uses The assistant. Asking questions and giving guidance add How it talks, plus the journey's own text.";
 
 /**
- * Notes shown when the active version is the journey-neutral text published
- * by a migration (025 for system_role), with an older version to go back to.
+ * Notes shown while the live text is still the cleaned-up version published
+ * by a migration (025 system_role, 027 How it talks) and an older version
+ * exists to go back to. The shipped text is in defaultSystemMessages.ts.
  */
-export const CLEANUPS: Partial<Record<SystemMessageType, { content: string; note: string }>> = {
-  system_role: {
-    content:
-      "You are a compassionate, knowledgeable guide helping families navigate inclusive education in Canada, built for Inclusion Canada. You serve parents, support persons, and family members.\n\nThe journeys you support are listed below. Use them to understand where each family is.\n\nYour role is to help families understand their situation, take clear next steps, and find the right resources. You do not provide legal advice or make decisions for them.",
-    note: "Cleaned up: the hard-coded Journey 1 and Journey 2 descriptions were removed. The journey list is now added automatically.",
-  },
+export const CLEANUP_NOTES: Partial<Record<SystemMessageType, string>> = {
+  system_role:
+    "Cleaned up: the hard-coded Journey 1 and Journey 2 descriptions were removed. The journey list is now added automatically.",
+  detective_phase_prompt: "Cleaned up: app instructions are now added automatically.",
+  suggestion_phase_prompt: "Cleaned up: app instructions are now added automatically.",
 };
 
 
@@ -176,10 +149,10 @@ export const wordsKey = (words: string) =>
     .filter(Boolean)
     .join("|");
 
-export type SituationLayer =
-  | { mode: "matched"; clusters: JourneyCluster[]; text: string }
-  | { mode: "journey-fallback"; clusters: JourneyCluster[]; text: string }
-  | { mode: "all-fallback"; clusters: JourneyCluster[]; text: string };
+export type SituationLayer = {
+  mode: "matched" | "journey-fallback" | "all-fallback";
+  clusters: JourneyCluster[];
+};
 
 /**
  * Which situation steps a guidance reply receives (mirrors
@@ -190,22 +163,80 @@ export function situationLayer(journeys: Journey[], journeyKey: string, situatio
   const live = journeys.filter((j) => !j.is_archived);
   const all = live.flatMap(activeClusters);
   const picked = all.find((c) => c.key === situationKey);
-  if (picked) return { mode: "matched", clusters: [picked], text: `${picked.key} · ${picked.name} only` };
+  if (picked) return { mode: "matched", clusters: [picked] };
   const journey = live.find((j) => j.key === journeyKey);
-  if (journey) {
-    const cs = activeClusters(journey);
-    return {
-      mode: "journey-fallback",
-      clusters: cs,
-      text: cs.length ? `All ${cs.length} situations in ${journey.key}` : `${journey.key} has no situations yet`,
-    };
-  }
-  return { mode: "all-fallback", clusters: all, text: `All ${all.length} situations in every journey` };
+  if (journey) return { mode: "journey-fallback", clusters: activeClusters(journey) };
+  return { mode: "all-fallback", clusters: all };
 }
 
-/** Next free J{n} key for a new journey. */
+/** Next free J{n} key for a new journey (keys are internal, never shown). */
 export function nextJourneyKey(taken: string[]): string {
   let n = 1;
   while (taken.includes(`J${n}`)) n += 1;
   return `J${n}`;
+}
+
+/** Next free situation key: A–Z, then S1, S2, … (unique across all journeys). */
+export function nextSituationKey(taken: string[]): string {
+  for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") if (!taken.includes(ch)) return ch;
+  let n = 1;
+  while (taken.includes(`S${n}`)) n += 1;
+  return `S${n}`;
+}
+
+/** Counters only appear when a text is near (80%) or over its limit. */
+export const showCounter = (length: number, limit: number) => length >= limit * 0.8;
+
+const STEP_ITEM = /^(\d+\.|[-*•])\s/;
+
+/**
+ * Formatting-only cleanup of seeded situation steps. Mirrors cleanSteps in
+ * migration 028 (used for the demo data): drops a leading "Response pattern:"
+ * line and joins hard-wrapped lines. No words change; idempotent.
+ */
+export function cleanSteps(text: string): string {
+  let lines = (text ?? "").replace(/\r\n/g, "\n").split("\n");
+  if (lines.length && lines[0].trim() === "Response pattern:") lines = lines.slice(1);
+  const out: string[] = [];
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    const t = line.trim();
+    if (!t) {
+      out.push("");
+      continue;
+    }
+    const prev = out.length ? out[out.length - 1] : "";
+    const continues = prev !== "" && !STEP_ITEM.test(t) && (/^\s/.test(line) || !prev.endsWith(":"));
+    if (continues) out[out.length - 1] = `${prev} ${t}`;
+    else out.push(t);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * "1. First\n   wrapped\n2. Second" -> ["First wrapped", "Second"].
+ * Unnumbered text: each non-blank line is one question.
+ */
+export function parseQuestions(text: string): string[] {
+  const lines = (text ?? "").replace(/\r\n/g, "\n").split("\n");
+  const numbered = /^\s*\d+[.)]\s+/;
+  if (!lines.some((l) => numbered.test(l))) return lines.map((l) => l.trim()).filter(Boolean);
+  const items: string[] = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    if (numbered.test(line)) items.push(t.replace(/^\d+[.)]\s+/, ""));
+    else if (items.length) items[items.length - 1] += ` ${t}`;
+    else items.push(t);
+  }
+  return items;
+}
+
+/** ["First", "", "Second"] -> "1. First\n2. Second" (empty rows dropped). */
+export function formatQuestions(items: string[]): string {
+  return items
+    .map((q) => q.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map((q, i) => `${i + 1}. ${q}`)
+    .join("\n");
 }
