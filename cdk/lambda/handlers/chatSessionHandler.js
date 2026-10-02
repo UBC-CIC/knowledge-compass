@@ -396,12 +396,24 @@ exports.handler = async (event) => {
 
         // One feedback row per session; later submissions replace the rating
         // and comment so users can change their mind.
+        // The widget sits under the latest finished reply, so link the
+        // session's latest AI message (migration 030). Streamed replies only
+        // have a client-side id, so the server resolves it here.
         const saved = await sqlConnection`
-          INSERT INTO session_feedback (chat_session_id, rating, comment)
-          VALUES (${chatSessionId}, ${body.rating}, ${comment})
+          INSERT INTO session_feedback (chat_session_id, rating, comment, chat_message_id)
+          VALUES (
+            ${chatSessionId},
+            ${body.rating},
+            ${comment},
+            (SELECT cm.id FROM chat_messages cm
+              WHERE cm.chat_session_id = ${chatSessionId} AND cm.sender = 'AI'
+              ORDER BY cm.created_at DESC
+              LIMIT 1)
+          )
           ON CONFLICT (chat_session_id) DO UPDATE SET
             rating = EXCLUDED.rating,
             comment = EXCLUDED.comment,
+            chat_message_id = COALESCE(EXCLUDED.chat_message_id, session_feedback.chat_message_id),
             -- An edit brings dismissed feedback back to the admin Recent list
             -- so the new text is seen; an admin's star is kept (migration 029).
             dismissed_at = NULL,

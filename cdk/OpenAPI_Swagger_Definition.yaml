@@ -288,6 +288,44 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/feedback/{chat_session_id}/message:
+    <<: *commonOptions
+    get:
+      tags:
+        - Admin
+      summary: Get only the assistant reply a conversation's feedback was left on
+      description: >-
+        Returns { message, inferred }. message is null if no reply is found.
+        inferred is true for older feedback saved before the reply was linked,
+        where the last reply before the feedback is used instead.
+      operationId: get_admin_feedback_message
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The rated assistant reply
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "404":
+          description: Feedback not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/feedback/{chat_session_id}:
     <<: *commonOptions
     put:

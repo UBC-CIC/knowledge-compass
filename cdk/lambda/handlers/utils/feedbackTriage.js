@@ -10,13 +10,18 @@
  *   - The public feedback upsert (chatSessionHandler.js) clears dismissed_at
  *     when the user edits their feedback; the star is kept.
  *
+ *   GET /admin/feedback/{chat_session_id}/message   -> { message, inferred }
+ *     Only the assistant reply that was rated, not the whole conversation.
+ *
  * Privacy: the triage route never returns or logs comment text. Comment text
  * is only returned to admins through GET /admin/analytics (fetchFeedbackLists).
+ * Both routes log status only (adminHandler logAndReturn).
  */
 
 const { validateUUID } = require("./validation.js");
 
 const TRIAGE_ROUTE = "PUT /admin/feedback/{chat_session_id}";
+const RATED_MESSAGE_ROUTE = "GET /admin/feedback/{chat_session_id}/message";
 const TRIAGE_FIELDS = ["starred", "dismissed"];
 
 const RECENT_LIMIT = 50;
@@ -25,8 +30,48 @@ const DISMISSED_LIMIT = 50;
 
 class InputError extends Error {}
 
+/** True for every route this module handles (both log status only). */
 function isFeedbackTriageRoute(pathData) {
-  return pathData === TRIAGE_ROUTE;
+  return pathData === TRIAGE_ROUTE || pathData === RATED_MESSAGE_ROUTE;
+}
+
+/**
+ * The assistant reply a piece of feedback was left on. Uses the stored link
+ * (migration 030); older feedback without one falls back to the last AI reply
+ * saved before the feedback was last updated (`inferred: true`).
+ * Returns { found: false } when the session has no feedback.
+ */
+async function fetchRatedMessage(sql, chatSessionId) {
+  const rows = await sql`
+    SELECT
+      (sf.chat_message_id IS NULL) AS inferred,
+      m.id::text AS id,
+      m.content,
+      m.created_at
+    FROM session_feedback sf
+    LEFT JOIN LATERAL (
+      SELECT cm.id, cm.content, cm.created_at
+      FROM chat_messages cm
+      WHERE cm.chat_session_id = sf.chat_session_id
+        AND cm.sender = 'AI'
+        AND (
+          cm.id = sf.chat_message_id
+          OR (sf.chat_message_id IS NULL AND cm.created_at <= sf.updated_at)
+        )
+      ORDER BY cm.created_at DESC
+      LIMIT 1
+    ) m ON true
+    WHERE sf.chat_session_id = ${chatSessionId}
+  `;
+  if (rows.length === 0) return { found: false };
+  const row = rows[0];
+  return {
+    found: true,
+    inferred: Boolean(row.inferred),
+    message: row.id
+      ? { id: row.id, sender: "AI", content: row.content, created_at: row.created_at }
+      : null,
+  };
 }
 
 /**
@@ -121,6 +166,16 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
       return true;
     }
 
+    if (pathData === RATED_MESSAGE_ROUTE) {
+      const result = await fetchRatedMessage(sql, chatSessionId.trim());
+      if (!result.found) {
+        send(404, { error: "Feedback not found" });
+      } else {
+        send(200, { message: result.message, inferred: result.inferred });
+      }
+      return true;
+    }
+
     const changes = validateTriageBody(parseJsonBody(event.body));
     const saved = await updateTriage(sql, chatSessionId.trim(), changes);
     if (!saved) {
@@ -133,7 +188,7 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
       send(400, { error: err.message });
     } else {
       // Error only; never the request body.
-      console.error("PUT /admin/feedback error:", err?.message ?? err);
+      console.error(`${pathData} error:`, err?.message ?? err);
       send(500, { error: "Internal server error" });
     }
   }
@@ -200,6 +255,8 @@ async function fetchFeedbackLists(sql, startDateIso, endDateIso) {
 
 module.exports = {
   TRIAGE_ROUTE,
+  RATED_MESSAGE_ROUTE,
+  fetchRatedMessage,
   validateTriageBody,
   triageActions,
   isFeedbackTriageRoute,

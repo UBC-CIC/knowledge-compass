@@ -171,3 +171,54 @@ test("fetchFeedbackLists filters each list and returns three keys", async () => 
   assert.match(dismissed.text, /dismissed_at IS NOT NULL/);
   assert.deepEqual(dismissed.values.slice(0, 2), [start, end]);
 });
+
+// --- GET /admin/feedback/{chat_session_id}/message --------------------------
+
+const MESSAGE_ROUTE = "GET /admin/feedback/{chat_session_id}/message";
+const MSG_ID = "7a1e2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+
+test("rated message: returns only the linked AI reply", async () => {
+  const sql = fakeSql(() => [
+    { inferred: false, id: MSG_ID, content: "Here are some steps.", created_at: "2026-09-01T00:00:00Z" },
+  ]);
+  const res = await call(sql, { pathParameters: { chat_session_id: UUID } }, MESSAGE_ROUTE);
+  assert.equal(res.handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, {
+    message: { id: MSG_ID, sender: "AI", content: "Here are some steps.", created_at: "2026-09-01T00:00:00Z" },
+    inferred: false,
+  });
+  assert.equal(sql.calls.length, 1);
+  assert.match(sql.calls[0].text, /cm\.sender = 'AI'/);
+  assert.match(sql.calls[0].text, /cm\.id = sf\.chat_message_id/);
+  assert.match(sql.calls[0].text, /LIMIT 1/);
+  assert.deepEqual(sql.calls[0].values, [UUID]);
+});
+
+test("rated message: older feedback without a link is inferred", async () => {
+  const sql = fakeSql(() => [{ inferred: true, id: MSG_ID, content: "Reply", created_at: "t" }]);
+  const res = await call(sql, { pathParameters: { chat_session_id: UUID } }, MESSAGE_ROUTE);
+  assert.equal(res.body.inferred, true);
+  assert.equal(res.body.message.id, MSG_ID);
+});
+
+test("rated message: feedback with no AI reply returns message null", async () => {
+  const sql = fakeSql(() => [{ inferred: true, id: null, content: null, created_at: null }]);
+  const res = await call(sql, { pathParameters: { chat_session_id: UUID } }, MESSAGE_ROUTE);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { message: null, inferred: true });
+});
+
+test("rated message: no feedback returns 404, bad id returns 400", async () => {
+  let res = await call(fakeSql(() => []), { pathParameters: { chat_session_id: UUID } }, MESSAGE_ROUTE);
+  assert.equal(res.statusCode, 404);
+
+  const sql = fakeSql();
+  res = await call(sql, { pathParameters: { chat_session_id: "nope" } }, MESSAGE_ROUTE);
+  assert.equal(res.statusCode, 400);
+  assert.equal(sql.calls.length, 0);
+});
+
+test("rated message route is status-only logged", () => {
+  assert.equal(ft.isFeedbackTriageRoute(MESSAGE_ROUTE), true);
+});
