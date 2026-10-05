@@ -1,12 +1,13 @@
 """
 Guideline mode ingestion (migration 031).
 
-Turns an uploaded Markdown guidance document into hidden, labelled, embedded
+Turns an uploaded guidance document (Markdown, Word or PDF; see
+helpers/guideline_extract.py) into hidden, labelled, embedded
 chunks that only the guideline-mode chat pipeline searches. Admins do not
 structure anything: situations are detected automatically.
 
 Pipeline for one guideline_documents row:
-  1. Read the file from S3.
+  1. Read the file from S3 and turn it into Markdown-style text.
   2. Split it into sections:
        - With headings: one section per heading path cut to two levels
          (journey > situation). Deeper headings ("### Ask first") stay inside
@@ -37,6 +38,7 @@ import re
 
 import boto3
 
+from helpers.guideline_extract import ExtractionError, extract_guide_text, file_kind
 from helpers.process_document_batch import _split_long, write_chunks
 
 logger = logging.getLogger()
@@ -448,17 +450,22 @@ def _set_status(connection, document_id: str, status: str, *, error=None, sectio
         )
 
 
-def _read_s3_text(s3_key: str) -> str:
+def _read_guide_text(file_name: str, s3_key: str, time_left=None) -> str:
+    """Markdown-style text of an uploaded .md, .docx or .pdf guide."""
     bucket = os.environ.get("KNOWLEDGE_BASE_BUCKET_NAME")
     if not bucket:
         raise RuntimeError("KNOWLEDGE_BASE_BUCKET_NAME is not configured")
     raw = s3_client.get_object(Bucket=bucket, Key=s3_key)["Body"].read()
+    # The stored key carries the real extension; the display name may not.
+    kind_name = s3_key if file_kind(s3_key) else file_name
     try:
-        return raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise GuidelineError(
-            "This file isn't plain text. Please save it as a Markdown (.md) file and upload it again."
+        text, summary = extract_guide_text(
+            kind_name, raw, s3_object={"Bucket": bucket, "Name": s3_key}, time_left=time_left,
         )
+    except ExtractionError as e:
+        raise GuidelineError(str(e))
+    logger.info("Guideline file read: %s", json.dumps(summary))
+    return text
 
 
 # ── Entry points ──────────────────────────────────────────────────────────────
@@ -478,9 +485,16 @@ def label_sections(sections: list, existing: dict) -> list:
     return sections
 
 
-def process_guideline_document(event, connection) -> dict:
+def _time_left(context):
+    if context is not None and hasattr(context, "get_remaining_time_in_millis"):
+        return lambda: context.get_remaining_time_in_millis() / 1000.0
+    return None
+
+
+def process_guideline_document(event, connection, context=None) -> dict:
     """
     Async worker: event = {"task": "process_guideline_document", "document_id": ...}.
+    `context` (the Lambda context) bounds how long PDF OCR may wait.
     """
     document_id = str((event or {}).get("document_id") or "")
     if not document_id:
@@ -492,7 +506,7 @@ def process_guideline_document(event, connection) -> dict:
             return {"error": "document not found"}
         _, file_name, s3_key = row
 
-        text = _read_s3_text(s3_key)
+        text = _read_guide_text(file_name, s3_key, _time_left(context))
         if not text.strip():
             raise GuidelineError("This file is empty. Please check it and upload it again.")
 

@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { useGuideline } from "@/hooks/useGuideline";
 import { changedBy } from "@/lib/promptVersions";
 import {
-  MARKDOWN_ACCEPT,
+  GUIDE_ACCEPT,
   MAX_LABEL_CHARS,
   STATUS_TEXT,
   validateLabel,
@@ -238,7 +238,9 @@ function GuideCard({
             {doc.status === "ready"
               ? `${doc.section_count} situation${doc.section_count === 1 ? "" : "s"} found`
               : doc.status === "processing"
-                ? "This usually takes under a minute."
+                ? doc.file_name.toLowerCase().endsWith(".pdf")
+                  ? "PDFs can take a few minutes."
+                  : "This usually takes under a minute."
                 : null}
             {uploaded ? `${doc.status !== "failed" ? " · " : ""}${uploaded.replace("Last changed", "Uploaded")}` : null}
           </p>
@@ -432,7 +434,7 @@ export default function GuidelineMode() {
 
           <Section
             title="Upload guides"
-            description="Markdown files (.md), up to 1 MB each. You can upload several at once. Headings help, but aren't required."
+            description="Word (.docx) or PDF files up to 10 MB, or Markdown (.md) up to 1 MB. You can upload several at once. Headings help, but aren't required."
           >
             <div
               onDragOver={(e) => {
@@ -451,7 +453,7 @@ export default function GuidelineMode() {
                 id={fileInputId}
                 ref={fileInput}
                 type="file"
-                accept={MARKDOWN_ACCEPT}
+                accept={GUIDE_ACCEPT}
                 multiple
                 className="sr-only"
                 onChange={(e) => {
@@ -464,8 +466,9 @@ export default function GuidelineMode() {
                 {uploading ? "Uploading…" : "Choose files"}
               </Button>
               <p className="max-w-[560px] text-xs leading-normal text-foreground/65">
-                Tip: a heading for each situation (for example "## Child sent home early") makes matching more
-                reliable, but plain text works too.
+                Tip: a heading for each situation (Word's Heading styles, or "## Child sent home early" in Markdown)
+                makes matching more reliable, but plain text works too. Scanned PDFs are read with text recognition,
+                which can take a few minutes.
               </p>
             </div>
             {problems.length ? (
@@ -502,7 +505,7 @@ export default function GuidelineMode() {
             <input
               ref={replaceInput}
               type="file"
-              accept={MARKDOWN_ACCEPT}
+              accept={GUIDE_ACCEPT}
               className="sr-only"
               tabIndex={-1}
               aria-hidden="true"

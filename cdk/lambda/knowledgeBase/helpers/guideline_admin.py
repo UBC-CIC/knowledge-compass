@@ -24,6 +24,7 @@ from botocore.config import Config
 from helpers.admin_user import normalize_email
 from helpers.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
+from helpers.guideline_extract import file_kind
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -32,13 +33,32 @@ REGION = os.environ.get("REGION", "ca-central-1")
 LAMBDA_FUNCTION_NAME = os.environ.get("LAMBDA_FUNCTION_NAME", "")
 
 UPLOAD_PREFIX = "uploads/guideline/"
-MAX_FILE_BYTES = 1024 * 1024
 MAX_FILE_NAME = 200
 MAX_LABEL_CHARS = 80
 MODES = ("standard", "guideline")
-_MARKDOWN_EXTENSIONS = (".md", ".markdown")
-_MARKDOWN_CONTENT_TYPES = ("text/markdown", "text/x-markdown", "application/octet-stream", "")
-_KEY_RE = re.compile(r"^uploads/guideline/[0-9a-f-]{36}\.md$")
+
+# kind -> (stored extension, upload Content-Type, accepted client types, max bytes)
+_FILE_TYPES = {
+    "markdown": (
+        ".md", "text/markdown",
+        ("text/markdown", "text/x-markdown", "text/plain", "application/octet-stream", ""),
+        1024 * 1024,
+    ),
+    "docx": (
+        ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/octet-stream", ""),
+        10 * 1024 * 1024,
+    ),
+    "pdf": (
+        ".pdf", "application/pdf",
+        ("application/pdf", "application/octet-stream", ""),
+        10 * 1024 * 1024,
+    ),
+}
+MAX_FILE_BYTES = max(t[3] for t in _FILE_TYPES.values())
+_KEY_RE = re.compile(r"^uploads/guideline/[0-9a-f-]{36}\.(md|docx|pdf)$")
+_KEY_KIND = {".md": "markdown", ".docx": "docx", ".pdf": "pdf"}
+_UNSUPPORTED = "Please choose a Markdown (.md), Word (.docx) or PDF (.pdf) file."
 
 _s3 = None
 _lambda = None
@@ -97,8 +117,12 @@ def _clean_file_name(name) -> str:
     return name[:MAX_FILE_NAME]
 
 
-def is_markdown_name(name: str) -> bool:
-    return (name or "").lower().endswith(_MARKDOWN_EXTENSIONS)
+def _kind_for_key(key: str) -> str | None:
+    return _KEY_KIND.get(os.path.splitext(key)[1].lower())
+
+
+def _size_limit_text(limit: int) -> str:
+    return f"{limit // (1024 * 1024)} MB"
 
 
 def _invoke(payload: dict) -> None:
@@ -218,23 +242,25 @@ def get_guideline_state(connection) -> dict:
 def create_upload_url(event, body):
     file_name = _clean_file_name((body or {}).get("file_name"))
     content_type = str((body or {}).get("content_type") or "").split(";", 1)[0].strip().lower()
-    if not file_name or not is_markdown_name(file_name):
-        return _response(event, 400, {"error": "Please choose a Markdown file (.md or .markdown)."})
-    if content_type not in _MARKDOWN_CONTENT_TYPES:
-        return _response(event, 400, {"error": "Please choose a Markdown file (.md or .markdown)."})
+    kind = file_kind(file_name)
+    if not file_name or kind is None:
+        return _response(event, 400, {"error": _UNSUPPORTED})
+    extension, upload_type, accepted_types, max_bytes = _FILE_TYPES[kind]
+    if content_type not in accepted_types:
+        return _response(event, 400, {"error": _UNSUPPORTED})
 
-    key = f"{UPLOAD_PREFIX}{uuid.uuid4()}.md"
+    key = f"{UPLOAD_PREFIX}{uuid.uuid4()}{extension}"
     url = _s3_client().generate_presigned_url(
         ClientMethod="put_object",
-        Params={"Bucket": _bucket(), "Key": key, "ContentType": "text/markdown"},
+        Params={"Bucket": _bucket(), "Key": key, "ContentType": upload_type},
         ExpiresIn=300,
         HttpMethod="PUT",
     )
     return _response(event, 200, {
         "presignedUrl": url,
         "key": key,
-        "contentType": "text/markdown",
-        "maxBytes": MAX_FILE_BYTES,
+        "contentType": upload_type,
+        "maxBytes": max_bytes,
     })
 
 
@@ -260,18 +286,23 @@ def register_document(event, body, connection):
 
     if not _KEY_RE.match(s3_key):
         return _response(event, 400, {"error": "Invalid upload key."})
-    if not file_name or not is_markdown_name(file_name):
-        return _response(event, 400, {"error": "Please choose a Markdown file (.md or .markdown)."})
+    key_kind = _kind_for_key(s3_key)
+    # The display name must be the same kind of file as the stored object.
+    if not file_name or file_kind(file_name) != key_kind:
+        return _response(event, 400, {"error": _UNSUPPORTED})
     if replace_id is not None and not _is_uuid(replace_id):
         return _response(event, 400, {"error": "Invalid document id."})
 
+    max_bytes = _FILE_TYPES[key_kind][3]
     try:
         size = _object_size(s3_key)
     except Exception:  # noqa: BLE001
         return _response(event, 400, {"error": "We couldn't find the uploaded file. Please try again."})
-    if size > MAX_FILE_BYTES:
+    if size > max_bytes:
         _delete_object_quietly(s3_key)
-        return _response(event, 400, {"error": "This file is larger than 1 MB. Please split it into smaller files."})
+        return _response(event, 400, {
+            "error": f"This file is larger than {_size_limit_text(max_bytes)}. Please split it into smaller files."
+        })
     if size == 0:
         _delete_object_quietly(s3_key)
         return _response(event, 400, {"error": "This file is empty. Please check it and upload it again."})

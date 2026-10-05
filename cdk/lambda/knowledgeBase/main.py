@@ -157,7 +157,7 @@ def handler(event, context=None):
                 logger.error(f"Error connecting to database: {e}")
                 return {"error": "Error connecting to database"}
             if event["task"] == "process_guideline_document":
-                return process_guideline_document(event=event, connection=connection)
+                return process_guideline_document(event=event, connection=connection, context=context)
             return reembed_guideline_sections(event=event, connection=connection)
 
         # API Gateway path

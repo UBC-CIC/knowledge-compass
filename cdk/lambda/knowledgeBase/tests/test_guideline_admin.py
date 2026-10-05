@@ -134,9 +134,14 @@ class UploadUrlTest(AdminTestBase):
 
     def test_rejects_other_extensions(self):
         response, _ = self.call(_event("POST", "/admin/guideline/upload-url"),
-                                {"file_name": "guide.pdf", "content_type": "application/pdf"})
+                                {"file_name": "guide.pptx", "content_type": "application/octet-stream"})
         self.assertEqual(response["statusCode"], 400)
         self.s3.generate_presigned_url.assert_not_called()
+
+    def test_rejects_wrong_content_type_for_pdf(self):
+        response, _ = self.call(_event("POST", "/admin/guideline/upload-url"),
+                                {"file_name": "guide.pdf", "content_type": "text/html"})
+        self.assertEqual(response["statusCode"], 400)
 
 
 class RegisterDocumentTest(AdminTestBase):
@@ -181,6 +186,60 @@ class RegisterDocumentTest(AdminTestBase):
         event = _event("POST", "/admin/guideline/documents", email=None)
         self.call(event, {"s3_key": KEY, "file_name": "guide.md", "created_by": "spoof@example.org"}, conn)
         self.assertIsNone(conn.sql_with("INSERT INTO guideline_documents")[0][1][2])
+
+
+class WordAndPdfTest(AdminTestBase):
+    DOCX_KEY = "uploads/guideline/44444444-4444-4444-4444-444444444444.docx"
+    PDF_KEY = "uploads/guideline/55555555-5555-5555-5555-555555555555.pdf"
+
+    def test_upload_urls_keep_the_real_extension(self):
+        cases = [
+            ("Guide.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
+             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("Guide.pdf", "application/pdf", ".pdf", "application/pdf"),
+            ("Guide.md", "", ".md", "text/markdown"),
+        ]
+        for name, client_type, extension, stored_type in cases:
+            response, _ = self.call(_event("POST", "/admin/guideline/upload-url"),
+                                    {"file_name": name, "content_type": client_type})
+            self.assertEqual(response["statusCode"], 200, name)
+            body = _body(response)
+            self.assertTrue(body["key"].endswith(extension), name)
+            self.assertEqual(body["contentType"], stored_type)
+
+    def test_register_word_and_pdf(self):
+        self.s3.head_object.return_value = {"ContentLength": 5 * 1024 * 1024}
+        for key, name in ((self.DOCX_KEY, "Guide.docx"), (self.PDF_KEY, "Guide.pdf")):
+            conn = FakeConnection({"INSERT INTO guideline_documents": [(DOC_ID,)]})
+            response, _ = self.call(_event("POST", "/admin/guideline/documents"),
+                                    {"s3_key": key, "file_name": name}, conn)
+            self.assertEqual(response["statusCode"], 202, name)
+
+    def test_markdown_still_capped_at_1mb(self):
+        self.s3.head_object.return_value = {"ContentLength": 2 * 1024 * 1024}
+        response, _ = self.call(_event("POST", "/admin/guideline/documents"),
+                                {"s3_key": KEY, "file_name": "guide.md"})
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("1 MB", _body(response)["error"])
+
+    def test_pdf_capped_at_10mb(self):
+        self.s3.head_object.return_value = {"ContentLength": 10 * 1024 * 1024 + 1}
+        response, _ = self.call(_event("POST", "/admin/guideline/documents"),
+                                {"s3_key": self.PDF_KEY, "file_name": "guide.pdf"})
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("10 MB", _body(response)["error"])
+
+    def test_name_must_match_stored_type(self):
+        response, _ = self.call(_event("POST", "/admin/guideline/documents"),
+                                {"s3_key": self.PDF_KEY, "file_name": "guide.md"})
+        self.assertEqual(response["statusCode"], 400)
+        self.lam.invoke.assert_not_called()
+
+    def test_other_types_rejected(self):
+        for name, ctype in (("guide.doc", "application/msword"), ("guide.txt", "text/plain"), ("guide.exe", "")):
+            response, _ = self.call(_event("POST", "/admin/guideline/upload-url"),
+                                    {"file_name": name, "content_type": ctype})
+            self.assertEqual(response["statusCode"], 400, name)
 
 
 class DeleteDocumentTest(AdminTestBase):

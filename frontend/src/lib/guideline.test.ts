@@ -1,26 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_GUIDELINE_STATE,
-  MAX_GUIDE_BYTES,
+  GUIDE_FILE_TYPES,
   MAX_LABEL_CHARS,
+  guideFileKind,
   hasProcessing,
-  isMarkdownFileName,
   normalizeLabel,
   validateGuideFile,
   validateLabel,
 } from "@/lib/guideline";
 
 describe("guide files", () => {
-  it("accepts Markdown files", () => {
-    expect(isMarkdownFileName("Guide.MD")).toBe(true);
-    expect(isMarkdownFileName("notes.markdown")).toBe(true);
-    expect(validateGuideFile({ name: "guide.md", size: 10 })).toBeNull();
+  it("accepts Markdown, Word and PDF files", () => {
+    expect(guideFileKind("Guide.MD")).toBe("markdown");
+    expect(guideFileKind("notes.markdown")).toBe("markdown");
+    expect(guideFileKind("Guide.docx")).toBe("docx");
+    expect(guideFileKind("Guide.PDF")).toBe("pdf");
+    for (const name of ["guide.md", "guide.docx", "guide.pdf"]) {
+      expect(validateGuideFile({ name, size: 10 })).toBeNull();
+    }
   });
 
   it("rejects other types, empty and large files", () => {
-    expect(validateGuideFile({ name: "guide.pdf", size: 10 })).toMatch(/isn't a Markdown file/);
+    expect(validateGuideFile({ name: "guide.doc", size: 10 })).toMatch(/can't be used/);
+    expect(validateGuideFile({ name: "guide.txt", size: 10 })).toMatch(/can't be used/);
     expect(validateGuideFile({ name: "guide.md", size: 0 })).toMatch(/empty/);
-    expect(validateGuideFile({ name: "guide.md", size: MAX_GUIDE_BYTES + 1 })).toMatch(/1 MB/);
+    expect(validateGuideFile({ name: "guide.md", size: GUIDE_FILE_TYPES.markdown.maxBytes + 1 })).toMatch(/1 MB/);
+    expect(validateGuideFile({ name: "guide.pdf", size: 5 * 1024 * 1024 })).toBeNull();
+    expect(validateGuideFile({ name: "guide.pdf", size: GUIDE_FILE_TYPES.pdf.maxBytes + 1 })).toMatch(/10 MB/);
   });
 });
 

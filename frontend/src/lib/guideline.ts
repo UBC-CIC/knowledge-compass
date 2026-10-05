@@ -36,23 +36,43 @@ export type GuidelineState = {
   documents: GuidelineDocument[];
 };
 
-export const MAX_GUIDE_BYTES = 1024 * 1024;
-export const MAX_LABEL_CHARS = 80;
-export const MARKDOWN_ACCEPT = ".md,.markdown,text/markdown";
+export type GuideFileKind = "markdown" | "docx" | "pdf";
 
-export function isMarkdownFileName(name: string): boolean {
+const MB = 1024 * 1024;
+
+/** Per-type upload settings; mirror _FILE_TYPES in guideline_admin.py. */
+export const GUIDE_FILE_TYPES: Record<GuideFileKind, { contentType: string; maxBytes: number; label: string }> = {
+  markdown: { contentType: "text/markdown", maxBytes: 1 * MB, label: "1 MB" },
+  docx: {
+    contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    maxBytes: 10 * MB,
+    label: "10 MB",
+  },
+  pdf: { contentType: "application/pdf", maxBytes: 10 * MB, label: "10 MB" },
+};
+
+export const MAX_LABEL_CHARS = 80;
+export const GUIDE_ACCEPT =
+  ".md,.markdown,.docx,.pdf,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+export function guideFileKind(name: string): GuideFileKind | null {
   const lower = name.trim().toLowerCase();
-  return lower.endsWith(".md") || lower.endsWith(".markdown");
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
+  if (lower.endsWith(".docx")) return "docx";
+  if (lower.endsWith(".pdf")) return "pdf";
+  return null;
 }
 
 /** Plain-language problem with a chosen file, or null when it can be uploaded. */
 export function validateGuideFile(file: { name: string; size: number }): string | null {
-  if (!isMarkdownFileName(file.name)) {
-    return `"${file.name}" isn't a Markdown file. Please choose a .md or .markdown file.`;
+  const kind = guideFileKind(file.name);
+  if (!kind) {
+    return `"${file.name}" can't be used. Please choose a Markdown (.md), Word (.docx) or PDF (.pdf) file.`;
   }
   if (file.size === 0) return `"${file.name}" is empty.`;
-  if (file.size > MAX_GUIDE_BYTES) {
-    return `"${file.name}" is larger than 1 MB. Please split it into smaller files.`;
+  const { maxBytes, label } = GUIDE_FILE_TYPES[kind];
+  if (file.size > maxBytes) {
+    return `"${file.name}" is larger than ${label}. Please split it into smaller files.`;
   }
   return null;
 }

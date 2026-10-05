@@ -1109,7 +1109,7 @@ paths:
     <<: *commonOptions
     post:
       tags: [Admin]
-      summary: Presigned PUT URL for a guideline Markdown file
+      summary: Presigned PUT URL for a guide file (.md up to 1 MB, .docx or .pdf up to 10 MB)
       operationId: create_guideline_upload_url
       security:
         - adminAuthorizer: []
@@ -1136,7 +1136,7 @@ paths:
                   contentType: { type: string }
                   maxBytes: { type: integer }
         "400":
-          description: Not a Markdown file
+          description: Not a Markdown, Word (.docx) or PDF file
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

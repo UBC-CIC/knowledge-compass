@@ -3,6 +3,8 @@ import { AuthService } from "@/functions/authService";
 import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 import {
   EMPTY_GUIDELINE_STATE,
+  GUIDE_FILE_TYPES,
+  guideFileKind,
   hasProcessing,
   normalizeLabel,
   validateGuideFile,
@@ -44,9 +46,11 @@ let demoState: GuidelineState = structuredClone(EMPTY_GUIDELINE_STATE);
 type UploadUrl = { presignedUrl: string; key: string; contentType: string };
 
 async function uploadOne(file: File, replaceDocumentId?: string): Promise<void> {
+  const kind = guideFileKind(file.name);
+  if (!kind) throw new Error(`"${file.name}" can't be used.`);
   const target = await adminFetch<UploadUrl>("/admin/guideline/upload-url", {
     method: "POST",
-    body: JSON.stringify({ file_name: file.name, content_type: "text/markdown" }),
+    body: JSON.stringify({ file_name: file.name, content_type: GUIDE_FILE_TYPES[kind].contentType }),
   });
   const put = await fetch(target.presignedUrl, {
     method: "PUT",

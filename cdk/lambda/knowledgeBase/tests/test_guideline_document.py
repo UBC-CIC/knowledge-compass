@@ -194,7 +194,7 @@ class BuildChunksTest(unittest.TestCase):
 
 class ProcessDocumentTest(unittest.TestCase):
     def _run(self, conn, text):
-        with mock.patch.object(gd, "_read_s3_text", return_value=text), \
+        with mock.patch.object(gd, "_read_guide_text", return_value=text), \
              mock.patch.object(gd, "label_section", return_value={"situation_label": "L", "summary": "S"}), \
              mock.patch.object(gd, "write_chunks", return_value={"written": 3, "embedded": 3, "deleted": 0}) as wc:
             result = gd.process_guideline_document({"document_id": "doc-1"}, conn)
