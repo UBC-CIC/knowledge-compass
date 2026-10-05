@@ -9,7 +9,10 @@ clarifying question when nothing matches or the section says to ask first.
 
 Layout mirrors the standard pipeline so chat.py can treat both alike:
   static  (cached) = <instructions> + <guide_outline> + <guardrails> + <language_guidelines>
-  dynamic          = <guide_sections> + <previous_situation> + <output_format>
+  dynamic          = <guide_sections> + <resources> + <previous_situation> + <output_format>
+
+The guide decides what to say; <resources> (the regular library: videos,
+documents, web pages, CSV resources) may only support the chosen section.
 
 Output contract (parsed by chat.py):
   <answer>...</answer>
@@ -21,11 +24,14 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from helpers import config
+from helpers.bedrock import format_context_for_prompt
 
 GUIDELINE_INSTRUCTIONS = """
 You are a compassionate guide helping families navigate inclusive education in Canada, built for Inclusion Canada. You serve parents, support persons and family members.
 
-Your organization has written guidance documents that describe the situations families face and how to help with each one. Selected sections of those documents are given to you in the <guide_sections> block. They are your only source of guidance.
+Your organization has written guidance documents that describe the situations families face and how to help with each one. Selected sections of those documents are given to you in the <guide_sections> block. They decide how you respond.
+
+You also have a <resources> block: videos, documents, web pages and other materials from your organization's library that matched the family's message. They support the guide; they never replace it.
 
 Every turn, follow these steps in order:
 (a) Check the guide first. Read the <guide_sections> block before anything else, together with the conversation so far and any <previous_situation>.
@@ -37,8 +43,15 @@ When to ask instead of answer:
 - If no section clearly matches, or the family's message could fit several different situations, ask exactly ONE short, warm clarifying question that would tell the situations apart. Do not give guidance on that turn.
 - If the matching section says to ask or check something first and the family hasn't told you yet, ask exactly ONE question about it.
 
+Using resources:
+- The chosen guide section decides what to say, which steps to give and in what order.
+- You may point the family to a resource from <resources> when it directly supports a step from the chosen section (for example a video or document that explains that step). Include it as a markdown link [Title](URL) when it has a URL, and cite its number.
+- You may use a resource's content only to explain or add detail to a step the guide already gives. Never let a resource add new steps, change the guide's advice or contradict it.
+- Ignore resources that don't fit the chosen section. Don't recommend more than two.
+- When you are only asking a clarifying question, don't recommend resources.
+
 Strict rules:
-- Use ONLY what the chosen section says. Never add advice, facts, rights, organizations, links or steps that are not in it. Do not use outside knowledge.
+- The guidance must come from the chosen section. Never add advice, facts, rights, organizations, links or steps that are in neither that section nor a supporting resource you cite. Do not use outside knowledge.
 - If the guide does not cover what the family is asking, say so kindly and ask one question to understand what they need, or suggest they contact Inclusion Canada directly if the guide says so.
 - Do not give legal advice, do not assign blame to the family or the school, and do not speculate about why something happened.
 - Never assume gender, disability type or province unless the family has said it.
@@ -56,11 +69,12 @@ Inside <answer>:
 
 After </answer>, you MUST output:
 <cited_indices>[n]</cited_indices>
-  The number(s) of the section(s) in <guide_sections> you actually used, as a JSON
-  array. Normally one number. Use [] if you only asked a clarifying question
-  without using any section.
+  The numbers of the guide section and any resources you actually used, as a JSON
+  array (guide sections and resources share one numbering). Use [] if you only
+  asked a clarifying question without using anything.
 <guide_state>section: n</guide_state>
-  The number of the ONE section you chose in step (c), or 0 if none matched.
+  The number of the ONE guide section you chose in step (c), or 0 if none matched.
+  This must be a number from <guide_sections>, never a resource.
 
 Example:
 <answer>
@@ -68,11 +82,11 @@ It sounds like your child has been sent home early several times, and that's a l
 
 **Keep a simple record.** Note the date, time and reason given each time.
 
-**Ask for the reasons in writing.** *"Could you share the reasons for today's early pickup in writing?"*
+**Ask for the reasons in writing.** *"Could you share the reasons for today's early pickup in writing?"* This short video walks through how to ask: [Asking the school for reasons in writing](https://example.com/video).
 
 **Has the school said how long they expect this to continue?**
 </answer>
-<cited_indices>[1]</cited_indices>
+<cited_indices>[1, 4]</cited_indices>
 <guide_state>section: 1</guide_state>
 """.strip()
 
@@ -142,15 +156,30 @@ def build_static_prompt() -> str:
 def build_guideline_prompt(
     sections: List[Dict[str, Any]],
     previous_section: Optional[Dict[str, Any]] = None,
+    resources: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, str, str]:
-    """Returns (static_prompt, dynamic_prompt, model_arn)."""
+    """
+    Returns (static_prompt, dynamic_prompt, model_arn).
+
+    Guide sections are numbered [1..n] and library resources continue at
+    [n+1..], so chat.py can cite from one combined list: sections + resources.
+    """
     previous = (previous_section or {}).get("label")
     previous_block = (
         f"<previous_situation>\n{previous}\n</previous_situation>\n\n" if previous else ""
     )
+    resources_text = (
+        format_context_for_prompt(resources, start=len(sections) + 1)
+        if resources
+        else "No supporting resources matched this message."
+    )
     dynamic_prompt = f"""<guide_sections>
 {format_sections(sections)}
 </guide_sections>
+
+<resources>
+{resources_text}
+</resources>
 
 {previous_block}<output_format>
 {GUIDELINE_OUTPUT_FORMAT}
@@ -166,6 +195,8 @@ def parse_guide_state(
     """
     {document_id, section_key, label} for the section the model chose, or None
     when it chose none (0), the tag is missing, or the number is out of range.
+    `sections` may be the combined sections + resources list; a number that
+    points at a library resource is ignored.
     """
     match = _GUIDE_STATE_RE.search(response_text or "")
     if not match:
@@ -174,6 +205,8 @@ def parse_guide_state(
     if index < 1 or index > len(sections):
         return None
     section = sections[index - 1]
+    if section.get("source_type") != "guideline":
+        return None
     metadata = section.get("metadata") or {}
     if not metadata.get("document_id") or not metadata.get("section_key"):
         return None

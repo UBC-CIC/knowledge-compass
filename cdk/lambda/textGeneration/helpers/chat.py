@@ -25,6 +25,9 @@ logger.setLevel(logging.INFO)
 
 logger.info(f"boto3 version: {boto3.__version__}")
 
+# Library resources offered alongside the guide sections in guideline mode.
+GUIDELINE_RESOURCE_COUNT = 6
+
 def _generate_session_title(
     query: str,
     answer_text: str,
@@ -222,10 +225,25 @@ def _prepare_guideline_conversation(
         region,
         previous_section=previous_section,
     )
-    static_system_prompt, dynamic_prompt, model_arn = build_guideline_prompt(sections, previous_section)
+    # Supporting library resources (videos, documents, web pages, CSV rows)
+    # from the regular corpus. Guides are hidden from this search, so there
+    # is no overlap. Searched with the situation name when one is known, so
+    # follow-ups still find resources for the same situation.
+    resource_query = query
+    if previous_section and previous_section.get("label"):
+        resource_query = f"{query}\n\n{previous_section['label']}"
+    resources = retrieve_from_pgvector(
+        resource_query,
+        db_connection,
+        region,
+        num_results=GUIDELINE_RESOURCE_COUNT,
+    )
+    static_system_prompt, dynamic_prompt, model_arn = build_guideline_prompt(
+        sections, previous_section, resources
+    )
     logger.info(
-        "Routing: mode=guideline sections=%d previous_section=%s",
-        len(sections), bool(previous_section),
+        "Routing: mode=guideline sections=%d resources=%d previous_section=%s",
+        len(sections), len(resources), bool(previous_section),
     )
 
     bedrock_messages = []
@@ -236,7 +254,10 @@ def _prepare_guideline_conversation(
     bedrock_messages.append({"role": "user", "content": [{"text": query}]})
 
     routing_ctx = {"mode": "guideline", "previous_section": previous_section}
-    return bedrock_messages, static_system_prompt, dynamic_prompt, sections, "SUGGESTION", model_arn, routing_ctx
+    # One combined list: guide sections [1..n], then resources [n+1..], the
+    # same numbering the prompt uses for <cited_indices>.
+    sources = list(sections) + list(resources)
+    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, "SUGGESTION", model_arn, routing_ctx
 
 
 def _public_guideline_source(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -540,7 +561,7 @@ def get_response(
     if is_guideline:
         guide_state = parse_guide_state(full_response_text, sources)
         logger.info(
-            "Guideline turn: sections=%d cited=%d selected_section=%s",
+            "Guideline turn: sources=%d cited=%d selected_section=%s",
             len(sources), len(used_sources), guide_state["section_key"] if guide_state else None,
         )
         if guide_state and answer_text and not answer_text.startswith("I encountered an error"):

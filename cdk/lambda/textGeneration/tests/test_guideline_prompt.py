@@ -80,6 +80,32 @@ class GuidelinePromptTest(unittest.TestCase):
         self.assertIn("No guides have been uploaded yet.", static)
 
 
+class ResourcesTest(unittest.TestCase):
+    RESOURCES = [
+        {"title": "Log video", "url": "https://example.org/v", "source_type": "video", "content": "Video text."},
+        {"title": "Policy PDF", "url": "", "source_type": "document", "content": "PDF text."},
+    ]
+
+    def test_resources_numbered_after_sections(self):
+        _, dynamic, _ = gp.build_guideline_prompt(STRUCTURED, None, self.RESOURCES)
+        self.assertIn("<resources>", dynamic)
+        self.assertIn("<source_3>\n[3] Log video", dynamic)
+        self.assertIn("<source_4>\n[4] Policy PDF", dynamic)
+        self.assertLess(dynamic.index("<guide_sections>"), dynamic.index("<resources>"))
+
+    def test_no_resources_note(self):
+        _, dynamic, _ = gp.build_guideline_prompt(STRUCTURED, None, [])
+        self.assertIn("No supporting resources matched this message.", dynamic)
+
+    def test_guide_state_ignores_resource_numbers(self):
+        combined = STRUCTURED + self.RESOURCES
+        self.assertIsNone(gp.parse_guide_state("<guide_state>section: 3</guide_state>", combined))
+        self.assertEqual(
+            gp.parse_guide_state("<guide_state>section: 2</guide_state>", combined)["section_key"],
+            "J1 > Reduced day",
+        )
+
+
 class ParseGuideStateTest(unittest.TestCase):
     def test_maps_index_to_section(self):
         text = "<answer>x</answer><cited_indices>[2]</cited_indices><guide_state>section: 2</guide_state>"

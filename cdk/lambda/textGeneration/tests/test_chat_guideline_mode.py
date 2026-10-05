@@ -22,9 +22,22 @@ SECTIONS = [
     },
 ]
 
+RESOURCES = [
+    {
+        "type": "VIDEO", "source_type": "video", "title": "Keeping a school log",
+        "url": "https://example.org/video", "uri": "https://example.org/video",
+        "content": "A short video on keeping a log.", "score": 0.6, "metadata": {},
+    },
+    {
+        "type": "DOCUMENT", "source_type": "document", "title": "Unrelated PDF",
+        "url": "", "uri": "", "content": "Other content.", "score": 0.5, "metadata": {},
+    },
+]
+
 GUIDELINE_REPLY = (
-    "<answer>It sounds hard. **Keep a record.** Note each early pickup.</answer>\n"
-    "<cited_indices>[1]</cited_indices>\n"
+    "<answer>It sounds hard. **Keep a record.** Note each early pickup. "
+    "[Keeping a school log](https://example.org/video)</answer>\n"
+    "<cited_indices>[1, 2]</cited_indices>\n"
     "<guide_state>section: 1</guide_state>"
 )
 CLARIFY_REPLY = (
@@ -73,7 +86,7 @@ class ChatModeTestBase(unittest.TestCase):
             "decide_phase": mock.Mock(return_value="SUGGESTION"),
             "touched_keys": mock.Mock(return_value=([], [])),
             "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "sonnet")),
-            "retrieve_from_pgvector": mock.Mock(return_value=[]),
+            "retrieve_from_pgvector": mock.Mock(return_value=list(RESOURCES)),
             "retrieve_guideline_sections": mock.Mock(return_value=SECTIONS),
             "assess_response": mock.Mock(return_value={"warning_text": None}),
             "invoke_guardrail": mock.Mock(side_effect=lambda q, r: {"action": "NONE", "text": q}),
@@ -121,20 +134,45 @@ class StandardModeTest(ChatModeTestBase):
 
 
 class GuidelineModeTest(ChatModeTestBase):
-    def test_guideline_mode_skips_router_and_corpus(self):
+    def test_guideline_mode_skips_router_but_searches_library(self):
         result, streamed = self.respond("guideline")
         self.patches["route_turn"].assert_not_called()
         self.patches["decide_phase"].assert_not_called()
         self.patches["get_current_prompt"].assert_not_called()
-        self.patches["retrieve_from_pgvector"].assert_not_called()
         self.patches["retrieve_guideline_sections"].assert_called_once()
+        self.patches["retrieve_from_pgvector"].assert_called_once()
+        self.assertEqual(
+            self.patches["retrieve_from_pgvector"].call_args.kwargs["num_results"],
+            chat.GUIDELINE_RESOURCE_COUNT,
+        )
         self.assertEqual(result["phase"], "SUGGESTION")
 
         payload = self.bedrock.converse_stream.call_args.kwargs
         self.assertEqual(payload["modelId"], config.SONNET_ARN)
         self.assertIn("<instructions>", payload["system"][0]["text"])
-        self.assertIn("[1] Situation: Child sent home early", payload["system"][2]["text"])
+        dynamic = payload["system"][2]["text"]
+        self.assertIn("[1] Situation: Child sent home early", dynamic)
+        # Resources continue the numbering after the guide sections.
+        self.assertIn("<source_2>", dynamic)
+        self.assertIn("<source_3>", dynamic)
+        self.assertNotIn("<source_1>", dynamic)
         self.assertEqual(len(payload["messages"]), 3)
+
+    def test_cited_resources_get_normal_cards(self):
+        result, _ = self.respond("guideline")
+        titles = [s["title"] for s in result["sources_used"]]
+        self.assertEqual(titles, ["Family guide: Child sent home early", "Keeping a school log"])
+        video = result["sources_used"][1]
+        self.assertEqual(video["url"], "https://example.org/video")
+        self.assertEqual(video["source_type"], "video")
+
+    def test_previous_situation_feeds_library_search(self):
+        self.patches["get_guide_state"].return_value = {
+            "document_id": "d1", "section_key": "J1 > Sent home", "label": "Child sent home early",
+        }
+        self.respond("guideline")
+        query = self.patches["retrieve_from_pgvector"].call_args.args[0]
+        self.assertIn("Child sent home early", query)
 
     def test_guide_state_is_hidden_and_persisted(self):
         result, streamed = self.respond("guideline")
@@ -150,7 +188,7 @@ class GuidelineModeTest(ChatModeTestBase):
 
     def test_citation_has_no_preview_or_link(self):
         result, _ = self.respond("guideline")
-        self.assertEqual(len(result["sources_used"]), 1)
+        self.assertEqual(len(result["sources_used"]), 2)
         source = result["sources_used"][0]
         self.assertEqual(source["title"], "Family guide: Child sent home early")
         self.assertEqual(source["content"], "")

@@ -367,7 +367,8 @@ export default function GuidelineMode() {
         <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">Guideline mode</h1>
         <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
           Upload the guides your team already uses to help families. The assistant finds the situations in them, picks
-          the one that fits each family, and answers only from that part of the guide. There are no prompts to write.
+          the one that fits each family, and follows that part of the guide. It still links families to supporting
+          videos and documents from your knowledge base. There are no prompts to write.
           Your existing prompts and settings stay as they are, so you can switch back at any time.
         </p>
       </div>

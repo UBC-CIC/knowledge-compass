@@ -165,7 +165,7 @@ The Chat History page lets admins review all user conversations. Expand a user r
 
 ### Guideline Mode
 
-Guideline mode is a second way for the assistant to answer, built for testing next to the standard prompts. Admins upload the guides they already use with families. The assistant finds the situations in them, picks the one that fits each family's message, and answers only from that part of the guide. There are no prompts to write and no journeys or situations to set up. The standard prompts, journeys and settings are not changed, so you can switch between the two at any time and compare them.
+Guideline mode is a second way for the assistant to answer, built for testing next to the standard prompts. Admins upload the guides they already use with families. The assistant finds the situations in them, picks the one that fits each family's message, and follows that part of the guide, linking to supporting videos and documents from the knowledge base. There are no prompts to write and no journeys or situations to set up. The standard prompts, journeys and settings are not changed, so you can switch between the two at any time and compare them.
 
 Open **Guideline mode** in the admin sidebar.
 
@@ -176,9 +176,10 @@ Open **Guideline mode** in the admin sidebar.
 
 How answers work in guideline mode:
 
-- Answers come only from the matching guide section. The general knowledge base (websites, PDFs, videos) is not used, and guides are never used in standard mode.
+- The matching guide section decides what the assistant says and which steps it gives.
+- The regular knowledge base (videos, documents, web pages and CSV resources from the Dashboard) is still searched. The assistant can point families to up to two of those resources when they support a step from the guide, and they appear as normal resource cards. Resources never add steps or change the guide's advice. Guides are never used in standard mode.
 - If no section fits clearly, or the section says to ask something first, the assistant asks one clarifying question.
-- Families see a "Family guide: [situation]" source under the answer. The guide text itself is not shown or linked.
+- Families see a "Family guide: [situation]" source under the answer, plus any resources it used. The guide text itself is not shown or linked.
 - The input guardrail, guardrail and language-guideline text, daily message limits and the answer check all still apply.
 
 To roll back, turn the switch off to go back to the standard prompts, or remove a guide that isn't working well. Developers can compare both modes on the same questions with `tests/eval/run_eval.py --mode standard|guideline` in `cdk/lambda/textGeneration`.

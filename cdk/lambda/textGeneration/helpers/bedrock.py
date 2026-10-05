@@ -5,11 +5,12 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-def format_context_for_prompt(sources: List[Dict[str, Any]]) -> str:
+def format_context_for_prompt(sources: List[Dict[str, Any]], start: int = 1) -> str:
+    """`start` offsets the numbering (guideline mode numbers resources after the guide sections)."""
     if not sources:
         return "No specific documents found."
     parts = []
-    for i, source in enumerate(sources, 1):
+    for i, source in enumerate(sources, start):
         title = source.get("title") or source.get("url") or source.get("uri") or "Untitled"
         url = source.get("url") or source.get("uri") or ""
         source_type = source.get("source_type") or source.get("type") or ""
