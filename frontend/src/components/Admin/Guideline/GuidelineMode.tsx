@@ -436,6 +436,15 @@ export default function GuidelineMode() {
             title="Upload guides"
             description="Word (.docx) or PDF files up to 10 MB, or Markdown (.md) up to 1 MB. You can upload several at once. Headings help, but aren't required."
           >
+            <div className="flex gap-2.5 rounded-[11px] border border-[oklch(0.85_0.05_268)] bg-[oklch(0.96_0.02_268)] px-4 py-3 text-[13.5px] leading-relaxed text-foreground/85">
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+              <p>
+                <strong className="font-semibold">Markdown (.md) gives the best results.</strong> Its headings tell the
+                assistant exactly where each situation starts and ends. Word and PDF files work too, but their layout
+                has to be interpreted, so situations may be split or named less accurately. Check the detected
+                situations after uploading.
+              </p>
+            </div>
             <div
               onDragOver={(e) => {
                 e.preventDefault();
