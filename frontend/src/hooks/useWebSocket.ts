@@ -1,12 +1,21 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 
-interface WebSocketMessage {
+import type { MessageSource } from "@/types/Chat";
+
+export interface WebSocketMessage {
   type: "start" | "chunk" | "complete" | "error" | "pong";
   content?: string;
+  response?: string;
   message?: string;
-  sources?: string[];
+  error?: string;
+  sources?: MessageSource[];
   warning?: string | null;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
+  session_name?: string;
+  token_usage?: {
+    remaining?: number;
+    reset_at?: string;
+  };
 }
 
 interface UseWebSocketOptions {
@@ -209,7 +218,7 @@ export const useWebSocket = (
   }, [stopHeartbeat]);
 
   const sendMessage = useCallback(
-    (message: any) => {
+    (message: unknown) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         try {
           const messageStr = JSON.stringify(message);

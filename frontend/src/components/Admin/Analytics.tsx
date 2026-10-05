@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import {
   LineChart,
@@ -67,12 +67,7 @@ export default function Analytics() {
       ? `timeRange=${lastDays}d`
       : `timeRange=${fromDaysAgo}d&endDaysAgo=${toDaysAgo}`;
 
-  useEffect(() => {
-    if (rangeInvalid) return;
-    fetchAnalytics();
-  }, [query, rangeInvalid]);
-
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async () => {
     if (isDemoMode) {
       setAnalyticsData({
         timeSeries: DEMO_ANALYTICS_SERIES,
@@ -113,7 +108,12 @@ export default function Analytics() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [query]);
+
+  useEffect(() => {
+    if (rangeInvalid) return;
+    fetchAnalytics();
+  }, [fetchAnalytics, rangeInvalid]);
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-6">

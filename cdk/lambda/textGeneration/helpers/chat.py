@@ -6,8 +6,10 @@ from typing import Dict, Any, Optional, List, Tuple
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
     get_exchange_count, get_session_title, update_session_title, save_journey_state,
-    get_session_context, save_routing_state
+    get_session_context, save_routing_state, get_guide_state, save_guide_state
 )
+from helpers.guideline_retrieval import GUIDELINE_SOURCE_TYPE, retrieve_guideline_sections
+from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
 from helpers.logic import get_current_prompt
 from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
@@ -115,6 +117,11 @@ def _prepare_conversation(
         logger.error(f"DB Error: {e}")
         raise
 
+    # Guideline mode (migration 031): answer only from uploaded guides. Skips
+    # the router, phases, journey catalog and corpus retrieval entirely.
+    if config.PROMPT_MODE == "guideline":
+        return _prepare_guideline_conversation(query, region, chat_session_id, db_connection, raw_history)
+
     # 4. Load session context. The user message is already saved, so the
     #    count equals the number of completed exchanges before this message.
     exchange_count = get_exchange_count(chat_session_id, db_connection)
@@ -195,6 +202,53 @@ def _prepare_conversation(
     })
 
     return bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx
+
+def _prepare_guideline_conversation(
+    query: str,
+    region: str,
+    chat_session_id: str,
+    db_connection,
+    raw_history: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], str, str, List[Dict[str, Any]], str, str, Dict[str, Any]]:
+    """
+    Guideline-mode counterpart of the routing/phase/retrieval steps of
+    _prepare_conversation. Returns the same tuple; the public phase is always
+    "SUGGESTION" so the <answer>/<cited_indices> streaming contract applies.
+    """
+    previous_section = get_guide_state(db_connection, chat_session_id)
+    sections = retrieve_guideline_sections(
+        query,
+        db_connection,
+        region,
+        previous_section=previous_section,
+    )
+    static_system_prompt, dynamic_prompt, model_arn = build_guideline_prompt(sections, previous_section)
+    logger.info(
+        "Routing: mode=guideline sections=%d previous_section=%s",
+        len(sections), bool(previous_section),
+    )
+
+    bedrock_messages = []
+    for msg in raw_history:
+        role = "user" if msg["sender"] == "user" else "assistant"
+        if msg["content"]:
+            bedrock_messages.append({"role": role, "content": [{"text": msg["content"]}]})
+    bedrock_messages.append({"role": "user", "content": [{"text": query}]})
+
+    routing_ctx = {"mode": "guideline", "previous_section": previous_section}
+    return bedrock_messages, static_system_prompt, dynamic_prompt, sections, "SUGGESTION", model_arn, routing_ctx
+
+
+def _public_guideline_source(source: Dict[str, Any]) -> Dict[str, Any]:
+    """Guide citations show the situation name only: no link, no content preview."""
+    public = to_public_source(source)
+    public["title"] = f"Family guide: {source.get('title') or 'Guidance'}"
+    public["content"] = ""
+    public["url"] = ""
+    public["uri"] = ""
+    public.pop("metadata", None)
+    return public
+
 
 def _save_ai_response(
     db_connection,
@@ -353,6 +407,14 @@ def get_response(
     answer_text = ""
     cited_indices = []
     expect_answer_tags = phase_name == "SUGGESTION"
+    is_guideline = routing_ctx.get("mode") == "guideline"
+    # Hidden metadata tags that must never reach the stream. Guideline mode
+    # adds <guide_state>; standard mode keeps its original tag lists.
+    stream_stop_tags = ["</answer>", "<cited", "<detective_state"]
+    stream_hold_tags = ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]
+    if is_guideline:
+        stream_stop_tags.append("<guide_state")
+        stream_hold_tags.extend(["<guide_state>", "</guide_state>"])
 
     try:
         response = bedrock_runtime.converse_stream(**request_payload)
@@ -380,7 +442,7 @@ def get_response(
                         
                     # 2. Stop extracting if we hit a closing tag or hidden metadata tag
                     stop_found = False
-                    for stop_tag in ["</answer>", "<cited", "<detective_state"]:
+                    for stop_tag in stream_stop_tags:
                         stop_idx = target_text.find(stop_tag)
                         if stop_idx != -1:
                             target_text = target_text[:stop_idx]
@@ -389,7 +451,7 @@ def get_response(
                     # 3. Prevent partial tags at the end of the chunk from leaking
                     if not stop_found:
                         held_back = 0
-                        for stop_tag in ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]:
+                        for stop_tag in stream_hold_tags:
                             for i in range(1, len(stop_tag)):
                                 if target_text.endswith(stop_tag[:i]):
                                     held_back = max(held_back, i)
@@ -411,7 +473,7 @@ def get_response(
             answer_text = final_answer_match.group(1).strip()
         else:
             # Detective phase: strip any trailing <detective_state> tag from saved text
-            answer_text = re.split(r'<(?:cited_indices|detective_state)', full_response_text)[0].strip()
+            answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
             
         # Parse cited_indices tolerantly: one malformed token must not drop
         # every citation.
@@ -434,12 +496,21 @@ def get_response(
     # Full cited sources feed the grounding verifier; only the trimmed public
     # projection is streamed to the client and persisted with the message.
     used_sources = select_cited_sources(sources, cited_indices)
-    public_sources = [to_public_source(source) for source in used_sources]
+    public_sources = [
+        _public_guideline_source(source)
+        if source.get("source_type") == GUIDELINE_SOURCE_TYPE
+        else to_public_source(source)
+        for source in used_sources
+    ]
 
     warning_text = None
     intervention_result = None
 
-    if phase_name == "SUGGESTION" and answer_text and not answer_text.startswith("I encountered an error"):
+    # Guideline mode: a clarifying question cites no section, so there is
+    # nothing to verify; answers are checked against the full sections.
+    run_grounding_check = phase_name == "SUGGESTION" and (not is_guideline or bool(used_sources))
+
+    if run_grounding_check and answer_text and not answer_text.startswith("I encountered an error"):
         try:
             intervention_result = assess_response(
                 query=query,
@@ -464,11 +535,27 @@ def get_response(
         warning_text
     )
 
+    # Guideline mode keeps its own state (the chosen section) under
+    # metadata.guide_state and never touches journey/routing state.
+    if is_guideline:
+        guide_state = parse_guide_state(full_response_text, sources)
+        logger.info(
+            "Guideline turn: sections=%d cited=%d selected_section=%s",
+            len(sources), len(used_sources), guide_state["section_key"] if guide_state else None,
+        )
+        if guide_state and answer_text and not answer_text.startswith("I encountered an error"):
+            try:
+                save_guide_state(db_connection, chat_session_id, guide_state)
+                db_connection.commit()
+            except Exception as e:
+                db_connection.rollback()
+                logger.warning(f"Failed to save guide state: {type(e).__name__}")
+
     # Extract and persist journey state for multi-turn context.
     # Suggestion phase: <journey_state> after <cited_indices>.
     # Detective phase: <detective_state> after the visible response.
     # Both are never streamed to the user.
-    if full_response_text:
+    if full_response_text and not is_guideline:
         try:
             state_text = None
             if phase_name == "SUGGESTION":
@@ -497,7 +584,7 @@ def get_response(
 
     # Advance routing state only after a successful reply, so a failed
     # generation does not count as a question asked or guidance given.
-    if answer_text and not answer_text.startswith("I encountered an error"):
+    if not is_guideline and answer_text and not answer_text.startswith("I encountered an error"):
         try:
             # Journey/situation keys only (no text) for feedback analytics.
             journeys_touched, clusters_touched = touched_keys(

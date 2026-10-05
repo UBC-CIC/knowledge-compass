@@ -2,7 +2,7 @@ import logging
 import time
 import boto3
 import os
-from helpers.crud import fetch_system_config, fetch_journey_catalog
+from helpers.crud import fetch_system_config, fetch_journey_catalog, fetch_guideline_config
 from helpers.journeys import DEFAULT_CATALOG, JourneyCatalog, catalog_from_rows
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,11 @@ MAX_MESSAGES_PER_DAY = 45
 MIN_EXCHANGES_BEFORE_SUGGEST = 4          # fixed mode: switch point; dynamic mode: ceiling
 MIN_EXCHANGES_BEFORE_ANSWER = 0           # dynamic mode: floor (urgent turns bypass it)
 ROUTING_MODE = "fixed"                    # "fixed" (exchange count only) | "dynamic" (per-turn router)
+
+# Guideline mode (migration 031). "standard" = existing prompt system;
+# "guideline" = answer only from uploaded guideline documents.
+PROMPT_MODE = "standard"
+GUIDELINE_OUTLINE = []                    # [{document_id, file_name, section_key, label}]
 MAX_CHARACTERS_PER_USER_MESSAGE = 2000
 MAX_CHARACTERS_PER_AI_MESSAGE = 5000
 
@@ -339,6 +344,7 @@ def load_config(db_connection):
     global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, WELCOME_MESSAGE
     global HAIKU_ARN, SONNET_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
+    global PROMPT_MODE, GUIDELINE_OUTLINE
 
     if _CONFIG_LOADED_AT is not None and time.monotonic() - _CONFIG_LOADED_AT < CONFIG_TTL_SECONDS:
         return
@@ -418,6 +424,20 @@ def load_config(db_connection):
         JOURNEY_CATALOG = DEFAULT_CATALOG
         logger.warning("Journey catalog unavailable; using the built-in default catalog")
 
+    # 4. Guideline mode (migration 031). fetch_guideline_config never raises
+    #    and falls back to standard mode with an empty outline.
+    apply_guideline_config(fetch_guideline_config(db_connection))
+
     _CONFIG_LOADED_AT = time.monotonic()
 
-    logger.info("System config loaded successfully.")
+    logger.info("System config loaded successfully (prompt_mode=%s).", PROMPT_MODE)
+
+
+def apply_guideline_config(guideline: dict) -> None:
+    """Map fetch_guideline_config output onto the module globals."""
+    global PROMPT_MODE, GUIDELINE_OUTLINE
+    guideline = guideline or {}
+    mode = guideline.get("mode")
+    PROMPT_MODE = mode if mode in ("standard", "guideline") else "standard"
+    outline = guideline.get("outline")
+    GUIDELINE_OUTLINE = list(outline) if isinstance(outline, list) else []

@@ -203,7 +203,6 @@ paths:
         type: aws_proxy
       x-amazon-apigateway-request-validator: all
 
-
   /admin/users/{userId}/chat_sessions:
     <<: *commonOptions
     get:
@@ -404,7 +403,8 @@ paths:
                             name: { type: string }
                             type:
                               type: string
-                              enum: [website, csv, markdown, json, video, document]
+                              enum:
+                                [website, csv, markdown, json, video, document]
                             created_at: { type: string }
                             metadata:
                               type: object
@@ -425,7 +425,8 @@ paths:
                             data_source_id: { type: string }
                             status:
                               type: string
-                              enum: [pending, queued, running, failed, completed]
+                              enum:
+                                [pending, queued, running, failed, completed]
                             error_message:
                               type: string
                               nullable: true
@@ -784,7 +785,16 @@ paths:
                   maxItems: 100
                   items:
                     type: object
-                    required: [type, primary_file_name, primary_s3_bucket, primary_s3_key, metadata_file_name, metadata_s3_bucket, metadata_s3_key]
+                    required:
+                      [
+                        type,
+                        primary_file_name,
+                        primary_s3_bucket,
+                        primary_s3_key,
+                        metadata_file_name,
+                        metadata_s3_bucket,
+                        metadata_s3_key,
+                      ]
                     properties:
                       type:
                         type: string
@@ -1030,6 +1040,241 @@ paths:
           description: Invalid request
         "404":
           description: Data source not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  # Guideline mode (migration 031; lambda/knowledgeBase/helpers/guideline_admin.py).
+  # Runs alongside the standard prompt system; PUT /admin/guideline/mode picks
+  # which one the public chat uses.
+  /admin/guideline:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Guideline mode, uploaded guides and their detected situations
+      operationId: get_guideline
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: Guideline mode state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [standard, guideline] }
+                  mode_updated_by: { type: string, nullable: true }
+                  mode_updated_at: { type: string, nullable: true }
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        file_name: { type: string }
+                        status:
+                          { type: string, enum: [processing, ready, failed] }
+                        error: { type: string, nullable: true }
+                        section_count: { type: integer }
+                        sections:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              section_key: { type: string }
+                              heading_path: { type: string, nullable: true }
+                              auto_label: { type: string }
+                              label_override: { type: string, nullable: true }
+                              label: { type: string }
+                              summary: { type: string, nullable: true }
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/upload-url:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Presigned PUT URL for a guideline Markdown file
+      operationId: create_guideline_upload_url
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_name]
+              properties:
+                file_name: { type: string }
+                content_type: { type: string }
+      responses:
+        "200":
+          description: Presigned URL and the server-generated object key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  presignedUrl: { type: string }
+                  key: { type: string }
+                  contentType: { type: string }
+                  maxBytes: { type: integer }
+        "400":
+          description: Not a Markdown file
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/documents:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Register an uploaded guide (new or replacing an existing one) and start reading it
+      operationId: register_guideline_document
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [s3_key, file_name]
+              properties:
+                s3_key: { type: string }
+                file_name: { type: string }
+                replace_document_id: { type: string, format: uuid }
+      responses:
+        "202":
+          description: Guide accepted; status is processing
+        "400":
+          description: Invalid key, file type or size
+        "404":
+          description: Guide to replace not found
+        "500":
+          description: Internal Server Error
+        "502":
+          description: Could not start processing
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/documents/{id}:
+    <<: *commonOptions
+    delete:
+      tags: [Admin]
+      summary: Remove a guide, its detected situations and its search chunks
+      operationId: delete_guideline_document
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Guide removed
+        "400":
+          description: Invalid id
+        "404":
+          description: Guide not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/sections/{id}:
+    <<: *commonOptions
+    patch:
+      tags: [Admin]
+      summary: Rename a detected situation (empty label resets to the detected name)
+      operationId: rename_guideline_section
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+      responses:
+        "200":
+          description: Label saved
+        "400":
+          description: Invalid id or label
+        "404":
+          description: Situation not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/mode:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Choose which prompt system the public chat uses
+      operationId: set_guideline_mode
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [standard, guideline] }
+      responses:
+        "200":
+          description: Mode saved (applies to chat within about 5 minutes)
+        "400":
+          description: Invalid mode
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

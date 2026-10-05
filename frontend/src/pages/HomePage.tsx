@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ViewProvider } from "@/providers/ViewContext";
 import SideBar from "@/components/ChatInterface/SideBar";
 import type { ChatSession } from "@/providers/view";
+import type { Message } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import { Menu, X } from "lucide-react";
 import { useSidebar } from "@/providers/sidebar";
@@ -29,7 +30,7 @@ export default function HomePage() {
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(
     null
   );
-  const [currentMessages, setCurrentMessages] = useState<any[]>([]);
+  const [currentMessages, setCurrentMessages] = useState<Message[]>([]);
   const [activeChatName, setActiveChatName] = useState<string | null>(null);
   const [isLoadingChatSessions, setIsLoadingChatSessions] = useState(!isDemoMode);
   const [welcomeMessage, setWelcomeMessage] = useState<string>(
@@ -50,7 +51,13 @@ export default function HomePage() {
     return tokenResponse.json() as Promise<{ token: string }>;
   };
 
-const normalizeChatSession = (session: any): ChatSession => ({
+// Shape returned by the chat session endpoints (title is the DB column name).
+type ChatSessionRow = Omit<ChatSession, "name"> & {
+	name?: unknown;
+	title?: unknown;
+};
+
+const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
 	id: session.id,
 	name:
 		typeof session.name === "string"

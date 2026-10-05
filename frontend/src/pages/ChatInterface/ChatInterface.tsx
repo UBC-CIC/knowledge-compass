@@ -6,8 +6,8 @@ import AIChatMessage from "@/components/ChatInterface/AIChatMessage";
 import UserChatMessage from "@/components/ChatInterface/UserChatMessage";
 import { useView } from "@/providers/view";
 import { AiChatInput } from "@/components/ChatInterface/userInput";
-import { useWebSocket } from "@/hooks/useWebSocket";
-import type { Message } from "@/types/Chat";
+import { useWebSocket, type WebSocketMessage } from "@/hooks/useWebSocket";
+import type { Message, MessageSource } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
 import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
@@ -274,7 +274,7 @@ export default function AIChatPage({
 
   // WebSocket message handlers - memoized to prevent unnecessary reconnections
   const handleWebSocketMessage = useCallback(
-    (message: any) => {
+    (message: WebSocketMessage) => {
       const streamingMessageId = streamingMessageIdRef.current;
 
       switch (message.type) {
@@ -498,7 +498,7 @@ export default function AIChatPage({
           chat_session_id: string;
           sender: "user" | "AI";
           content: string;
-          sources?: any; // jsonb
+          sources?: unknown; // jsonb: array, JSON string, or single value
           warning?: string | null;
           created_at: string; // ISO
         }
@@ -510,19 +510,19 @@ export default function AIChatPage({
         const startIndex = (rawMessages.length > 0 && rawMessages[0].content === LEGACY_WELCOME_PROMPT) ? 1 : 0;
 
         const chatMessages: Message[] = rawMessages.slice(startIndex).map((m) => {
-          let parsedSources: any[] = [];
+          let parsedSources: MessageSource[] = [];
           if (m.sender === "AI" && m.sources) {
             if (Array.isArray(m.sources)) {
-              parsedSources = m.sources;
+              parsedSources = m.sources as MessageSource[];
             } else if (typeof m.sources === "string") {
               try {
-                const parsed = JSON.parse(m.sources);
-                parsedSources = Array.isArray(parsed) ? parsed : [parsed];
+                const parsed: unknown = JSON.parse(m.sources);
+                parsedSources = (Array.isArray(parsed) ? parsed : [parsed]) as MessageSource[];
               } catch {
                 parsedSources = [m.sources];
               }
             } else {
-              parsedSources = [m.sources];
+              parsedSources = [m.sources as MessageSource];
             }
           }
 
@@ -531,7 +531,7 @@ export default function AIChatPage({
             sender: m.sender === "AI" ? ("bot" as const) : ("user" as const),
             text: m.content,
             sources_used: parsedSources,
-            warning: (m as any).warning ?? null,
+            warning: m.warning ?? null,
             phase: parsedSources.length > 0 ? "SUGGESTION" : "DETECTIVE",
             time: new Date(m.created_at).getTime(),
           };
@@ -555,12 +555,12 @@ export default function AIChatPage({
     return () => {
       isActive = false;
     };
-  }, [activeChatSessionId, userId]);
+  }, [activeChatSessionId, userId, setConversationFacts]);
 
   async function sendMessage(textOverride?: string) {
     if (isStreaming) return;
 
-    let text = (textOverride ?? message).trim();
+    const text = (textOverride ?? message).trim();
     if (!text) return;
 
     let sessionId = activeChatSessionId;

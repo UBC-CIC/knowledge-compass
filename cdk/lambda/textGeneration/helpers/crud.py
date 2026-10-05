@@ -209,6 +209,85 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
     return config
 
 
+GUIDELINE_MODES = ("standard", "guideline")
+
+
+def fetch_guideline_config(db_connection) -> Dict[str, Any]:
+    """
+    Guideline mode settings (migration 031): {mode, outline}.
+
+    outline lists the auto-detected situations of every `ready` guideline
+    document as [{document_id, file_name, section_key, label}], using the admin
+    label override when set. Falls back to {"mode": "standard", "outline": []}
+    on any error (for example before migration 031 has run); the transaction is
+    rolled back so later queries on the shared connection still work.
+    """
+    result: Dict[str, Any] = {"mode": "standard", "outline": []}
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute("SELECT prompt_mode FROM guideline_config ORDER BY id LIMIT 1")
+            row = cur.fetchone()
+            if row and row[0] in GUIDELINE_MODES:
+                result["mode"] = row[0]
+
+            cur.execute("""
+                SELECT d.id::text, d.file_name, s.section_key,
+                       COALESCE(NULLIF(s.label_override, ''), s.auto_label)
+                FROM guideline_sections s
+                JOIN guideline_documents d ON d.id = s.document_id
+                WHERE d.status = 'ready'
+                ORDER BY d.created_at, d.id, s.sort_order, s.section_key
+            """)
+            result["outline"] = [
+                {
+                    "document_id": r[0],
+                    "file_name": r[1],
+                    "section_key": r[2],
+                    "label": r[3],
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception as e:
+        logger.error(f"fetch_guideline_config failed: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        return {"mode": "standard", "outline": []}
+    return result
+
+
+def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, Any]]:
+    """Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata."""
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                "SELECT metadata->'guide_state' FROM chat_sessions WHERE id = %s",
+                (chat_session_id,)
+            )
+            row = cur.fetchone()
+            return row[0] if row and isinstance(row[0], dict) else None
+    except Exception as e:
+        logger.error(f"get_guide_state failed: {type(e).__name__}")
+        return None
+
+
+def save_guide_state(db_connection, chat_session_id: str, guide_state: Dict[str, Any]) -> None:
+    """Persist guideline-mode state under its own chat_sessions.metadata key."""
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE chat_sessions
+                   SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('guide_state', %s::jsonb)
+                 WHERE id = %s
+                """,
+                (json.dumps(guide_state), chat_session_id)
+            )
+    except Exception as e:
+        logger.error(f"save_guide_state failed: {type(e).__name__}")
+
+
 def fetch_journey_catalog(db_connection) -> List[Tuple[Any, ...]]:
     """
     Active (non-archived) journeys and clusters with their active prompt

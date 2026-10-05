@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { Message } from "@/types/Chat";
 
 export type ChatSession = {
   id: string;
@@ -25,8 +26,8 @@ export type ViewContextType = {
   renameChatSession: (sessionId: string, name: string) => Promise<ChatSession | null>;
 
   // Current chat data for export
-  currentMessages: any[];
-  setCurrentMessages: (messages: any[]) => void;
+  currentMessages: Message[];
+  setCurrentMessages: (messages: Message[]) => void;
   activeChatName: string | null;
   setActiveChatName: (name: string | null) => void;
   conversationFacts: Record<string, string>;

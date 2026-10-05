@@ -6,6 +6,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import TypingIndicator from "./TypingIndicator";
 import { displayGuideText, isSuggestionPhase } from "@/lib/guideMessage";
+import type { MessageSource, SourceItem } from "@/types/Chat";
 
 const isSafeUrl = (url: string) => {
   try {
@@ -14,21 +15,6 @@ const isSafeUrl = (url: string) => {
   } catch {
     return false;
   }
-};
-
-type SourceItem = {
-  uri?: string;
-  url?: string;
-  title?: string;
-  content?: string;
-  type?: string;
-  source_type?: string;
-  score?: number;
-  metadata?: {
-    chunk_start?: string;
-    chunk_end?: string;
-    [key: string]: unknown;
-  };
 };
 
 const PREVIEW_MAX_CHARS = 320;
@@ -72,7 +58,7 @@ function withStartTime(url: string, start: string) {
 type AIChatMessageProps = {
   text: string;
   question?: string;
-  sources?: SourceItem[] | string[];
+  sources?: MessageSource[];
   warning?: string | null;
   isTyping?: boolean;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
@@ -160,10 +146,11 @@ function isHttpSource(source: SourceItem | string) {
   return isSafeUrl(url);
 }
 
-// Uploaded documents and CSV row resources without public URLs still get cards.
+// Uploaded documents, CSV row resources and guideline-mode guide sections
+// (title only, no link or preview) still get cards without public URLs.
 function isResourceSource(source: SourceItem | string) {
   const type = sourceLabel(source).type;
-  return isHttpSource(source) || type === "document" || type === "csv_row";
+  return isHttpSource(source) || type === "document" || type === "csv_row" || type === "guideline";
 }
 
 export default function AIChatMessage({

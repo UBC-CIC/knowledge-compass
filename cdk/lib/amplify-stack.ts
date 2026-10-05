@@ -39,6 +39,9 @@ export class AmplifyStack extends cdk.Stack {
                   - npm ci
               build:
                 commands:
+                  # Lint and unit tests gate the deploy; a failure stops the build.
+                  - npm run lint
+                  - npm test
                   - npm run build
             artifacts:
               baseDirectory: dist

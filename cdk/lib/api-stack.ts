@@ -1255,6 +1255,11 @@ export class ApiGatewayStack extends cdk.Stack {
         // with Amazon Textract, "auto" only PDFs without a usable text layer
         // (scans, image-only exports), "off" uses pypdf alone.
         PDF_TEXTRACT_MODE: "always",
+        // Guideline mode (helpers/guideline_document.py) labels each section
+        // of an uploaded guide with Haiku. Same SSM parameter name contract as
+        // lambdaTextGen; LLM_REGION matches lambdaTextGen's.
+        HAIKU_ARN: "/KC/LLM/HaikuArn",
+        LLM_REGION: this.region,
       },
     });
 
@@ -1279,6 +1284,17 @@ export class ApiGatewayStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+
+    // Guideline-mode section labelling reads the Haiku model id from SSM and
+    // calls Converse. lambdaKnowledgeBase shares lambdaRole with lambdaTextGen,
+    // which already holds the Bedrock Haiku statement (textGenBedrockPolicyStatement);
+    // this explicit SSM grant documents the dependency. Plain ARN strings, no
+    // token references back to the function (see the circular-dependency note below).
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`],
     }));
 
     // Self-invoke permission for the async document-ingestion worker

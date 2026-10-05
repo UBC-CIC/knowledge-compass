@@ -17,6 +17,8 @@ from helpers.delete_data_source import delete_data_source
 from helpers.process_document_batch import process_document_batch
 from helpers.process_csv_links import process_csv_links
 from helpers.csv_links import get_data_source_links
+from helpers.guideline_document import process_guideline_document, reembed_guideline_sections
+from helpers.guideline_admin import handle_guideline_request, is_guideline_route
 
 # Set up logging
 logger = logging.getLogger()
@@ -146,6 +148,18 @@ def handler(event, context=None):
                 return {"error": "Error connecting to database"}
             return process_csv_links(event=event, connection=connection, context=context)
 
+        # Async guideline-mode workers (helpers/guideline_document.py), fired
+        # by the /admin/guideline routes with InvocationType="Event".
+        if event.get("task") in ("process_guideline_document", "reembed_guideline_sections"):
+            try:
+                connection = _connect_to_db()
+            except Exception as e:
+                logger.error(f"Error connecting to database: {e}")
+                return {"error": "Error connecting to database"}
+            if event["task"] == "process_guideline_document":
+                return process_guideline_document(event=event, connection=connection)
+            return reembed_guideline_sections(event=event, connection=connection)
+
         # API Gateway path
         method = event.get("httpMethod", "")
         resource = event.get("resource", "")
@@ -180,6 +194,10 @@ def handler(event, context=None):
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
             return _response(event, 500, {"error": "Error connecting to database"})
+
+        # Routes: /admin/guideline* (guideline mode; helpers/guideline_admin.py)
+        if is_guideline_route(event):
+            return handle_guideline_request(event=event, body=body, connection=connection)
 
         # Route: POST /admin/data_sources
         if method == "POST" and (

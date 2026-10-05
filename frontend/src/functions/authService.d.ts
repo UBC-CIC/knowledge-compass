@@ -1,3 +1,5 @@
+import type { AuthSession, JWT } from "aws-amplify/auth";
+
 export interface AuthResult {
   success: boolean;
   error?: string;
@@ -11,11 +13,11 @@ export interface SignInResult extends AuthResult {
 }
 
 export interface UserResult extends AuthResult {
-  user?: any;
+  user?: unknown;
 }
 
 export interface TokenResult extends AuthResult {
-  token?: any;
+  token?: JWT;
 }
 
 export class AuthService {
@@ -33,7 +35,7 @@ export class AuthService {
   static signOut(): Promise<AuthResult>;
   static getCurrentUser(): Promise<UserResult>;
   static getAuthToken(useCache?: boolean): Promise<TokenResult>;
-  static getAuthSession(useCache?: boolean): Promise<any>;
+  static getAuthSession(useCache?: boolean): Promise<AuthSession>;
   static getTokenString(token: unknown): string | null;
   static getAdminIdToken(useCache?: boolean): Promise<string>;
   static getAdminAuthHeaders(useCache?: boolean): Promise<{
@@ -41,5 +43,5 @@ export class AuthService {
     "Content-Type": string;
   }>;
   static clearAuthCache(): void;
-  static isTokenExpiringSoon(token: any): boolean;
+  static isTokenExpiringSoon(token: Pick<JWT, "payload"> | null | undefined): boolean;
 }

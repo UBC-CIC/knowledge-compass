@@ -14,6 +14,14 @@ Usage (from cdk/lambda/textGeneration):
     set EVAL_DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
     python tests/eval/run_eval.py tests/eval/questions.json --label baseline
 
+Compare standard and guideline mode on the same questions:
+
+    python tests/eval/run_eval.py tests/eval/questions.json --mode standard  --label standard
+    python tests/eval/run_eval.py tests/eval/questions.json --mode guideline --label guideline
+
+In guideline mode each question may carry "expected_guideline": situation
+labels or heading text that should be matched (falls back to "expected").
+
 Environment:
     EVAL_DATABASE_URL  libpq connection string for the database to evaluate
                        (required; never point this at production with real
@@ -51,7 +59,7 @@ from typing import Any, Dict, List, Optional
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from helpers import retrieval  # noqa: E402
+from helpers import guideline_retrieval, retrieval  # noqa: E402
 
 DEFAULT_K_VALUES = (5, 15)
 
@@ -70,11 +78,29 @@ def load_questions(path: str) -> List[Dict[str, Any]]:
 def matches(source: Dict[str, Any], expected: List[str]) -> bool:
     url = (source.get("url") or source.get("uri") or "").lower()
     title = (source.get("title") or "").strip().lower()
+    # Guideline sections have no URL; match on their section key / heading.
+    metadata = source.get("metadata") or {}
+    heading = f"{metadata.get('section_key') or ''} {metadata.get('heading_path') or ''}".lower()
     for entry in expected:
         needle = entry.strip().lower()
-        if needle and (needle in url or needle == title):
+        if needle and (needle in url or needle == title or (heading.strip() and needle in heading)):
             return True
     return False
+
+
+def expected_for(item: Dict[str, Any], mode: str) -> List[str]:
+    """Guideline mode may name its own targets (situation labels or headings)."""
+    if mode == "guideline" and item.get("expected_guideline"):
+        return item["expected_guideline"]
+    return item["expected"]
+
+
+def run_retrieval(mode: str, query: str, connection, region: str, num_results: int) -> List[Dict[str, Any]]:
+    if mode == "guideline":
+        return guideline_retrieval.retrieve_guideline_sections(
+            query, connection, region, max_sections=num_results, max_words=10**6
+        )
+    return retrieval.retrieve_from_pgvector(query, connection, region, num_results=num_results)
 
 
 def first_match_rank(results: List[Dict[str, Any]], expected: List[str]) -> Optional[int]:
@@ -85,19 +111,20 @@ def first_match_rank(results: List[Dict[str, Any]], expected: List[str]) -> Opti
     return None
 
 
-def evaluate(connection, questions, region: str, num_results: int, k_values) -> Dict[str, Any]:
+def evaluate(connection, questions, region: str, num_results: int, k_values, mode: str = "standard") -> Dict[str, Any]:
     per_question = []
     for item in questions:
-        query = item.get("search_query") or item["question"]
+        # Guideline mode has no router, so it always searches the raw question.
+        query = item["question"] if mode == "guideline" else (item.get("search_query") or item["question"])
         started = time.perf_counter()
-        results = retrieval.retrieve_from_pgvector(query, connection, region, num_results=num_results)
+        results = run_retrieval(mode, query, connection, region, num_results)
         elapsed_ms = (time.perf_counter() - started) * 1000
         # retrieve_from_pgvector reads only; end its transaction so the next
         # question starts clean (and SET LOCAL settings do not leak).
         connection.rollback()
         per_question.append({
             "id": item.get("id") or item["question"][:40],
-            "rank": first_match_rank(results, item["expected"]),
+            "rank": first_match_rank(results, expected_for(item, mode)),
             "returned": len(results),
             "latency_ms": round(elapsed_ms, 1),
         })
@@ -106,6 +133,7 @@ def evaluate(connection, questions, region: str, num_results: int, k_values) -> 
     ranks = [q["rank"] for q in per_question]
     latencies = sorted(q["latency_ms"] for q in per_question)
     summary = {
+        "mode": mode,
         "questions": total,
         "num_results": num_results,
         "mrr": round(sum(1 / r for r in ranks if r) / total, 4) if total else 0.0,
@@ -125,7 +153,15 @@ def main(argv=None) -> int:
     parser.add_argument("--num-results", type=int, default=15, help="top-k passed to retrieval (default 15)")
     parser.add_argument("--label", default="run", help="Name recorded with the results, e.g. baseline")
     parser.add_argument("--output", help="Optional path to write the full JSON results")
+    parser.add_argument(
+        "--mode",
+        choices=("standard", "guideline"),
+        default="standard",
+        help="standard = corpus retrieval (default); guideline = uploaded-guide sections (migration 031)",
+    )
     args = parser.parse_args(argv)
+    if args.mode == "guideline" and args.num_results == 15:
+        args.num_results = 3  # guideline mode sends at most 3 sections per turn
 
     dsn = os.environ.get("EVAL_DATABASE_URL")
     if not dsn:
@@ -138,7 +174,8 @@ def main(argv=None) -> int:
     questions = load_questions(args.questions)
     connection = psycopg2.connect(dsn)
     try:
-        report = evaluate(connection, questions, region, args.num_results, DEFAULT_K_VALUES)
+        k_values = (1, 3) if args.mode == "guideline" else DEFAULT_K_VALUES
+        report = evaluate(connection, questions, region, args.num_results, k_values, mode=args.mode)
     finally:
         connection.close()
 
