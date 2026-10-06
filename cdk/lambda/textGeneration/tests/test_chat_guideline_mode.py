@@ -161,8 +161,8 @@ class GuidelineModeTest(ChatModeTestBase):
     def test_cited_resources_get_normal_cards(self):
         result, _ = self.respond("guideline")
         titles = [s["title"] for s in result["sources_used"]]
-        self.assertEqual(titles, ["Family guide: Child sent home early", "Keeping a school log"])
-        video = result["sources_used"][1]
+        self.assertEqual(titles, ["Keeping a school log"])
+        video = result["sources_used"][0]
         self.assertEqual(video["url"], "https://example.org/video")
         self.assertEqual(video["source_type"], "video")
 
@@ -186,17 +186,30 @@ class GuidelineModeTest(ChatModeTestBase):
         self.patches["save_journey_state"].assert_not_called()
         self.patches["save_routing_state"].assert_not_called()
 
-    def test_citation_has_no_preview_or_link(self):
+    @staticmethod
+    def _is_guide(source):
+        return (
+            source.get("source_type") == "guideline"
+            or str(source.get("type", "")).lower() == "guideline"
+            or str(source.get("title", "")).startswith("Family guide")
+        )
+
+    def test_guide_citations_are_never_public(self):
         result, _ = self.respond("guideline")
-        self.assertEqual(len(result["sources_used"]), 2)
-        source = result["sources_used"][0]
-        self.assertEqual(source["title"], "Family guide: Child sent home early")
-        self.assertEqual(source["content"], "")
-        self.assertEqual(source["url"], "")
-        self.assertNotIn("metadata", source)
-        # Grounding check runs against the full section.
+        self.assertEqual(len(result["sources_used"]), 1)
+        self.assertFalse(any(self._is_guide(s) for s in result["sources_used"]))
+
+        # Nothing guide-related is saved with the AI message either.
+        ai_inserts = [c for c in self.patches["insert_message"].call_args_list if c.args[2] == "AI"]
+        self.assertEqual(len(ai_inserts), 1)
+        saved_sources = ai_inserts[0].args[4]
+        self.assertEqual([s["title"] for s in saved_sources], ["Keeping a school log"])
+        self.assertFalse(any(self._is_guide(s) for s in saved_sources))
+
+        # Grounding check still runs against the full guide section.
         sources_arg = self.patches["assess_response"].call_args.kwargs["sources"]
         self.assertEqual(sources_arg[0]["content"], SECTIONS[0]["content"])
+        self.assertEqual(sources_arg[0]["source_type"], "guideline")
 
     def test_previous_section_is_passed_to_retrieval(self):
         previous = {"document_id": "d1", "section_key": "J1 > Sent home", "label": "Child sent home early"}

@@ -260,17 +260,6 @@ def _prepare_guideline_conversation(
     return bedrock_messages, static_system_prompt, dynamic_prompt, sources, "SUGGESTION", model_arn, routing_ctx
 
 
-def _public_guideline_source(source: Dict[str, Any]) -> Dict[str, Any]:
-    """Guide citations show the situation name only: no link, no content preview."""
-    public = to_public_source(source)
-    public["title"] = f"Family guide: {source.get('title') or 'Guidance'}"
-    public["content"] = ""
-    public["url"] = ""
-    public["uri"] = ""
-    public.pop("metadata", None)
-    return public
-
-
 def _save_ai_response(
     db_connection,
     chat_session_id: str,
@@ -516,12 +505,14 @@ def get_response(
 
     # Full cited sources feed the grounding verifier; only the trimmed public
     # projection is streamed to the client and persisted with the message.
+    # Guide citations stay internal: they ground the answer but are never
+    # streamed or saved, so families never see guide names. The section in
+    # use is still recorded for admins in chat_sessions.metadata.guide_state.
     used_sources = select_cited_sources(sources, cited_indices)
     public_sources = [
-        _public_guideline_source(source)
-        if source.get("source_type") == GUIDELINE_SOURCE_TYPE
-        else to_public_source(source)
+        to_public_source(source)
         for source in used_sources
+        if source.get("source_type") != GUIDELINE_SOURCE_TYPE
     ]
 
     warning_text = None
