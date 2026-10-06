@@ -20,7 +20,9 @@ export default function AdminLogin() {
   const [requiresNewPassword, setRequiresNewPassword] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as any)?.from?.pathname || "/admin/dashboard";
+  const from =
+    (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ||
+    "/admin/dashboard";
 
   useEffect(() => {
     if (isDemoMode) return;
@@ -107,8 +109,8 @@ export default function AdminLogin() {
       ) {
         setRequiresNewPassword(true);
       }
-    } catch (err: any) {
-      setError(err.message || "Invalid email or password");
+    } catch (err: unknown) {
+      setError((err instanceof Error && err.message) || "Invalid email or password");
     } finally {
       setIsLoading(false);
     }
@@ -141,8 +143,8 @@ export default function AdminLogin() {
         setSignedIn(true);
         navigate(from, { replace: true });
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to set new password");
+    } catch (err: unknown) {
+      setError((err instanceof Error && err.message) || "Failed to set new password");
     } finally {
       setIsLoading(false);
     }

@@ -13,11 +13,65 @@ from helpers.session_security import validate_session_ownership, sanitize_sessio
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+GENERIC_ERROR_MESSAGE = "Sorry, something went wrong while preparing a response. Please try again."
+
+
+def _get_ws_client(event):
+    """Return (apigw_management_client, connection_id) for WebSocket-invoked
+    requests, or (None, None) for REST requests / misconfigured contexts."""
+    request_context = event.get('requestContext') or {}
+    connection_id = request_context.get('connectionId')
+    domain_name = request_context.get('domainName')
+    stage = request_context.get('stage')
+    if not (connection_id and domain_name and stage):
+        return None, None
+    try:
+        client = boto3.client(
+            'apigatewaymanagementapi',
+            endpoint_url=f"https://{domain_name}/{stage}",
+        )
+        return client, connection_id
+    except Exception as e:
+        logger.error(f"Failed to initialize WebSocket client: {e}")
+        return None, None
+
+
+def _post_ws(apigw_management, connection_id, payload):
+    """Best-effort post to the WebSocket connection. Never raises."""
+    if not (apigw_management and connection_id):
+        return False
+    try:
+        apigw_management.post_to_connection(
+            ConnectionId=connection_id,
+            Data=json.dumps(payload),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to post to WebSocket connection: {e}")
+        return False
+
+
 def handler(event, context=None):
     # Log event but exclude body to prevent sensitive data exposure (user_id, chat_session_id)
     safe_event = {k: v for k, v in event.items() if k != 'body'}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event))
-    
+    logger.info("Event: %s (body omitted)", json.dumps(safe_event, default=str))
+
+    # Resolved up front so every failure path can send a terminal "error"
+    # event; otherwise the client waits on its typing indicator forever.
+    apigw_management, connection_id = _get_ws_client(event)
+
+    def fail(status_code, error, message=GENERIC_ERROR_MESSAGE):
+        _post_ws(apigw_management, connection_id, {
+            'type': 'error',
+            'error': error,
+            'message': message,
+        })
+        return {
+            'statusCode': status_code,
+            'headers': {'Content-Type': 'application/json', **get_cors_headers(event)},
+            'body': json.dumps({'error': error}),
+        }
+
     body = {}
     if 'body' in event and event['body']:
         try:
@@ -27,44 +81,40 @@ def handler(event, context=None):
                 body = event['body']
         except Exception as e:
             logger.error(f"Failed to parse body: {e}")
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Invalid JSON body'})
-            }
+            return fail(400, 'Invalid JSON body')
+
+    if not isinstance(body, dict):
+        return fail(400, 'Invalid JSON body')
 
     query = body.get('query')
     is_intro_message = body.get('is_intro_message', False)
-    
-    # Perform Query Length Validation 
-    if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({'error': f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters'})
-        }
-    
+
     chat_session_id = body.get('chat_session_id')
-    
+
     # Fallback to path parameters
     if not chat_session_id and 'pathParameters' in event and event['pathParameters']:
         chat_session_id = event['pathParameters'].get('chat_session_id') or event['pathParameters'].get('id')
 
     user_id = body.get('user_id')
 
-    if not query or not chat_session_id or not user_id:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({'error': 'Missing query, chat_session_id, or user_id'})
-        }
+    # Presence/type check must come before the length check (len(None) raises).
+    if not isinstance(query, str) or not query.strip() or not chat_session_id or not user_id:
+        return fail(400, 'Missing query, chat_session_id, or user_id')
+
+    # Perform Query Length Validation
+    if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
+        return fail(
+            400,
+            f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters',
+            f'Your message is too long. Please keep it under {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters.',
+        )
 
     # Sanitize session ID before querying DB
-    try: 
+    try:
         chat_session_id = sanitize_session_id(chat_session_id)
-    except ValueError as e: 
+    except ValueError as e:
         logger.error(f"Invalid session ID: {e}")
-        return {
-            'statusCode': 400,
-            'body': json.dumps({'error': 'Invalid session ID'})
-        }
+        return fail(400, 'Invalid session ID')
 
     conn = None
     try:
@@ -73,42 +123,20 @@ def handler(event, context=None):
         # Validate the session ownership before doing anything with the session
         # (user_id is required above, so this always runs).
         if not validate_session_ownership(conn, chat_session_id, user_id):
-            return {
-                'statusCode': 403,
-                'body': json.dumps({'error': 'Unauthorized access to chat session'})
-            }
-        
+            return fail(
+                403,
+                'Unauthorized access to chat session',
+                "This chat session couldn't be found. Please start a new chat.",
+            )
+
         # Load dynamic configuration from DB
         config.load_config(conn)
-        
-        request_context = event.get('requestContext', {})
-        connection_id = request_context.get('connectionId')
-        apigw_management = None
-        
-        if connection_id:
-            domain_name = request_context.get('domainName')
-            stage = request_context.get('stage')
-            if domain_name and stage:
-                endpoint_url = f"https://{domain_name}/{stage}"
-                try:
-                    apigw_management = boto3.client('apigatewaymanagementapi', endpoint_url=endpoint_url)
-                    # Send start message
-                    apigw_management.post_to_connection(
-                        ConnectionId=connection_id,
-                        Data=json.dumps({'type': 'start'})
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to initialize WebSocket client: {e}")
+
+        # Send start message
+        _post_ws(apigw_management, connection_id, {'type': 'start'})
 
         def stream_chunk(chunk_text):
-            if apigw_management and connection_id:
-                try:
-                    apigw_management.post_to_connection(
-                        ConnectionId=connection_id,
-                        Data=json.dumps({'type': 'chunk', 'content': chunk_text})
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send stream chunk: {e}")
+            _post_ws(apigw_management, connection_id, {'type': 'chunk', 'content': chunk_text})
 
         response_data = get_response(
             query=query,
@@ -139,52 +167,36 @@ def handler(event, context=None):
             response_body["error"] = "TOKEN_LIMIT_EXCEEDED"
             response_body["message"] = response_body["response"]
             
-        # Send WebSocket complete message
-        if apigw_management and connection_id:
-            try:
-                if status_code == 429:
-                    # Send specific error over WS for token limits
-                    error_msg = {
-                        'type': 'error',
-                        'error': 'TOKEN_LIMIT_EXCEEDED',
-                        'message': response_body['message'],
-                        'token_usage': response_body.get('token_usage', {})
-                    }
-                    apigw_management.post_to_connection(
-                        ConnectionId=connection_id,
-                        Data=json.dumps(error_msg)
-                    )
-                    logger.info(f"Sent WebSocket token limit error to {connection_id}")
-                else:
-                    # Send complete message with sources
-                    complete_msg = {
-                        'type': 'complete',
-                        'response': response_body['response'],
-                        'sources': response_body['sources'],
-                        'warning': response_body.get('warning'),
-                        'chat_session_id': response_body['chat_session_id'],
-                        'token_usage': response_body.get('token_usage', {}),
-                        'phase': response_body.get('phase'),
-                        'session_name': response_body.get('session_name'),
-                    }
-                    apigw_management.post_to_connection(
-                        ConnectionId=connection_id,
-                        Data=json.dumps(complete_msg)
-                    )
-                    logger.info(f"Sent WebSocket response (complete) to {connection_id}")
-            except Exception as e:
-                logger.error(f"Failed to post to WebSocket connection: {e}")
+        # Send WebSocket terminal message
+        if status_code == 429:
+            # Send specific error over WS for token limits
+            if _post_ws(apigw_management, connection_id, {
+                'type': 'error',
+                'error': 'TOKEN_LIMIT_EXCEEDED',
+                'message': response_body['message'],
+                'token_usage': response_body.get('token_usage', {}),
+            }):
+                logger.info(f"Sent WebSocket token limit error to {connection_id}")
+        else:
+            # Send complete message with sources
+            if _post_ws(apigw_management, connection_id, {
+                'type': 'complete',
+                'response': response_body['response'],
+                'sources': response_body['sources'],
+                'warning': response_body.get('warning'),
+                'chat_session_id': response_body['chat_session_id'],
+                'token_usage': response_body.get('token_usage', {}),
+                'phase': response_body.get('phase'),
+                'session_name': response_body.get('session_name'),
+            }):
+                logger.info(f"Sent WebSocket response (complete) to {connection_id}")
 
         return {
             'statusCode': status_code,
-            'headers': { 'Content-Type': 'application/json', **get_cors_headers(event if 'event' in locals() else {}) },
+            'headers': { 'Content-Type': 'application/json', **get_cors_headers(event) },
             'body': json.dumps(response_body)
         }
-        
+
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
-        return {
-            'statusCode': 500,
-            'headers': { 'Content-Type': 'application/json', **get_cors_headers(event if 'event' in locals() else {}) },
-            'body': json.dumps({'error': 'Internal server error'})
-        }
+        return fail(500, 'Internal server error')

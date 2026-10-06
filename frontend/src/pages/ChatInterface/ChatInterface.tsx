@@ -6,10 +6,12 @@ import AIChatMessage from "@/components/ChatInterface/AIChatMessage";
 import UserChatMessage from "@/components/ChatInterface/UserChatMessage";
 import { useView } from "@/providers/view";
 import { AiChatInput } from "@/components/ChatInterface/userInput";
-import { useWebSocket } from "@/hooks/useWebSocket";
-import type { Message } from "@/types/Chat";
+import { useWebSocket, type WebSocketMessage } from "@/hooks/useWebSocket";
+import type { Message, MessageSource } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
+import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
+import { useSessionFeedback } from "@/hooks/useSessionFeedback";
 import {
   applyDemoFact,
   getDemoSessionState,
@@ -25,7 +27,10 @@ type MaxCharactersResponse = {
 
 const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 50000;
 
-const WELCOME_PROMPT = `Hello! Please act as the Specialization Explorer.
+// Legacy (pre-Inclusion Canada) auto-sent opener. No longer sent; kept verbatim
+// only so older chat histories that start with it hide that first message.
+// Do not edit the text or the match will stop working.
+const LEGACY_WELCOME_PROMPT = `Hello! Please act as the Specialization Explorer.
 1. Introduce yourself briefly.
 2. Ask the student these 1 of these starter questions, and use some variation of these in the later responses to complete the checklist:
    - What are your academic interests?
@@ -98,9 +103,11 @@ export default function AIChatPage({
   } = useView();
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
-    null
-  );
+  // Id of the bot placeholder currently receiving streamed output. Kept in a
+  // ref (not state) so WebSocket events always see the value set by
+  // sendMessage, even if a render/effect for a session change happens in
+  // between (e.g. when the first message creates a new session).
+  const streamingMessageIdRef = useRef<string | null>(null);
 
   const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
   const [tokenResetTime, setTokenResetTime] = useState<string | null>(null);
@@ -119,6 +126,7 @@ export default function AIChatPage({
   };
 
   const { userId } = useUser();
+  const sessionFeedback = useSessionFeedback(activeChatSessionId, userId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const demoAskedRef = useRef(0);
   const demoFactsRef = useRef<DemoFacts>({});
@@ -266,7 +274,8 @@ export default function AIChatPage({
 
   // WebSocket message handlers - memoized to prevent unnecessary reconnections
   const handleWebSocketMessage = useCallback(
-    (message: any) => {
+    (message: WebSocketMessage) => {
+      const streamingMessageId = streamingMessageIdRef.current;
 
       switch (message.type) {
         case "start":
@@ -299,7 +308,7 @@ export default function AIChatPage({
 
         case "complete":
           setIsStreaming(false);
-          setStreamingMessageId(null);
+          streamingMessageIdRef.current = null;
           if (streamingMessageId) {
             setMessages((prev) =>
               prev.map((msg) =>
@@ -333,7 +342,7 @@ export default function AIChatPage({
 
         case "error":
           setIsStreaming(false);
-          setStreamingMessageId(null);
+          streamingMessageIdRef.current = null;
           if (message.error === 'TOKEN_LIMIT_EXCEEDED') {
             setIsTokenLimitReached(true);
             if (message.token_usage?.reset_at) {
@@ -356,8 +365,8 @@ export default function AIChatPage({
           break;
       }
     },
-    [streamingMessageId, activeChatSessionId, updateChatSessionName]
-  ); // Only recreate when streamingMessageId changes
+    [activeChatSessionId, updateChatSessionName]
+  );
 
   const {
     sendMessage: sendWebSocketMessage,
@@ -424,12 +433,21 @@ export default function AIChatPage({
   }, []);
 
   useEffect(() => {
-    // A session switch always invalidates any in-flight stream from the
-    // previous session — otherwise the composer can stay disabled forever if
+    // The first message of a new chat creates the session itself. That
+    // session change must not wipe the stream that sendMessage just started,
+    // and there is no history to load yet.
+    if (activeChatSessionId && skipNextHistoryLoadRef.current) {
+      skipNextHistoryLoadRef.current = false;
+      setIsLoadingHistory(false);
+      return;
+    }
+
+    // Any other session switch invalidates an in-flight stream from the
+    // previous session; otherwise the composer can stay disabled forever if
     // the old session's "complete"/"error" event never matches up with the
     // newly displayed messages.
     setIsStreaming(false);
-    setStreamingMessageId(null);
+    streamingMessageIdRef.current = null;
 
     if (!activeChatSessionId) {
       setMessages([]);
@@ -437,13 +455,6 @@ export default function AIChatPage({
       demoAskedRef.current = 0;
       demoFactsRef.current = {};
       setConversationFacts({});
-      return;
-    }
-
-    // Reset when the active session changes
-    if (skipNextHistoryLoadRef.current) {
-      skipNextHistoryLoadRef.current = false;
-      setIsLoadingHistory(false);
       return;
     }
 
@@ -487,7 +498,7 @@ export default function AIChatPage({
           chat_session_id: string;
           sender: "user" | "AI";
           content: string;
-          sources?: any; // jsonb
+          sources?: unknown; // jsonb: array, JSON string, or single value
           warning?: string | null;
           created_at: string; // ISO
         }
@@ -495,23 +506,23 @@ export default function AIChatPage({
         const data: { messages: ChatMessageRow[] } = await response.json();
 
         const rawMessages = data.messages || [];
-        // Optimized check: Skip first message ONLY if it matches the system prompt
-        const startIndex = (rawMessages.length > 0 && rawMessages[0].content === WELCOME_PROMPT) ? 1 : 0;
+        // Hide the legacy auto-sent opener in older sessions.
+        const startIndex = (rawMessages.length > 0 && rawMessages[0].content === LEGACY_WELCOME_PROMPT) ? 1 : 0;
 
         const chatMessages: Message[] = rawMessages.slice(startIndex).map((m) => {
-          let parsedSources: any[] = [];
+          let parsedSources: MessageSource[] = [];
           if (m.sender === "AI" && m.sources) {
             if (Array.isArray(m.sources)) {
-              parsedSources = m.sources;
+              parsedSources = m.sources as MessageSource[];
             } else if (typeof m.sources === "string") {
               try {
-                const parsed = JSON.parse(m.sources);
-                parsedSources = Array.isArray(parsed) ? parsed : [parsed];
+                const parsed: unknown = JSON.parse(m.sources);
+                parsedSources = (Array.isArray(parsed) ? parsed : [parsed]) as MessageSource[];
               } catch {
                 parsedSources = [m.sources];
               }
             } else {
-              parsedSources = [m.sources];
+              parsedSources = [m.sources as MessageSource];
             }
           }
 
@@ -520,7 +531,7 @@ export default function AIChatPage({
             sender: m.sender === "AI" ? ("bot" as const) : ("user" as const),
             text: m.content,
             sources_used: parsedSources,
-            warning: (m as any).warning ?? null,
+            warning: m.warning ?? null,
             phase: parsedSources.length > 0 ? "SUGGESTION" : "DETECTIVE",
             time: new Date(m.created_at).getTime(),
           };
@@ -544,12 +555,12 @@ export default function AIChatPage({
     return () => {
       isActive = false;
     };
-  }, [activeChatSessionId, userId]);
+  }, [activeChatSessionId, userId, setConversationFacts]);
 
   async function sendMessage(textOverride?: string) {
     if (isStreaming) return;
 
-    let text = (textOverride ?? message).trim();
+    const text = (textOverride ?? message).trim();
     if (!text) return;
 
     let sessionId = activeChatSessionId;
@@ -585,7 +596,7 @@ export default function AIChatPage({
       };
 
       setMessages((prev) => [...prev, userMsg, botMsg]);
-      setStreamingMessageId(botMsg.id);
+      streamingMessageIdRef.current = botMsg.id;
       setIsStreaming(true);
       setMessage("");
 
@@ -623,7 +634,7 @@ export default function AIChatPage({
           return next;
         });
         setIsStreaming(false);
-        setStreamingMessageId(null);
+        streamingMessageIdRef.current = null;
       }, 750);
       return;
     }
@@ -649,14 +660,14 @@ export default function AIChatPage({
 
     // Add user and bot messages
     setMessages((m) => [...m, userMsg, botMsg]);
-    setStreamingMessageId(botMsg.id);
+    streamingMessageIdRef.current = botMsg.id;
     setIsStreaming(true);
 
     // Clear the input box text immediately 
     setMessage("");
 
     // Try WebSocket streaming first, fallback to HTTP if not connected
-    if (isConnected && webSocketUrl) {
+    if (isConnected) {
       
       const success = sendWebSocketMessage({
         action: "generate_text",
@@ -772,7 +783,7 @@ export default function AIChatPage({
       );
     } finally {
       setIsStreaming(false);
-      setStreamingMessageId(null);
+      streamingMessageIdRef.current = null;
     }
   }
 
@@ -797,6 +808,16 @@ export default function AIChatPage({
         warning={message.warning}
         isTyping={message.isTyping}
         phase={message.phase}
+        footer={
+          showFeedback && message.id === lastBotMessage?.id ? (
+            <ConversationFeedback
+              feedback={sessionFeedback.feedback}
+              isSaving={sessionFeedback.isSaving}
+              error={sessionFeedback.error}
+              onSave={sessionFeedback.saveFeedback}
+            />
+          ) : null
+        }
       />
     );
     }
@@ -804,12 +825,19 @@ export default function AIChatPage({
 
   const isWelcome = !activeChatSessionId;
   const lastBotMessage = [...messages].reverse().find((m) => m.sender === "bot");
+  // Feedback is per conversation and sits under the latest finished reply.
+  const showFeedback =
+    Boolean(activeChatSessionId) &&
+    !isStreaming &&
+    !sessionFeedback.isLoading &&
+    Boolean(lastBotMessage && !lastBotMessage.isTyping && lastBotMessage.text.trim());
   const demoChips =
     isDemoMode && !isStreaming && lastBotMessage?.chips?.length
       ? lastBotMessage.chips
       : [];
   const showDemoGuidance =
     isDemoMode && !isStreaming && Boolean(lastBotMessage?.showGuidance);
+
 
   const handleKeepGoing = () => {
     setMessages((prev) => {

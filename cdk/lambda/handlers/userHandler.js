@@ -6,6 +6,7 @@ const {
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
 const { validateUUID } = require("./utils/validation.js");
+const { toPublicMessage } = require("./utils/publicSources.js");
 
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
@@ -68,11 +69,6 @@ exports.handler = async (event) => {
     const pathData = event.httpMethod + " " + event.resource;
 
     switch (pathData) {
-      case "GET /user/exampleEndpoint":
-        data = "Example endpoint invoked";
-        response.body = JSON.stringify(data);
-        break;
-
       case "POST /user": {
         const body = parseBody(event.body);
 
@@ -301,7 +297,7 @@ exports.handler = async (event) => {
         `;
 
         const total = rows.length > 0 ? parseInt(rows[0].total_count) : 0;
-        const messages = rows.map(({ total_count, ...msg }) => msg);
+        const messages = rows.map(({ total_count, ...msg }) => toPublicMessage(msg));
 
         data = {
           chat_session_id: chatSessionId,

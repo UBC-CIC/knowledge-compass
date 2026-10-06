@@ -69,7 +69,10 @@ export default function ChatSessionActionsMenu({
 
     const sanitizeFileName = (name: string) =>
       name
-        .replace(/[<>:\"\/\\|?*\x00-\x1F]/g, "")
+        // Strip characters that are invalid in Windows/macOS file names,
+        // including ASCII control characters.
+        // eslint-disable-next-line no-control-regex
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 120);
@@ -109,7 +112,7 @@ export default function ChatSessionActionsMenu({
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete \"${displayName}\"?`)) {
+    if (!window.confirm(`Delete "${displayName}"?`)) {
       return;
     }
 

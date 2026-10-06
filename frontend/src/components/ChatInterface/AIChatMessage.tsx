@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +6,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import TypingIndicator from "./TypingIndicator";
 import { displayGuideText, isSuggestionPhase } from "@/lib/guideMessage";
+import type { MessageSource, SourceItem } from "@/types/Chat";
 
 const isSafeUrl = (url: string) => {
   try {
@@ -14,21 +15,6 @@ const isSafeUrl = (url: string) => {
   } catch {
     return false;
   }
-};
-
-type SourceItem = {
-  uri?: string;
-  url?: string;
-  title?: string;
-  content?: string;
-  type?: string;
-  source_type?: string;
-  score?: number;
-  metadata?: {
-    chunk_start?: string;
-    chunk_end?: string;
-    [key: string]: unknown;
-  };
 };
 
 const PREVIEW_MAX_CHARS = 320;
@@ -72,10 +58,12 @@ function withStartTime(url: string, start: string) {
 type AIChatMessageProps = {
   text: string;
   question?: string;
-  sources?: SourceItem[] | string[];
+  sources?: MessageSource[];
   warning?: string | null;
   isTyping?: boolean;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
+  /** Rendered inside the message, below its content (e.g. feedback controls). */
+  footer?: ReactNode;
 };
 
 const markdownComponents = {
@@ -112,8 +100,8 @@ const markdownComponents = {
         {children}
       </a>
     ) : (
-      // Non-web links (e.g. s3:// document URIs) aren't clickable; the
-      // document is listed under "More resources" instead.
+      // Non-web links (e.g. internal upload:// identities in older replies)
+      // aren't clickable; the source is listed under "More resources" instead.
       <span className="font-semibold">{children}</span>
     ),
   blockquote: ({ ...props }) => (
@@ -158,22 +146,13 @@ function isHttpSource(source: SourceItem | string) {
   return isSafeUrl(url);
 }
 
-// Uploaded documents without a public URL (s3:// URIs) still get a card.
+// Uploaded documents and CSV row resources still get cards without public
+// URLs. Guideline-mode guide sections are never shown: the server already
+// drops them, and this is a fallback in case one ever arrives.
 function isResourceSource(source: SourceItem | string) {
-  return isHttpSource(source) || sourceLabel(source).type === "document";
-}
-
-function withResourceLinks(text: string, sources: (SourceItem | string)[]) {
-  const links = sources.map(sourceLabel).filter((item) => isSafeUrl(item.url));
-  if (links.length === 0) return text;
-
-  const missing = links.filter((item) => !text.includes(item.url));
-  if (missing.length === 0) return text;
-
-  const block = missing
-    .map((item) => `- [${item.title}](${item.url})`)
-    .join("\n");
-  return `${text}\n\n**More resources**\n${block}`;
+  const type = sourceLabel(source).type;
+  if (type === "guideline") return false;
+  return isHttpSource(source) || type === "document" || type === "csv_row";
 }
 
 export default function AIChatMessage({
@@ -183,14 +162,13 @@ export default function AIChatMessage({
   warning = null,
   isTyping = false,
   phase = null,
+  footer = null,
 }: AIChatMessageProps) {
+  const showFooter = Boolean(footer) && !isTyping;
   const body = displayGuideText(text);
   const suggestion = isSuggestionPhase(phase, sources, body);
+  // Cited sources are listed once, as cards under "More resources" below.
   const resourceSources = sources.filter(isResourceSource);
-  const displayBody =
-    !isTyping && resourceSources.length > 0
-      ? withResourceLinks(body, resourceSources.filter(isHttpSource))
-      : body;
 
   const sourcesBlock =
     !isTyping && resourceSources.length > 0 ? (
@@ -284,7 +262,7 @@ export default function AIChatMessage({
         <TypingIndicator />
       ) : (
         <>
-          <GuideMarkdown text={displayBody} />
+          <GuideMarkdown text={body} />
           {!isTyping && question ? (
             <p className="mt-3 font-semibold leading-relaxed">{question}</p>
           ) : null}
@@ -304,6 +282,11 @@ export default function AIChatMessage({
         <div className="px-[22px] py-[22px] text-[16.5px] leading-[1.65] text-pretty">
           {content}
         </div>
+        {showFooter ? (
+          <div className="border-t border-foreground/10 px-[22px] py-1.5">
+            {footer}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -312,6 +295,11 @@ export default function AIChatMessage({
     <div className="flex justify-start">
       <div className="max-w-[94%] rounded-[12px] rounded-bl-[3px] bg-muted px-[17px] py-3.5 text-base leading-[1.68] text-foreground text-pretty">
         {content}
+        {showFooter ? (
+          <div className="-mb-1.5 mt-3 border-t border-foreground/10 pt-1.5">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );

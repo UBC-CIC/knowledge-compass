@@ -55,7 +55,13 @@ type AnalyticsTotals = {
   questions?: number;
 };
 
-type DataSourceType = "csv" | "markdown" | "json" | "website" | "video" | "document";
+type DataSourceType =
+  | "csv"
+  | "markdown"
+  | "json"
+  | "website"
+  | "video"
+  | "document";
 
 type DataSourceRow = {
   id: string;
@@ -131,19 +137,47 @@ function typeLabel(t: DataSourceType) {
 function statusBadge(status: IngestionRunStatus | "no_runs") {
   switch (status) {
     case "pending":
-      return <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">Pending</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">
+          Pending
+        </Badge>
+      );
     case "queued":
-      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.05_85)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.10_75)]">Queued</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-[oklch(0.95_0.05_85)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.10_75)]">
+          Queued
+        </Badge>
+      );
     case "completed":
-      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.04_160)] px-2.5 py-1 text-xs font-bold text-[oklch(0.32_0.09_160)]">Completed</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-[oklch(0.95_0.04_160)] px-2.5 py-1 text-xs font-bold text-[oklch(0.32_0.09_160)]">
+          Completed
+        </Badge>
+      );
     case "failed":
-      return <Badge className="rounded-full border-0 bg-[oklch(0.96_0.03_25)] px-2.5 py-1 text-xs font-bold text-[oklch(0.38_0.13_25)]">Failed</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-[oklch(0.96_0.03_25)] px-2.5 py-1 text-xs font-bold text-[oklch(0.38_0.13_25)]">
+          Failed
+        </Badge>
+      );
     case "running":
-      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">Running</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">
+          Running
+        </Badge>
+      );
     case "transcribing":
-      return <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">Transcribing</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-[oklch(0.95_0.03_268)] px-2.5 py-1 text-xs font-bold text-[oklch(0.36_0.11_268)]">
+          Transcribing
+        </Badge>
+      );
     default:
-      return <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">Not synced</Badge>;
+      return (
+        <Badge className="rounded-full border-0 bg-foreground/8 px-2.5 py-1 text-xs font-bold text-foreground/80">
+          Not synced
+        </Badge>
+      );
   }
 }
 
@@ -161,11 +195,85 @@ function formatSizeMb(file: File | null) {
 
 function isMarkdownFile(file: File) {
   const lower = file.name.toLowerCase();
-  return lower.endsWith(".md") || lower.endsWith(".markdown") || file.type === "text/markdown";
+  return (
+    lower.endsWith(".md") ||
+    lower.endsWith(".markdown") ||
+    file.type === "text/markdown"
+  );
 }
 
 function isCsvFile(file: File) {
   return file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+}
+
+// Minimal RFC 4180 parser for the first rows of a CSV (quoted fields, "" escapes).
+function parseCsvSample(text: string, maxRows: number): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length && rows.length < maxRows; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  if (rows.length < maxRows && (field || row.length))
+    rows.push([...row, field]);
+  return rows;
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const url = new URL(value.trim());
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") && !!url.hostname
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Header of a CSV plus the column (if any) where >80% of sampled values are
+// http(s) URLs — the same rule the backend uses for suggested_url_column.
+async function inspectCsvColumns(
+  file: File,
+): Promise<{ columns: string[]; suggested: string | null }> {
+  const text = (await file.slice(0, 256 * 1024).text()).replace(/^\uFEFF/, "");
+  const [header = [], ...rows] = parseCsvSample(text, 201);
+  const columns = header.map((c) => c.trim()).filter(Boolean);
+  let suggested: string | null = null;
+  let best = 0.8;
+  header.forEach((name, idx) => {
+    const values = rows.map((r) => (r[idx] ?? "").trim()).filter(Boolean);
+    if (!name.trim() || values.length === 0) return;
+    const ratio = values.filter(isHttpUrl).length / values.length;
+    if (ratio > best) {
+      best = ratio;
+      suggested = name.trim();
+    }
+  });
+  return { columns, suggested };
 }
 
 function isVideoFile(file: File) {
@@ -218,7 +326,9 @@ function videoContentType(file: File): string {
 
 function isDocumentFile(file: File) {
   const lower = file.name.toLowerCase();
-  return lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".txt");
+  return (
+    lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".txt")
+  );
 }
 
 function validateDocumentFile(file: File): string | null {
@@ -233,13 +343,16 @@ function validateDocumentFile(file: File): string | null {
 
 const DOCUMENT_CONTENT_TYPE_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ".txt": "text/plain",
 };
 
 function documentContentType(file: File): string {
   const lower = file.name.toLowerCase();
-  for (const [ext, contentType] of Object.entries(DOCUMENT_CONTENT_TYPE_BY_EXT)) {
+  for (const [ext, contentType] of Object.entries(
+    DOCUMENT_CONTENT_TYPE_BY_EXT,
+  )) {
     if (lower.endsWith(ext)) return contentType;
   }
   return "application/pdf";
@@ -251,15 +364,61 @@ function sanitizeUploadFileName(fileName: string): string {
   const ext = lastDot >= 0 ? base.slice(lastDot).toLowerCase() : "";
   const stem = lastDot >= 0 ? base.slice(0, lastDot) : base;
   const cleanedStem =
-    stem.replace(/[^\w.\-]+/g, "_").replace(/_+/g, "_").replace(/^[_.]+|[_.]+$/g, "") ||
-    "upload";
-  const cleanedExt = ext.replace(/[^\w.]/g, "");
+    // \p{L}\p{N}_ = Python's Unicode \w, so non-ASCII names match the backend.
+    stem
+      .replace(/[^\p{L}\p{N}_.-]+/gu, "_")
+      .replace(/_+/g, "_")
+      .replace(/^[_.]+|[_.]+$/g, "") || "upload";
+  const cleanedExt = ext.replace(/[^\p{L}\p{N}_.]/gu, "");
   return `${cleanedStem}${cleanedExt}`.slice(0, 180);
+}
+
+type UploadSourceType = "csv" | "markdown" | "document" | "video";
+
+// Mirrors the backend's upload_identity.find_existing_upload: a file uploaded
+// again under the same name replaces that source instead of adding a new one.
+function findReplacedSource(
+  dataSources: DataSourceRow[],
+  type: UploadSourceType,
+  fileName: string,
+): DataSourceRow | undefined {
+  const sourceKey = `upload://${type}/${sanitizeUploadFileName(fileName).toLowerCase()}`;
+  const lowerName = fileName.toLowerCase();
+  const legacyFileName = (ds: DataSourceRow) => {
+    const value =
+      type === "document"
+        ? ds.metadata?.document_file_name
+        : type === "video"
+          ? ds.metadata?.video_file_name
+          : ds.name;
+    return typeof value === "string" ? value.toLowerCase() : "";
+  };
+  return dataSources.find(
+    (ds) =>
+      ds.type === type &&
+      (ds.metadata?.source_key === sourceKey ||
+        (!ds.metadata?.source_key && legacyFileName(ds) === lowerName)),
+  );
+}
+
+function ReplaceNotice({ existing }: { existing?: DataSourceRow }) {
+  if (!existing) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700" />
+      <div>
+        This will replace the existing source{" "}
+        <span className="font-medium">{existing.name}</span>. Only changed
+        content is re-processed, and an identical file is skipped entirely.
+        Rename the file if it is a different resource.
+      </div>
+    </div>
+  );
 }
 
 function displayedStatus(
   ds: DataSourceRow,
-  run?: IngestionRunRow | null
+  run?: IngestionRunRow | null,
 ): IngestionRunStatus | "no_runs" {
   if (
     run?.status === "pending" &&
@@ -291,7 +450,8 @@ function validateMetadataFile(file: File): string | null {
     file.type === "text/json";
 
   if (!isJson) return "Only JSON metadata files are allowed.";
-  if (file.size > 50 * 1024 * 1024) return "Metadata JSON file size must be less than 50MB.";
+  if (file.size > 50 * 1024 * 1024)
+    return "Metadata JSON file size must be less than 50MB.";
   return null;
 }
 
@@ -313,7 +473,336 @@ function exampleMetadataContents(primaryFileName: string) {
       schema_version: "1.0",
     },
     null,
-    2
+    2,
+  );
+}
+
+type CsvLinkStatus = "pending" | "success" | "failed" | "skipped";
+
+type CsvLinkRow = {
+  row_key: string;
+  row_number: number;
+  url: string;
+  normalized_url: string | null;
+  raw_citation_url: string | null;
+  citation_url: string | null;
+  citation_warning: string | null;
+  title: string | null;
+  description: string | null;
+  status: CsvLinkStatus;
+  reason: string | null;
+  http_status: number | null;
+  content_type: string | null;
+  fetched_at: string | null;
+  row_indexed: boolean;
+  fetched_content_indexed: boolean;
+  indexing_reason: string | null;
+  indexed_at: string | null;
+  row_metadata: Record<string, unknown>;
+};
+
+type CsvLinksResponse = {
+  data_source_id: string;
+  url_column: string | null;
+  row_id_column: string | null;
+  title_column: string | null;
+  description_column: string | null;
+  citation_column: string | null;
+  summary: Record<CsvLinkStatus, number>;
+  total: number;
+  limit: number;
+  offset: number;
+  links: CsvLinkRow[];
+};
+
+const LINK_STATUS_STYLES: Record<CsvLinkStatus, string> = {
+  success: "bg-green-50 text-green-700 border-green-200",
+  pending: "bg-amber-50 text-amber-700 border-amber-200",
+  failed: "bg-red-50 text-red-700 border-red-200",
+  skipped: "bg-gray-100 text-gray-600 border-gray-200",
+};
+
+function linkStatusBadge(status: CsvLinkStatus) {
+  return (
+    <span
+      className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${LINK_STATUS_STYLES[status]}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+// Per-row crawl status of a CSV's url_column links (GET /admin/data_sources/{id}/links).
+// Rendered inside the CSV data source's expanded row when it was staged with a url_column.
+function CsvLinkStatusPanel({
+  dataSourceId,
+  urlColumn,
+  rowIdColumn,
+}: {
+  dataSourceId: string;
+  urlColumn: string;
+  rowIdColumn?: string | null;
+}) {
+  const LINK_PAGE_SIZE = 50;
+  const [data, setData] = useState<CsvLinksResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"" | CsvLinkStatus>("");
+  const [offset, setOffset] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [statusFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        if (isDemoMode) {
+          if (!cancelled) setData(null);
+          return;
+        }
+        const token = await AuthService.getAdminIdToken();
+        const params = new URLSearchParams({
+          limit: String(LINK_PAGE_SIZE),
+          offset: String(offset),
+        });
+        if (statusFilter) params.set("status", statusFilter);
+
+        const res = await fetch(
+          `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}/links?${params.toString()}`,
+          {
+            headers: { Authorization: token, "Content-Type": "application/json" },
+          }
+        );
+        if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
+        const json = (await res.json()) as CsvLinksResponse;
+        if (!cancelled) setData(json);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load link status");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataSourceId, statusFilter, offset, reloadKey]);
+
+  const summary = data?.summary ?? { pending: 0, success: 0, failed: 0, skipped: 0 };
+  const total = data?.total ?? 0;
+  const filteredTotal = statusFilter ? summary[statusFilter] : total;
+  const rangeStart = filteredTotal === 0 ? 0 : offset + 1;
+  const rangeEnd = Math.min(offset + LINK_PAGE_SIZE, filteredTotal);
+
+  if (isDemoMode) {
+    return (
+      <div className="text-xs text-gray-500">
+        Link crawl status is not available in demo mode.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-gray-800">
+          CSV row resources
+          <span className="ml-2 font-normal text-gray-500">
+            from column <span className="font-mono">{urlColumn}</span>
+            {rowIdColumn ? (
+              <>
+                {" "}
+                · id <span className="font-mono">{rowIdColumn}</span>
+              </>
+            ) : null}
+            {data?.title_column ? (
+              <> · title <span className="font-mono">{data.title_column}</span></>
+            ) : null}
+            {data?.description_column ? (
+              <> · description <span className="font-mono">{data.description_column}</span></>
+            ) : null}
+            {data?.citation_column ? (
+              <> · citation <span className="font-mono">{data.citation_column}</span></>
+            ) : null}
+          </span>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 rounded-full px-2.5 text-[11px]"
+          onClick={() => setReloadKey((k) => k + 1)}
+          disabled={loading}
+          title="Refresh link status"
+        >
+          {loading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3 w-3" />
+          )}
+          <span className="ml-1">Refresh</span>
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {(["success", "pending", "failed", "skipped"] as CsvLinkStatus[]).map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setStatusFilter((prev) => (prev === s ? "" : s))}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+              statusFilter === s ? LINK_STATUS_STYLES[s] : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            }`}
+            title={statusFilter === s ? "Clear filter" : `Show only ${s}`}
+          >
+            {s}
+            <span className="tabular-nums">{summary[s] ?? 0}</span>
+          </button>
+        ))}
+        <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-500">
+          total <span className="ml-1 tabular-nums">{total}</span>
+        </span>
+      </div>
+
+      {error ? (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
+          {error}
+        </div>
+      ) : loading && !data ? (
+        <div className="flex items-center gap-2 text-xs text-gray-500 py-4">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading link status…
+        </div>
+      ) : filteredTotal === 0 ? (
+        <div className="text-xs text-gray-500">
+          {statusFilter ? `No ${statusFilter} rows.` : "No row resources have been recorded for this CSV yet."}
+        </div>
+      ) : (
+        <>
+          <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-xs text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">Row / resource</th>
+                  <th className="px-3 py-2 font-semibold">Fetched URL</th>
+                  <th className="px-3 py-2 font-semibold">Resolved citation</th>
+                  <th className="px-3 py-2 font-semibold">State</th>
+                  <th className="px-3 py-2 font-semibold">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.links ?? []).map((link) => {
+                  const fetchHref = link.normalized_url && isHttpUrl(link.normalized_url)
+                    ? link.normalized_url
+                    : null;
+                  const citationHref = link.citation_url && isHttpUrl(link.citation_url)
+                    ? link.citation_url
+                    : null;
+                  return (
+                    <tr key={link.row_key} className="border-t border-gray-100 align-top">
+                      <td className="px-3 py-2 min-w-40">
+                        <div className="font-medium text-gray-800">
+                          {link.title || `Row ${link.row_number}`}
+                        </div>
+                        <div className="text-[11px] text-gray-400 tabular-nums">Row {link.row_number}</div>
+                      </td>
+                      <td className="px-3 py-2 min-w-48 max-w-80">
+                        {fetchHref ? (
+                          <a
+                            href={fetchHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary break-all underline underline-offset-2"
+                          >
+                            {link.url || fetchHref}
+                          </a>
+                        ) : (
+                          <span className="break-all text-gray-500">{link.url || "No fetch URL"}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 min-w-48 max-w-80">
+                        {citationHref ? (
+                          <a
+                            href={citationHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary break-all underline underline-offset-2"
+                          >
+                            {citationHref}
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">Non-clickable resource</span>
+                        )}
+                        {link.citation_warning ? (
+                          <div className="mt-1 text-[11px] text-amber-700">{link.citation_warning}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 min-w-32 space-y-1">
+                        <div>{linkStatusBadge(link.status)}</div>
+                        <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                          link.row_indexed
+                            ? "border-green-200 bg-green-50 text-green-700"
+                            : "border-gray-200 bg-gray-100 text-gray-600"
+                        }`}>
+                          {link.row_indexed ? "Resource indexed" : "Not indexed"}
+                        </span>
+                        {link.fetched_content_indexed ? (
+                          <div className="text-[11px] text-gray-500">Fetched text attached</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 min-w-48 text-xs text-gray-600 break-words">
+                        {link.reason ? <div>{link.reason}</div> : null}
+                        {link.indexing_reason ? <div>{link.indexing_reason}</div> : null}
+                        <div className="text-gray-400">
+                          {link.http_status ? `HTTP ${link.http_status}` : null}
+                          {link.http_status && link.fetched_at ? " · " : ""}
+                          {link.fetched_at ? formatDateTime(link.fetched_at) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-gray-600">
+            <span>
+              Showing {rangeStart}–{rangeEnd} of {filteredTotal}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => setOffset((o) => Math.max(0, o - LINK_PAGE_SIZE))}
+                disabled={offset === 0 || loading}
+              >
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => setOffset((o) => o + LINK_PAGE_SIZE)}
+                disabled={offset + LINK_PAGE_SIZE >= filteredTotal || loading}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -335,6 +824,15 @@ export default function DataSourceManagement() {
   const [error, setError] = useState<string | null>(null);
 
   const [primaryFile, setPrimaryFile] = useState<File | null>(null);
+  const [csvColumns, setCsvColumns] = useState<string[]>([]);
+  const [suggestedUrlColumn, setSuggestedUrlColumn] = useState<string | null>(
+    null,
+  );
+  const [urlColumn, setUrlColumn] = useState("");
+  const [rowIdColumn, setRowIdColumn] = useState("");
+  const [titleColumn, setTitleColumn] = useState("");
+  const [descriptionColumn, setDescriptionColumn] = useState("");
+  const [citationColumn, setCitationColumn] = useState("");
   const [metadataFile, setMetadataFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{
@@ -343,7 +841,9 @@ export default function DataSourceManagement() {
   }>({ type: null, message: "" });
 
   // Upload tab: "single" | "zip"
-  const [uploadTab, setUploadTab] = useState<"single" | "zip" | "video" | "document">("single");
+  const [uploadTab, setUploadTab] = useState<
+    "single" | "zip" | "video" | "document"
+  >("single");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [videoTitle, setVideoTitle] = useState("");
@@ -429,12 +929,15 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       // no timeRange so backend returns ALL-TIME totals
-      const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/analytics`, {
-        headers: {
-          Authorization: token,
-          "Content-Type": "application/json",
+      const res = await fetch(
+        `${import.meta.env.VITE_API_ENDPOINT}/admin/analytics`,
+        {
+          headers: {
+            Authorization: token,
+            "Content-Type": "application/json",
+          },
         },
-      });
+      );
 
       if (!res.ok) throw new Error("Failed to fetch analytics");
 
@@ -474,7 +977,7 @@ export default function DataSourceManagement() {
             Authorization: token,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       if (!res.ok) throw new Error("Failed to fetch data sources");
@@ -500,7 +1003,6 @@ export default function DataSourceManagement() {
     fetchAdminCredentials();
     fetchAnalyticsTotals();
     fetchAdminDataSources();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -537,7 +1039,7 @@ export default function DataSourceManagement() {
           body: JSON.stringify({
             created_by: adminEmail,
           }),
-        }
+        },
       );
 
       const responseJson = await res.json().catch(() => ({}));
@@ -546,15 +1048,13 @@ export default function DataSourceManagement() {
         throw new Error(
           responseJson?.error ||
             responseJson?.message ||
-            "Failed to start sync."
+            "Failed to start sync.",
         );
       }
 
       setSyncStatus({
         type: "success",
-        message:
-          responseJson?.message ||
-          "Sync started successfully.",
+        message: responseJson?.message || "Sync started successfully.",
       });
 
       await fetchAdminDataSources();
@@ -593,20 +1093,24 @@ export default function DataSourceManagement() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ created_by: adminEmail }),
-        }
+        },
       );
 
       const responseJson = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         throw new Error(
-          responseJson?.error || responseJson?.message || "Failed to retry resource"
+          responseJson?.error ||
+            responseJson?.message ||
+            "Failed to retry resource",
         );
       }
 
       setRetryStatus({
         type: "success",
-        message: responseJson?.message || "Resource re-queued. Click Sync now to run it.",
+        message:
+          responseJson?.message ||
+          "Resource re-queued. Click Sync now to run it.",
       });
 
       await fetchAdminDataSources();
@@ -624,7 +1128,7 @@ export default function DataSourceManagement() {
   const handleDelete = async (dataSourceId: string, name: string) => {
     if (
       !confirm(
-        `Delete "${name}"? This permanently removes it (and any paired metadata file) from the knowledge base. This cannot be undone.`
+        `Delete "${name}"? This permanently removes it (and any paired metadata file) from the knowledge base. This cannot be undone.`,
       )
     ) {
       return;
@@ -652,14 +1156,16 @@ export default function DataSourceManagement() {
             Authorization: token,
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       const responseJson = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         throw new Error(
-          responseJson?.error || responseJson?.message || "Failed to delete resource"
+          responseJson?.error ||
+            responseJson?.message ||
+            "Failed to delete resource",
         );
       }
 
@@ -688,7 +1194,8 @@ export default function DataSourceManagement() {
       if (!webUrl || !/^https?:\/\//.test(webUrl.trim())) {
         setWebUrlStatus({
           type: "error",
-          message: "Please enter a valid URL (must start with http:// or https://).",
+          message:
+            "Please enter a valid URL (must start with http:// or https://).",
         });
         return;
       }
@@ -721,13 +1228,15 @@ export default function DataSourceManagement() {
             exclude_patterns,
             created_by: adminEmail,
           }),
-        }
+        },
       );
 
       const responseJson = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(responseJson?.error || responseJson?.message || "Failed to stage URL");
+        throw new Error(
+          responseJson?.error || responseJson?.message || "Failed to stage URL",
+        );
       }
 
       setWebUrlStatus({
@@ -764,6 +1273,21 @@ export default function DataSourceManagement() {
     }
     setPrimaryFile(selectedFile);
     setCopiedMetadata(false);
+    setCsvColumns([]);
+    setSuggestedUrlColumn(null);
+    setUrlColumn("");
+    setRowIdColumn("");
+    setTitleColumn("");
+    setDescriptionColumn("");
+    setCitationColumn("");
+    if (isCsvFile(selectedFile)) {
+      inspectCsvColumns(selectedFile)
+        .then(({ columns, suggested }) => {
+          setCsvColumns(columns);
+          setSuggestedUrlColumn(suggested);
+        })
+        .catch((e) => console.warn("Could not read CSV header", e));
+    }
   };
 
   const handleMetadataFileSelect = (selectedFile: File) => {
@@ -779,7 +1303,9 @@ export default function DataSourceManagement() {
   const handleCopyExampleMetadata = async () => {
     if (!primaryFile) return;
     try {
-      await navigator.clipboard.writeText(exampleMetadataContents(primaryFile.name));
+      await navigator.clipboard.writeText(
+        exampleMetadataContents(primaryFile.name),
+      );
       setCopiedMetadata(true);
       window.setTimeout(() => setCopiedMetadata(false), 2000);
     } catch {
@@ -806,25 +1332,25 @@ export default function DataSourceManagement() {
   const getPresignedUpload = async (
     token: string,
     file: File,
-    uploadType: "csv" | "markdown" | "json" | "video" | "document"
+    uploadType: "csv" | "markdown" | "json" | "video" | "document",
   ): Promise<PresignedUploadResponse> => {
     const fallbackContentType =
       uploadType === "csv"
         ? "text/csv"
         : uploadType === "markdown"
-        ? "text/markdown"
-        : uploadType === "video"
-        ? "video/mp4"
-        : uploadType === "document"
-        ? "application/pdf"
-        : "application/json";
+          ? "text/markdown"
+          : uploadType === "video"
+            ? "video/mp4"
+            : uploadType === "document"
+              ? "application/pdf"
+              : "application/json";
 
     const contentType =
       uploadType === "video"
         ? videoContentType(file)
         : uploadType === "document"
-        ? documentContentType(file)
-        : file.type || fallbackContentType;
+          ? documentContentType(file)
+          : file.type || fallbackContentType;
     const fileName =
       uploadType === "video" || uploadType === "document"
         ? sanitizeUploadFileName(file.name)
@@ -832,13 +1358,13 @@ export default function DataSourceManagement() {
 
     const res = await fetch(
       `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
-        fileName
+        fileName,
       )}&content_type=${encodeURIComponent(contentType)}`,
       {
         headers: {
           Authorization: token,
         },
-      }
+      },
     );
 
     if (!res.ok) {
@@ -846,7 +1372,7 @@ export default function DataSourceManagement() {
       throw new Error(
         (typeof err?.error === "string" && err.error) ||
           (typeof err?.message === "string" && err.message) ||
-          `Failed to generate upload URL for ${file.name} (HTTP ${res.status})`
+          `Failed to generate upload URL for ${file.name} (HTTP ${res.status})`,
       );
     }
 
@@ -856,7 +1382,7 @@ export default function DataSourceManagement() {
   const uploadFileToS3 = async (
     presignedUrl: string,
     file: File,
-    fallbackContentType: string
+    fallbackContentType: string,
   ) => {
     const uploadResponse = await fetch(presignedUrl, {
       method: "PUT",
@@ -874,6 +1400,13 @@ export default function DataSourceManagement() {
   const resetUploadDialog = () => {
     setIsUploadOpen(false);
     setPrimaryFile(null);
+    setCsvColumns([]);
+    setSuggestedUrlColumn(null);
+    setUrlColumn("");
+    setRowIdColumn("");
+    setTitleColumn("");
+    setDescriptionColumn("");
+    setCitationColumn("");
     setMetadataFile(null);
     setUploadStatus({ type: null, message: "" });
     setUploadTab("single");
@@ -897,7 +1430,10 @@ export default function DataSourceManagement() {
       return;
     }
     if (file.size > 200 * 1024 * 1024) {
-      setZipStatus({ type: "error", message: "Zip file must be less than 200MB." });
+      setZipStatus({
+        type: "error",
+        message: "Zip file must be less than 200MB.",
+      });
       return;
     }
 
@@ -924,13 +1460,18 @@ export default function DataSourceManagement() {
 
       const pairs: ZipFilePair[] = [];
       const seen = new Set<string>();
+      // Source identity (same rule as the backend's upload_source_key):
+      // "Data.csv" and "data.csv" are one source, so only one may be staged.
+      const claimedSourceKeys = new Map<string, string>();
 
       for (const [baseName, entry] of fileMap) {
         // Skip metadata files — they'll be matched from the primary side
         if (baseName.endsWith(".metadata.json")) continue;
 
         const isCsv = baseName.toLowerCase().endsWith(".csv");
-        const isMd = baseName.toLowerCase().endsWith(".md") || baseName.toLowerCase().endsWith(".markdown");
+        const isMd =
+          baseName.toLowerCase().endsWith(".md") ||
+          baseName.toLowerCase().endsWith(".markdown");
         if (!isCsv && !isMd) continue;
         if (seen.has(baseName)) continue;
         seen.add(baseName);
@@ -939,11 +1480,9 @@ export default function DataSourceManagement() {
         const metaEntry = fileMap.get(expectedMeta);
 
         const primaryBlob = await entry.async("blob");
-        const primaryFileObj = new File(
-          [primaryBlob],
-          baseName,
-          { type: isCsv ? "text/csv" : "text/markdown" }
-        );
+        const primaryFileObj = new File([primaryBlob], baseName, {
+          type: isCsv ? "text/csv" : "text/markdown",
+        });
 
         if (!metaEntry) {
           pairs.push({
@@ -956,17 +1495,30 @@ export default function DataSourceManagement() {
         }
 
         const metaBlob = await metaEntry.async("blob");
-        const metaFileObj = new File([metaBlob], expectedMeta, { type: "application/json" });
+        const metaFileObj = new File([metaBlob], expectedMeta, {
+          type: "application/json",
+        });
+
+        const type = isCsv ? "csv" : "markdown";
+        const sourceKey = `${type}/${sanitizeUploadFileName(baseName).toLowerCase()}`;
+        const claimedBy = claimedSourceKeys.get(sourceKey);
+        if (!claimedBy) claimedSourceKeys.set(sourceKey, baseName);
 
         pairs.push({
           primaryFile: primaryFileObj,
           metadataFile: metaFileObj,
-          type: isCsv ? "csv" : "markdown",
+          type,
+          ...(claimedBy && {
+            error: `Same source as ${claimedBy} (names are matched ignoring case and punctuation) — rename one`,
+          }),
         });
       }
 
       if (pairs.length === 0) {
-        setZipStatus({ type: "error", message: "No valid CSV or Markdown files found in the zip." });
+        setZipStatus({
+          type: "error",
+          message: "No valid CSV or Markdown files found in the zip.",
+        });
         setZipFile(null);
       } else if (duplicateBaseNames.size > 0) {
         const names = Array.from(duplicateBaseNames).sort().join(", ");
@@ -980,7 +1532,10 @@ export default function DataSourceManagement() {
       }
     } catch (e) {
       console.error(e);
-      setZipStatus({ type: "error", message: "Failed to read zip file. Make sure it's a valid zip." });
+      setZipStatus({
+        type: "error",
+        message: "Failed to read zip file. Make sure it's a valid zip.",
+      });
       setZipFile(null);
     } finally {
       setZipValidating(false);
@@ -990,11 +1545,17 @@ export default function DataSourceManagement() {
   const handleZipUpload = async () => {
     const validPairs = zipPairs.filter((p) => !p.error);
     if (validPairs.length === 0) {
-      setZipStatus({ type: "error", message: "No valid file pairs to upload." });
+      setZipStatus({
+        type: "error",
+        message: "No valid file pairs to upload.",
+      });
       return;
     }
     if (!adminEmail) {
-      setZipStatus({ type: "error", message: "Unable to determine the current admin email." });
+      setZipStatus({
+        type: "error",
+        message: "Unable to determine the current admin email.",
+      });
       return;
     }
 
@@ -1022,7 +1583,7 @@ export default function DataSourceManagement() {
           method: "POST",
           headers: { Authorization: token, "Content-Type": "application/json" },
           body: JSON.stringify({ files: filesPayload }),
-        }
+        },
       );
 
       if (!batchUrlRes.ok) {
@@ -1034,36 +1595,48 @@ export default function DataSourceManagement() {
         presigned_urls: BatchPresignedUrlEntry[];
       };
 
-      // Build a lookup map by file_name
-      const urlMap = new Map<string, BatchPresignedUrlEntry>();
-      for (const entry of presigned_urls) {
-        urlMap.set(entry.file_name, entry);
+      // URLs come back in request order: [primary, metadata] per pair.
+      if (presigned_urls.length !== filesPayload.length) {
+        throw new Error(
+          "Presigned URL response did not match the files requested",
+        );
       }
+      const urlsFor = (pairIndex: number) => ({
+        primaryEntry: presigned_urls[pairIndex * 2],
+        metaEntry: presigned_urls[pairIndex * 2 + 1],
+      });
 
       // Step 2: Upload all files to S3 in parallel
+      const putFile = async (url: string, contentType: string, file: File) => {
+        const res = await fetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": contentType },
+          body: file,
+        });
+        if (!res.ok)
+          throw new Error(`Failed to upload ${file.name} (HTTP ${res.status})`);
+      };
       await Promise.all(
-        validPairs.flatMap((p) => {
-          const primaryEntry = urlMap.get(p.primaryFile.name)!;
-          const metaEntry = urlMap.get(p.metadataFile.name)!;
+        validPairs.flatMap((p, i) => {
+          const { primaryEntry, metaEntry } = urlsFor(i);
           return [
-            fetch(primaryEntry.presigned_url, {
-              method: "PUT",
-              headers: { "Content-Type": p.type === "csv" ? "text/csv" : "text/markdown" },
-              body: p.primaryFile,
-            }),
-            fetch(metaEntry.presigned_url, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: p.metadataFile,
-            }),
+            putFile(
+              primaryEntry.presigned_url,
+              p.type === "csv" ? "text/csv" : "text/markdown",
+              p.primaryFile,
+            ),
+            putFile(
+              metaEntry.presigned_url,
+              "application/json",
+              p.metadataFile,
+            ),
           ];
-        })
+        }),
       );
 
       // Step 3: Stage all pairs in one batch request
-      const stageItems = validPairs.map((p) => {
-        const primaryEntry = urlMap.get(p.primaryFile.name)!;
-        const metaEntry = urlMap.get(p.metadataFile.name)!;
+      const stageItems = validPairs.map((p, i) => {
+        const { primaryEntry, metaEntry } = urlsFor(i);
         return {
           type: p.type,
           primary_file_name: p.primaryFile.name,
@@ -1081,7 +1654,7 @@ export default function DataSourceManagement() {
           method: "POST",
           headers: { Authorization: token, "Content-Type": "application/json" },
           body: JSON.stringify({ created_by: adminEmail, items: stageItems }),
-        }
+        },
       );
 
       const stageJson = await stageRes.json().catch(() => ({}));
@@ -1089,10 +1662,22 @@ export default function DataSourceManagement() {
         throw new Error(stageJson?.error || "Batch staging failed");
       }
 
-      const { staged_count, skipped_count, error_count } = stageJson;
+      const {
+        staged_count,
+        replaced_count = 0,
+        unchanged_count = 0,
+        skipped_count,
+        error_count,
+      } = stageJson;
       setZipStatus({
-        type: error_count > 0 && staged_count === 0 ? "error" : "success",
-        message: `Done. ${staged_count} staged, ${skipped_count} skipped (duplicates), ${error_count} failed.`,
+        type:
+          error_count > 0 &&
+          staged_count + replaced_count + unchanged_count === 0
+            ? "error"
+            : "success",
+        message:
+          `Done. ${staged_count} new, ${replaced_count} replaced, ${unchanged_count} unchanged (skipped), ` +
+          `${skipped_count} skipped (already staged or ingesting), ${error_count} failed.`,
       });
 
       await fetchAdminDataSources();
@@ -1115,7 +1700,8 @@ export default function DataSourceManagement() {
     if (!primaryFile || !metadataFile) {
       setUploadStatus({
         type: "error",
-        message: "Please select both the primary file and the metadata JSON file.",
+        message:
+          "Please select both the primary file and the metadata JSON file.",
       });
       return;
     }
@@ -1145,15 +1731,27 @@ export default function DataSourceManagement() {
 
       const primaryType = getPrimaryFileType(primaryFile);
 
-      const primaryUpload = await getPresignedUpload(token, primaryFile, primaryType);
+      const primaryUpload = await getPresignedUpload(
+        token,
+        primaryFile,
+        primaryType,
+      );
       await uploadFileToS3(
         primaryUpload.presignedUrl,
         primaryFile,
-        primaryType === "csv" ? "text/csv" : "text/markdown"
+        primaryType === "csv" ? "text/csv" : "text/markdown",
       );
 
-      const metadataUpload = await getPresignedUpload(token, metadataFile, "json");
-      await uploadFileToS3(metadataUpload.presignedUrl, metadataFile, "application/json");
+      const metadataUpload = await getPresignedUpload(
+        token,
+        metadataFile,
+        "json",
+      );
+      await uploadFileToS3(
+        metadataUpload.presignedUrl,
+        metadataFile,
+        "application/json",
+      );
 
       const body =
         primaryType === "csv"
@@ -1166,6 +1764,13 @@ export default function DataSourceManagement() {
               metadata_s3_bucket: metadataUpload.bucket,
               metadata_s3_key: metadataUpload.key,
               created_by: adminEmail,
+              ...(urlColumn ? { url_column: urlColumn } : {}),
+              ...(urlColumn && rowIdColumn ? { row_id_column: rowIdColumn } : {}),
+              ...(urlColumn && titleColumn ? { title_column: titleColumn } : {}),
+              ...(urlColumn && descriptionColumn
+                ? { description_column: descriptionColumn }
+                : {}),
+              ...(urlColumn && citationColumn ? { citation_column: citationColumn } : {}),
             }
           : {
               type: "markdown",
@@ -1187,7 +1792,7 @@ export default function DataSourceManagement() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify(body),
-        }
+        },
       );
 
       const responseJson = await stageResponse.json().catch(() => ({}));
@@ -1196,7 +1801,7 @@ export default function DataSourceManagement() {
         throw new Error(
           responseJson?.error ||
             responseJson?.message ||
-            "Upload succeeded but staging could not be completed."
+            "Upload succeeded but staging could not be completed.",
         );
       }
 
@@ -1240,18 +1845,23 @@ export default function DataSourceManagement() {
     if (isDemoMode) {
       setUploadStatus({
         type: "success",
-        message: "Demo: the video would be transcribed and embedded automatically.",
+        message:
+          "Demo: the video would be transcribed and embedded automatically.",
       });
       return;
     }
     if (!videoFile) {
-      setUploadStatus({ type: "error", message: "Choose a video or audio file." });
+      setUploadStatus({
+        type: "error",
+        message: "Choose a video or audio file.",
+      });
       return;
     }
     if (!videoUrl.trim() || !/^https?:\/\//i.test(videoUrl.trim())) {
       setUploadStatus({
         type: "error",
-        message: "Enter the public http(s) URL for this video (YouTube or similar).",
+        message:
+          "Enter the public http(s) URL for this video (YouTube or similar).",
       });
       return;
     }
@@ -1269,7 +1879,11 @@ export default function DataSourceManagement() {
 
       const token = await AuthService.getAdminIdToken();
       const upload = await getPresignedUpload(token, videoFile, "video");
-      await uploadFileToS3(upload.presignedUrl, videoFile, videoContentType(videoFile));
+      await uploadFileToS3(
+        upload.presignedUrl,
+        videoFile,
+        videoContentType(videoFile),
+      );
 
       const stageResponse = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
@@ -1288,7 +1902,7 @@ export default function DataSourceManagement() {
             name: videoTitle.trim() || videoFile.name,
             created_by: adminEmail,
           }),
-        }
+        },
       );
 
       const responseJson = await stageResponse.json().catch(() => ({}));
@@ -1299,7 +1913,7 @@ export default function DataSourceManagement() {
           [responseJson?.error || responseJson?.message, detail]
             .filter(Boolean)
             .join(" — ") ||
-            "Video uploaded but transcription could not be started."
+            "Video uploaded but transcription could not be started.",
         );
       }
 
@@ -1339,15 +1953,27 @@ export default function DataSourceManagement() {
     if (isDemoMode) {
       setUploadStatus({
         type: "success",
-        message: "Demo: the document would be chunked and embedded automatically.",
+        message:
+          "Demo: the document would be chunked and embedded automatically.",
       });
       return;
     }
     if (!documentFile) {
-      setUploadStatus({ type: "error", message: "Choose a PDF, DOCX, or TXT file." });
+      setUploadStatus({
+        type: "error",
+        message: "Choose a PDF, DOCX, or TXT file.",
+      });
       return;
     }
-    if (documentUrl.trim() && !/^https?:\/\//i.test(documentUrl.trim())) {
+    if (!documentUrl.trim()) {
+      setUploadStatus({
+        type: "error",
+        message:
+          "Add a public link to this document so families can open it from citations.",
+      });
+      return;
+    }
+    if (!/^https?:\/\//i.test(documentUrl.trim())) {
       setUploadStatus({
         type: "error",
         message: "Document link must start with http:// or https://.",
@@ -1368,7 +1994,11 @@ export default function DataSourceManagement() {
 
       const token = await AuthService.getAdminIdToken();
       const upload = await getPresignedUpload(token, documentFile, "document");
-      await uploadFileToS3(upload.presignedUrl, documentFile, documentContentType(documentFile));
+      await uploadFileToS3(
+        upload.presignedUrl,
+        documentFile,
+        documentContentType(documentFile),
+      );
 
       const stageResponse = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
@@ -1387,7 +2017,7 @@ export default function DataSourceManagement() {
             name: documentTitle.trim() || documentFile.name,
             created_by: adminEmail,
           }),
-        }
+        },
       );
 
       const responseJson = await stageResponse.json().catch(() => ({}));
@@ -1398,13 +2028,14 @@ export default function DataSourceManagement() {
           [responseJson?.error || responseJson?.message, detail]
             .filter(Boolean)
             .join(" — ") ||
-            "Document uploaded but embedding could not be started."
+            "Document uploaded but embedding could not be started.",
         );
       }
 
       setUploadStatus({
         type: "success",
-        message: responseJson?.message || "Document staged. Embedding has started.",
+        message:
+          responseJson?.message || "Document staged. Embedding has started.",
       });
       await fetchAdminDataSources();
       setTimeout(() => resetUploadDialog(), 1500);
@@ -1423,7 +2054,9 @@ export default function DataSourceManagement() {
     const map = new Map<string, IngestionRunRow>();
     for (const r of ingestionRuns) {
       const existing = map.get(r.data_source_id);
-      const a = existing?.created_at ? new Date(existing.created_at).getTime() : 0;
+      const a = existing?.created_at
+        ? new Date(existing.created_at).getTime()
+        : 0;
       const b = r.created_at ? new Date(r.created_at).getTime() : 0;
       if (!existing || b > a) map.set(r.data_source_id, r);
     }
@@ -1442,6 +2075,24 @@ export default function DataSourceManagement() {
     return map;
   })();
 
+  const singleReplaces = primaryFile
+    ? findReplacedSource(
+        dataSources,
+        getPrimaryFileType(primaryFile),
+        primaryFile.name,
+      )
+    : undefined;
+  const videoReplaces = videoFile
+    ? findReplacedSource(dataSources, "video", videoFile.name)
+    : undefined;
+  const documentReplaces = documentFile
+    ? findReplacedSource(dataSources, "document", documentFile.name)
+    : undefined;
+  const zipReplaceCount = zipPairs.filter(
+    (p) =>
+      !p.error && findReplacedSource(dataSources, p.type, p.primaryFile.name),
+  ).length;
+
   // hide JSON rows from main table (they appear as subrow under CSV/markdown)
   const filteredDataSources = dataSources
     .filter((ds) => ds.type !== "json")
@@ -1457,13 +2108,21 @@ export default function DataSourceManagement() {
     if (r.status === "queued") return true;
     if (r.status !== "pending") return false;
     const ds = dataSources.find((d) => d.id === r.data_source_id);
-    return !(ds?.type === "video" && ds.metadata?.transcribe_status === "IN_PROGRESS");
+    return !(
+      ds?.type === "video" && ds.metadata?.transcribe_status === "IN_PROGRESS"
+    );
   });
 
-  const totalPages = Math.max(1, Math.ceil(filteredDataSources.length / PAGE_SIZE));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredDataSources.length / PAGE_SIZE),
+  );
   const currentPage = Math.min(page, totalPages);
   const startIdx = (currentPage - 1) * PAGE_SIZE;
-  const pagedDataSources = filteredDataSources.slice(startIdx, startIdx + PAGE_SIZE);
+  const pagedDataSources = filteredDataSources.slice(
+    startIdx,
+    startIdx + PAGE_SIZE,
+  );
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-[26px]">
@@ -1472,7 +2131,8 @@ export default function DataSourceManagement() {
           Overview
         </h1>
         <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-          How users are using the assistant, and what the knowledge base is drawing on.
+          How users are using the assistant, and what the knowledge base is
+          drawing on.
         </p>
       </div>
 
@@ -1515,33 +2175,37 @@ export default function DataSourceManagement() {
       <div className="space-y-4">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div className="flex flex-col gap-1">
-            <h3 className="text-[18.5px] font-bold tracking-[-0.01em] text-foreground">
-              Data sources
-            </h3>
-            <p className="max-w-2xl text-[13.5px] leading-normal text-foreground/80">
-              Everything the assistant is allowed to answer from. Staged items only go live after a sync.
-            </p>
-          </div>
+            <div className="flex flex-col gap-1">
+              <h3 className="text-[18.5px] font-bold tracking-[-0.01em] text-foreground">
+                Data sources
+              </h3>
+              <p className="max-w-2xl text-[13.5px] leading-normal text-foreground/80">
+                Everything the assistant is allowed to answer from. Staged items
+                only go live after a sync.
+              </p>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 className="min-h-[42px] rounded-[9px] bg-primary px-4 text-sm font-semibold text-white"
                 onClick={handleStartSync}
                 disabled={syncing || !hasPendingLikeItems}
               >
-                  {syncing ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Syncing…
-                    </>
-                  ) : (
-                    "Sync now"
-                  )}
+                {syncing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Syncing…
+                  </>
+                ) : (
+                  "Sync now"
+                )}
               </Button>
 
               <Dialog open={isUrlDialogOpen} onOpenChange={setIsUrlDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground">
+                  <Button
+                    variant="outline"
+                    className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground"
+                  >
                     Add web URL
                   </Button>
                 </DialogTrigger>
@@ -1554,7 +2218,9 @@ export default function DataSourceManagement() {
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Web URL</div>
+                      <div className="text-sm font-medium text-gray-900">
+                        Web URL
+                      </div>
                       <Input
                         type="url"
                         placeholder="https://example.com/resource"
@@ -1567,7 +2233,9 @@ export default function DataSourceManagement() {
                     </div>
 
                     <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Include patterns</div>
+                      <div className="text-sm font-medium text-gray-900">
+                        Include patterns
+                      </div>
                       <div className="text-xs text-gray-500">
                         Optional. One regex per line.
                       </div>
@@ -1580,7 +2248,9 @@ export default function DataSourceManagement() {
                     </div>
 
                     <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Exclude patterns</div>
+                      <div className="text-sm font-medium text-gray-900">
+                        Exclude patterns
+                      </div>
                       <div className="text-xs text-gray-500">
                         Optional. One regex per line.
                       </div>
@@ -1617,7 +2287,10 @@ export default function DataSourceManagement() {
                     >
                       Cancel
                     </Button>
-                    <Button onClick={handleAddWebUrl} disabled={!webUrl || addingUrl}>
+                    <Button
+                      onClick={handleAddWebUrl}
+                      disabled={!webUrl || addingUrl}
+                    >
                       {addingUrl ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1633,7 +2306,10 @@ export default function DataSourceManagement() {
 
               <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground">
+                  <Button
+                    variant="outline"
+                    className="min-h-[42px] rounded-[9px] border-[1.5px] border-foreground/18 bg-white text-sm font-semibold text-foreground"
+                  >
                     <Upload className="mr-2 h-4 w-4" />
                     Upload files, video, or documents
                   </Button>
@@ -1642,7 +2318,8 @@ export default function DataSourceManagement() {
                   <DialogHeader>
                     <DialogTitle>Upload guidance files</DialogTitle>
                     <DialogDescription>
-                      Add CSV, Markdown, video, or document (PDF/DOCX/TXT) resources to the Knowledge Compass knowledge base.
+                      Add CSV, Markdown, video, or document (PDF/DOCX/TXT)
+                      resources to the Knowledge Compass knowledge base.
                     </DialogDescription>
                   </DialogHeader>
 
@@ -1700,474 +2377,776 @@ export default function DataSourceManagement() {
 
                   {/* Single file tab */}
                   {uploadTab === "single" && (
-                  <div className="grid gap-4 py-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <div className="text-sm font-medium text-gray-900">CSV or Markdown file</div>
-
-                        {!primaryFile ? (
-                          <div
-                            className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              const droppedFile = e.dataTransfer.files?.[0];
-                              if (droppedFile) handlePrimaryFileSelect(droppedFile);
-                            }}
-                            onClick={() => document.getElementById("csv-upload")?.click()}
-                          >
-                            <div className="flex flex-col items-center gap-2">
-                              <Upload className="h-8 w-8 text-gray-400" />
-                              <span className="text-sm font-medium text-gray-600">
-                                Drag and drop CSV or Markdown
-                              </span>
-                              <span className="text-xs text-gray-400">
-                                or click to browse
-                              </span>
-                            </div>
-                            <Input
-                              id="csv-upload"
-                              type="file"
-                              className="hidden"
-                              accept=".csv,text/csv,.md,.markdown,text/markdown"
-                              onChange={(e) => {
-                                const selectedFile = e.target.files?.[0];
-                                if (selectedFile) handlePrimaryFileSelect(selectedFile);
-                              }}
-                            />
+                    <div className="grid gap-4 py-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-gray-900">
+                            CSV or Markdown file
                           </div>
-                        ) : (
-                          <div className="border rounded-lg p-4 bg-gray-50">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2 overflow-hidden">
-                                <FileText className="h-5 w-5 text-primary flex-shrink-0" />
-                                <span className="text-sm font-medium truncate">{primaryFile.name}</span>
+
+                          {!primaryFile ? (
+                            <div
+                              className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const droppedFile = e.dataTransfer.files?.[0];
+                                if (droppedFile)
+                                  handlePrimaryFileSelect(droppedFile);
+                              }}
+                              onClick={() =>
+                                document.getElementById("csv-upload")?.click()
+                              }
+                            >
+                              <div className="flex flex-col items-center gap-2">
+                                <Upload className="h-8 w-8 text-gray-400" />
+                                <span className="text-sm font-medium text-gray-600">
+                                  Drag and drop CSV or Markdown
+                                </span>
+                                <span className="text-xs text-gray-400">
+                                  or click to browse
+                                </span>
+                              </div>
+                              <Input
+                                id="csv-upload"
+                                type="file"
+                                className="hidden"
+                                accept=".csv,text/csv,.md,.markdown,text/markdown"
+                                onChange={(e) => {
+                                  const selectedFile = e.target.files?.[0];
+                                  if (selectedFile)
+                                    handlePrimaryFileSelect(selectedFile);
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="border rounded-lg p-4 bg-gray-50">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                  <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                                  <span className="text-sm font-medium truncate">
+                                    {primaryFile.name}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {formatSizeMb(primaryFile)}
                               </div>
                             </div>
-                            <div className="text-xs text-gray-500">{formatSizeMb(primaryFile)}</div>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-gray-900">
+                            Metadata JSON file
                           </div>
-                        )}
-                      </div>
 
-                      <div className="space-y-2">
-                        <div className="text-sm font-medium text-gray-900">Metadata JSON file</div>
-
-                        {!metadataFile ? (
-                          <div
-                            className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              const droppedFile = e.dataTransfer.files?.[0];
-                              if (droppedFile) handleMetadataFileSelect(droppedFile);
-                            }}
-                            onClick={() => document.getElementById("metadata-upload")?.click()}
-                          >
-                            <div className="flex flex-col items-center gap-2">
-                              <Upload className="h-8 w-8 text-gray-400" />
-                              <span className="text-sm font-medium text-gray-600">
-                                Drag and drop metadata JSON
-                              </span>
-                              <span className="text-xs text-gray-400">
-                                or click to browse
-                              </span>
-                            </div>
-                            <Input
-                              id="metadata-upload"
-                              type="file"
-                              className="hidden"
-                              accept=".json,application/json,text/json"
-                              onChange={(e) => {
-                                const selectedFile = e.target.files?.[0];
-                                if (selectedFile) handleMetadataFileSelect(selectedFile);
+                          {!metadataFile ? (
+                            <div
+                              className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const droppedFile = e.dataTransfer.files?.[0];
+                                if (droppedFile)
+                                  handleMetadataFileSelect(droppedFile);
                               }}
-                            />
-                          </div>
-                        ) : (
-                          <div className="border rounded-lg p-4 bg-gray-50">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2 overflow-hidden">
-                                <FileText className="h-5 w-5 text-primary flex-shrink-0" />
-                                <span className="text-sm font-medium truncate">{metadataFile.name}</span>
+                              onClick={() =>
+                                document
+                                  .getElementById("metadata-upload")
+                                  ?.click()
+                              }
+                            >
+                              <div className="flex flex-col items-center gap-2">
+                                <Upload className="h-8 w-8 text-gray-400" />
+                                <span className="text-sm font-medium text-gray-600">
+                                  Drag and drop metadata JSON
+                                </span>
+                                <span className="text-xs text-gray-400">
+                                  or click to browse
+                                </span>
+                              </div>
+                              <Input
+                                id="metadata-upload"
+                                type="file"
+                                className="hidden"
+                                accept=".json,application/json,text/json"
+                                onChange={(e) => {
+                                  const selectedFile = e.target.files?.[0];
+                                  if (selectedFile)
+                                    handleMetadataFileSelect(selectedFile);
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="border rounded-lg p-4 bg-gray-50">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                  <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                                  <span className="text-sm font-medium truncate">
+                                    {metadataFile.name}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {formatSizeMb(metadataFile)}
                               </div>
                             </div>
-                            <div className="text-xs text-gray-500">{formatSizeMb(metadataFile)}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {primaryFile && (
-                      <div className="text-xs text-gray-600">
-                        Expected metadata filename:{" "}
-                        <code className="bg-gray-100 px-1 py-0.5 rounded">
-                          {expectedMetadataFileName(primaryFile.name)}
-                        </code>
-                      </div>
-                    )}
-
-                    {uploadStatus.message && (
-                      <div
-                        className={`text-sm p-2 rounded ${
-                          uploadStatus.type === "success"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {uploadStatus.message}
-                      </div>
-                    )}
-
-                    <div className="space-y-3 text-xs">
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                        <div className="flex items-start gap-2">
-                          <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5" />
-                          <div className="text-amber-800">
-                            <div className="font-semibold">Two files are required</div>
-                            <div className="mt-1 text-amber-700">
-                              1) A <span className="font-medium">CSV</span> or <span className="font-medium">Markdown</span> guidance file (header row for CSVs; any columns are fine)
-                              <br />
-                              2) A matching <span className="font-medium">metadata JSON</span> file
-                              named{" "}
-                              <code className="bg-white/70 px-1 py-0.5 rounded border border-amber-200">
-                                {primaryFile
-                                  ? expectedMetadataFileName(primaryFile.name)
-                                  : "<filename>.metadata.json"}
-                              </code>
-                            </div>
-                          </div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="rounded-lg border border-foreground/12 bg-muted/40 p-3 text-foreground/80">
-                        <p className="font-medium mb-1 text-foreground">
-                          Metadata JSON example
-                        </p>
-                        <p className="mb-2">
-                          Create this file yourself — Knowledge Compass does not generate it from the CSV. Copy or download the example, then upload it next to your file.
-                        </p>
-                        <pre className="overflow-x-auto rounded-md border border-foreground/10 bg-white p-2 font-mono text-[11px] leading-relaxed text-foreground">
-                          {exampleMetadataContents(
-                            primaryFile?.name || "guidance-resources.csv"
-                          )}
-                        </pre>
-                        {primaryFile ? (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8"
-                              onClick={handleCopyExampleMetadata}
+                      {primaryFile && (
+                        <div className="text-xs text-gray-600">
+                          Expected metadata filename:{" "}
+                          <code className="bg-gray-100 px-1 py-0.5 rounded">
+                            {expectedMetadataFileName(primaryFile.name)}
+                          </code>
+                        </div>
+                      )}
+
+                      {primaryFile &&
+                        isCsvFile(primaryFile) &&
+                        csvColumns.length > 0 && (
+                          <div className="space-y-1">
+                            <label
+                              htmlFor="csv-url-column"
+                              className="text-sm font-medium text-gray-900"
                             >
-                              <Copy className="mr-1.5 h-3.5 w-3.5" />
-                              {copiedMetadata ? "Copied" : "Copy JSON"}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8"
-                              onClick={handleDownloadExampleMetadata}
+                              Crawl links from column (optional)
+                            </label>
+                            <select
+                              id="csv-url-column"
+                              value={urlColumn}
+                              onChange={(e) => {
+                                const nextUrlColumn = e.target.value;
+                                if (nextUrlColumn !== urlColumn) {
+                                  setRowIdColumn("");
+                                  setTitleColumn("");
+                                  setDescriptionColumn("");
+                                  setCitationColumn("");
+                                }
+                                setUrlColumn(nextUrlColumn);
+                              }}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
                             >
-                              <Download className="mr-1.5 h-3.5 w-3.5" />
-                              Download {expectedMetadataFileName(primaryFile.name)}
-                            </Button>
+                              <option value="">Don't crawl links</option>
+                              {csvColumns.map((column) => (
+                                <option key={column} value={column}>
+                                  {column}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="text-xs text-gray-500">
+                              Web pages and PDFs linked in this column are
+                              fetched on Sync and indexed with the row's other
+                              columns.
+                              {suggestedUrlColumn &&
+                                urlColumn !== suggestedUrlColumn && (
+                                  <>
+                                    {" "}
+                                    <span className="text-gray-700">
+                                      <span className="font-medium">
+                                        {suggestedUrlColumn}
+                                      </span>{" "}
+                                      looks like a URL column.
+                                    </span>{" "}
+                                    <button
+                                      type="button"
+                                      className="text-primary underline"
+                                      onClick={() => {
+                                        setRowIdColumn("");
+                                        setTitleColumn("");
+                                        setDescriptionColumn("");
+                                        setCitationColumn("");
+                                        setUrlColumn(suggestedUrlColumn);
+                                      }}
+                                    >
+                                      Use it
+                                    </button>
+                                  </>
+                                )}
+                            </div>
                           </div>
-                        ) : null}
+                        )}
+
+                      {primaryFile && isCsvFile(primaryFile) && csvColumns.length > 0 && urlColumn && (
+                        <div className="space-y-1">
+                          <label htmlFor="csv-row-id-column" className="text-sm font-medium text-gray-900">
+                            Row identity column (optional)
+                          </label>
+                          <select
+                            id="csv-row-id-column"
+                            value={rowIdColumn}
+                            onChange={(e) => {
+                              const nextRowIdColumn = e.target.value;
+                              setRowIdColumn(nextRowIdColumn);
+                              if (titleColumn === nextRowIdColumn) setTitleColumn("");
+                              if (descriptionColumn === nextRowIdColumn) setDescriptionColumn("");
+                              if (citationColumn === nextRowIdColumn) setCitationColumn("");
+                            }}
+                            className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                          >
+                            <option value="">Match rows by their full contents</option>
+                            {csvColumns
+                              .filter((column) => column !== urlColumn)
+                              .map((column) => (
+                                <option key={column} value={column}>
+                                  {column}
+                                </option>
+                              ))}
+                          </select>
+                          <div className="text-xs text-gray-500">
+                            A column that identifies each row across re-uploads (e.g. an id), so editing a
+                            row updates its crawled link instead of adding a new one. Leave unset to match
+                            rows by their full contents.
+                          </div>
+                        </div>
+                      )}
+
+                      {primaryFile && isCsvFile(primaryFile) && csvColumns.length > 0 && urlColumn && (
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div className="space-y-1">
+                            <label htmlFor="csv-title-column" className="text-sm font-medium text-gray-900">
+                              Resource title column (optional)
+                            </label>
+                            <select
+                              id="csv-title-column"
+                              value={titleColumn}
+                              onChange={(e) => setTitleColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">Use the fetched page title</option>
+                              {csvColumns
+                                .filter((column) => column !== urlColumn && column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label htmlFor="csv-description-column" className="text-sm font-medium text-gray-900">
+                              Description column (optional)
+                            </label>
+                            <select
+                              id="csv-description-column"
+                              value={descriptionColumn}
+                              onChange={(e) => setDescriptionColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">No mapped description</option>
+                              {csvColumns
+                                .filter((column) => column !== urlColumn && column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label htmlFor="csv-citation-column" className="text-sm font-medium text-gray-900">
+                              Citation link column (optional)
+                            </label>
+                            <select
+                              id="csv-citation-column"
+                              value={citationColumn}
+                              onChange={(e) => setCitationColumn(e.target.value)}
+                              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                            >
+                              <option value="">Use the fetched URL</option>
+                              {csvColumns
+                                .filter((column) => column !== rowIdColumn)
+                                .map((column) => (
+                                  <option key={column} value={column}>{column}</option>
+                                ))}
+                            </select>
+                          </div>
+                          <p className="text-xs text-gray-500 md:col-span-3">
+                            Each row is indexed as its own resource. Its title and description enrich fetched
+                            content, while the citation link controls what users open. Invalid citation links
+                            safely fall back to the fetched URL.
+                          </p>
+                        </div>
+                      )}
+
+                      <ReplaceNotice existing={singleReplaces} />
+
+                      {uploadStatus.message && (
+                        <div
+                          className={`text-sm p-2 rounded ${
+                            uploadStatus.type === "success"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {uploadStatus.message}
+                        </div>
+                      )}
+
+                      <div className="space-y-3 text-xs">
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5" />
+                            <div className="text-amber-800">
+                              <div className="font-semibold">
+                                Two files are required
+                              </div>
+                              <div className="mt-1 text-amber-700">
+                                1) A <span className="font-medium">CSV</span> or{" "}
+                                <span className="font-medium">Markdown</span>{" "}
+                                guidance file (header row for CSVs; any columns
+                                are fine)
+                                <br />
+                                2) A matching{" "}
+                                <span className="font-medium">
+                                  metadata JSON
+                                </span>{" "}
+                                file named{" "}
+                                <code className="bg-white/70 px-1 py-0.5 rounded border border-amber-200">
+                                  {primaryFile
+                                    ? expectedMetadataFileName(primaryFile.name)
+                                    : "<filename>.metadata.json"}
+                                </code>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-foreground/12 bg-muted/40 p-3 text-foreground/80">
+                          <p className="font-medium mb-1 text-foreground">
+                            Metadata JSON example
+                          </p>
+                          <p className="mb-2">
+                            Create this file yourself — Knowledge Compass does
+                            not generate it from the CSV. Copy or download the
+                            example, then upload it next to your file.
+                          </p>
+                          <pre className="overflow-x-auto rounded-md border border-foreground/10 bg-white p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                            {exampleMetadataContents(
+                              primaryFile?.name || "guidance-resources.csv",
+                            )}
+                          </pre>
+                          {primaryFile ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
+                                onClick={handleCopyExampleMetadata}
+                              >
+                                <Copy className="mr-1.5 h-3.5 w-3.5" />
+                                {copiedMetadata ? "Copied" : "Copy JSON"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
+                                onClick={handleDownloadExampleMetadata}
+                              >
+                                <Download className="mr-1.5 h-3.5 w-3.5" />
+                                Download{" "}
+                                {expectedMetadataFileName(primaryFile.name)}
+                              </Button>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
-                  </div>
                   )}
 
                   {/* Zip upload tab */}
                   {uploadTab === "zip" && (
-                  <div className="grid gap-4 py-4">
-                    <div className="text-sm text-gray-600">
-                      Zip CSV or Markdown guidance files together with a matching{" "}
-                      <code className="bg-gray-100 px-1 rounded">{"<filename>.metadata.json"}</code>{" "}
-                      sidecar for each one. Duplicates are skipped automatically.
-                    </div>
+                    <div className="grid gap-4 py-4">
+                      <div className="text-sm text-gray-600">
+                        Zip CSV or Markdown guidance files together with a
+                        matching{" "}
+                        <code className="bg-gray-100 px-1 rounded">
+                          {"<filename>.metadata.json"}
+                        </code>{" "}
+                        sidecar for each one. Files with the same name as an
+                        existing source replace it; identical files are skipped.
+                      </div>
 
-                    {!zipFile ? (
-                      <div
-                        className="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const f = e.dataTransfer.files?.[0];
-                          if (f) handleZipSelect(f);
-                        }}
-                        onClick={() => document.getElementById("zip-upload")?.click()}
-                      >
-                        <div className="flex flex-col items-center gap-2">
-                          {zipValidating ? (
-                            <Loader2 className="h-8 w-8 text-gray-400 animate-spin" />
-                          ) : (
-                            <Archive className="h-8 w-8 text-gray-400" />
-                          )}
-                          <span className="text-sm font-medium text-gray-600">
-                            {zipValidating ? "Validating zip..." : "Drag and drop a .zip file"}
-                          </span>
-                          <span className="text-xs text-gray-400">or click to browse (max 200MB)</span>
-                        </div>
-                        <Input
-                          id="zip-upload"
-                          type="file"
-                          className="hidden"
-                          accept=".zip,application/zip"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
+                      {!zipFile ? (
+                        <div
+                          className="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const f = e.dataTransfer.files?.[0];
                             if (f) handleZipSelect(f);
                           }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between border rounded-lg p-3 bg-gray-50">
-                          <div className="flex items-center gap-2">
-                            <Archive className="h-5 w-5 text-primary" />
-                            <span className="text-sm font-medium">{zipFile.name}</span>
-                            <span className="text-xs text-gray-500">{formatSizeMb(zipFile)}</span>
+                          onClick={() =>
+                            document.getElementById("zip-upload")?.click()
+                          }
+                        >
+                          <div className="flex flex-col items-center gap-2">
+                            {zipValidating ? (
+                              <Loader2 className="h-8 w-8 text-gray-400 animate-spin" />
+                            ) : (
+                              <Archive className="h-8 w-8 text-gray-400" />
+                            )}
+                            <span className="text-sm font-medium text-gray-600">
+                              {zipValidating
+                                ? "Validating zip..."
+                                : "Drag and drop a .zip file"}
+                            </span>
+                            <span className="text-xs text-gray-400">
+                              or click to browse (max 200MB)
+                            </span>
                           </div>
-                          <button
-                            type="button"
-                            className="text-xs text-gray-400 hover:text-gray-600"
-                            onClick={() => { setZipFile(null); setZipPairs([]); setZipStatus({ type: null, message: "" }); }}
-                          >
-                            Remove
-                          </button>
+                          <Input
+                            id="zip-upload"
+                            type="file"
+                            className="hidden"
+                            accept=".zip,application/zip"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleZipSelect(f);
+                            }}
+                          />
                         </div>
-
-                        {zipPairs.length > 0 && (
-                          <div className="border rounded-lg overflow-hidden">
-                            <div className="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600 border-b">
-                              {zipPairs.filter(p => !p.error).length} valid pair(s) · {zipPairs.filter(p => p.error).length} with errors
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between border rounded-lg p-3 bg-gray-50">
+                            <div className="flex items-center gap-2">
+                              <Archive className="h-5 w-5 text-primary" />
+                              <span className="text-sm font-medium">
+                                {zipFile.name}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {formatSizeMb(zipFile)}
+                              </span>
                             </div>
-                            <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
-                              {zipPairs.map((pair, i) => (
-                                <div key={i} className={`flex items-center justify-between px-3 py-2 text-xs ${pair.error ? "bg-red-50" : ""}`}>
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <FileText className={`h-3.5 w-3.5 flex-shrink-0 ${pair.error ? "text-red-400" : "text-primary"}`} />
-                                    <span className="truncate font-mono">{pair.primaryFile.name}</span>
+                            <button
+                              type="button"
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                              onClick={() => {
+                                setZipFile(null);
+                                setZipPairs([]);
+                                setZipStatus({ type: null, message: "" });
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+
+                          {zipPairs.length > 0 && (
+                            <div className="border rounded-lg overflow-hidden">
+                              <div className="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600 border-b">
+                                {zipPairs.filter((p) => !p.error).length} valid
+                                pair(s) ·{" "}
+                                {zipPairs.filter((p) => p.error).length} with
+                                errors
+                                {zipReplaceCount > 0 &&
+                                  ` · ${zipReplaceCount} will replace existing sources`}
+                              </div>
+                              <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
+                                {zipPairs.map((pair, i) => (
+                                  <div
+                                    key={i}
+                                    className={`flex items-center justify-between px-3 py-2 text-xs ${pair.error ? "bg-red-50" : ""}`}
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <FileText
+                                        className={`h-3.5 w-3.5 flex-shrink-0 ${pair.error ? "text-red-400" : "text-primary"}`}
+                                      />
+                                      <span className="truncate font-mono">
+                                        {pair.primaryFile.name}
+                                      </span>
+                                    </div>
+                                    {pair.error ? (
+                                      <span className="text-red-600 ml-2 flex-shrink-0">
+                                        {pair.error}
+                                      </span>
+                                    ) : findReplacedSource(
+                                        dataSources,
+                                        pair.type,
+                                        pair.primaryFile.name,
+                                      ) ? (
+                                      <span className="text-amber-700 ml-2 flex-shrink-0">
+                                        ↻ replaces existing
+                                      </span>
+                                    ) : (
+                                      <span className="text-green-600 ml-2 flex-shrink-0">
+                                        ✓ paired
+                                      </span>
+                                    )}
                                   </div>
-                                  {pair.error ? (
-                                    <span className="text-red-600 ml-2 flex-shrink-0">{pair.error}</span>
-                                  ) : (
-                                    <span className="text-green-600 ml-2 flex-shrink-0">✓ paired</span>
-                                  )}
-                                </div>
-                              ))}
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {zipStatus.message && (
+                        <div
+                          className={`text-sm p-2 rounded ${
+                            zipStatus.type === "success"
+                              ? "bg-green-100 text-green-700"
+                              : zipStatus.type === "warning"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {zipStatus.message}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {uploadTab === "video" && (
+                    <div className="grid gap-4 py-4">
+                      <div className="text-sm text-gray-600">
+                        Upload a video or audio file. Amazon Transcribe
+                        processes it automatically; when that finishes,
+                        Knowledge Compass embeds the transcript. Provide the
+                        public URL users should be sent to (usually YouTube).
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-900">
+                          Video or audio file
+                        </div>
+                        {!videoFile ? (
+                          <div
+                            className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const droppedFile = e.dataTransfer.files?.[0];
+                              if (droppedFile)
+                                handleVideoFileSelect(droppedFile);
+                            }}
+                            onClick={() =>
+                              document.getElementById("video-upload")?.click()
+                            }
+                          >
+                            <div className="flex flex-col items-center gap-2">
+                              <Film className="h-8 w-8 text-gray-400" />
+                              <span className="text-sm font-medium text-gray-600">
+                                Drag and drop mp4, webm, mp3, wav, or m4a
+                              </span>
+                              <span className="text-xs text-gray-400">
+                                or click to browse (max 1 GB)
+                              </span>
+                            </div>
+                            <Input
+                              id="video-upload"
+                              type="file"
+                              className="hidden"
+                              accept=".mp4,.webm,.mp3,.wav,.flac,.ogg,.m4a,.m4v,.amr,video/mp4,video/webm,audio/*"
+                              onChange={(e) => {
+                                const selectedFile = e.target.files?.[0];
+                                if (selectedFile)
+                                  handleVideoFileSelect(selectedFile);
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="border rounded-lg p-4 bg-gray-50">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                <Film className="h-5 w-5 text-primary flex-shrink-0" />
+                                <span className="text-sm font-medium truncate">
+                                  {videoFile.name}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="text-xs text-gray-400 hover:text-gray-600"
+                                onClick={() => setVideoFile(null)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {formatSizeMb(videoFile)}
                             </div>
                           </div>
                         )}
                       </div>
-                    )}
-
-                    {zipStatus.message && (
-                      <div className={`text-sm p-2 rounded ${
-                        zipStatus.type === "success"
-                          ? "bg-green-100 text-green-700"
-                          : zipStatus.type === "warning"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-red-100 text-red-700"
-                      }`}>
-                        {zipStatus.message}
-                      </div>
-                    )}
-                  </div>
-                  )}
-
-                  {uploadTab === "video" && (
-                  <div className="grid gap-4 py-4">
-                    <div className="text-sm text-gray-600">
-                      Upload a video or audio file. Amazon Transcribe processes it automatically; when that finishes, Knowledge Compass embeds the transcript. Provide the public URL users should be sent to (usually YouTube).
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Video or audio file</div>
-                      {!videoFile ? (
-                        <div
-                          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const droppedFile = e.dataTransfer.files?.[0];
-                            if (droppedFile) handleVideoFileSelect(droppedFile);
-                          }}
-                          onClick={() => document.getElementById("video-upload")?.click()}
+                      <ReplaceNotice existing={videoReplaces} />
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium text-gray-900"
+                          htmlFor="video-title"
                         >
-                          <div className="flex flex-col items-center gap-2">
-                            <Film className="h-8 w-8 text-gray-400" />
-                            <span className="text-sm font-medium text-gray-600">
-                              Drag and drop mp4, webm, mp3, wav, or m4a
-                            </span>
-                            <span className="text-xs text-gray-400">or click to browse (max 1 GB)</span>
-                          </div>
-                          <Input
-                            id="video-upload"
-                            type="file"
-                            className="hidden"
-                            accept=".mp4,.webm,.mp3,.wav,.flac,.ogg,.m4a,.m4v,.amr,video/mp4,video/webm,audio/*"
-                            onChange={(e) => {
-                              const selectedFile = e.target.files?.[0];
-                              if (selectedFile) handleVideoFileSelect(selectedFile);
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="border rounded-lg p-4 bg-gray-50">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2 overflow-hidden">
-                              <Film className="h-5 w-5 text-primary flex-shrink-0" />
-                              <span className="text-sm font-medium truncate">{videoFile.name}</span>
-                            </div>
-                            <button
-                              type="button"
-                              className="text-xs text-gray-400 hover:text-gray-600"
-                              onClick={() => setVideoFile(null)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                          <div className="text-xs text-gray-500">{formatSizeMb(videoFile)}</div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-gray-900" htmlFor="video-title">
-                        Title
-                      </label>
-                      <Input
-                        id="video-title"
-                        value={videoTitle}
-                        onChange={(e) => setVideoTitle(e.target.value)}
-                        placeholder="Inclusive education webinar"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-gray-900" htmlFor="video-url">
-                        Public video URL
-                      </label>
-                      <Input
-                        id="video-url"
-                        value={videoUrl}
-                        onChange={(e) => setVideoUrl(e.target.value)}
-                        placeholder="https://www.youtube.com/watch?v=..."
-                      />
-                      <p className="text-xs text-gray-500">
-                        Used in citations and timestamp deep-links. Transcription starts as soon as you upload.
-                      </p>
-                    </div>
-                    {uploadStatus.message && uploadTab === "video" ? (
-                      <div
-                        className={`text-sm p-2 rounded ${
-                          uploadStatus.type === "success"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {uploadStatus.message}
+                          Title
+                        </label>
+                        <Input
+                          id="video-title"
+                          value={videoTitle}
+                          onChange={(e) => setVideoTitle(e.target.value)}
+                          placeholder="Inclusive education webinar"
+                        />
                       </div>
-                    ) : null}
-                  </div>
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium text-gray-900"
+                          htmlFor="video-url"
+                        >
+                          Public video URL
+                        </label>
+                        <Input
+                          id="video-url"
+                          value={videoUrl}
+                          onChange={(e) => setVideoUrl(e.target.value)}
+                          placeholder="https://www.youtube.com/watch?v=..."
+                        />
+                        <p className="text-xs text-gray-500">
+                          Used in citations and timestamp deep-links.
+                          Transcription starts as soon as you upload.
+                        </p>
+                      </div>
+                      {uploadStatus.message && uploadTab === "video" ? (
+                        <div
+                          className={`text-sm p-2 rounded ${
+                            uploadStatus.type === "success"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {uploadStatus.message}
+                        </div>
+                      ) : null}
+                    </div>
                   )}
 
                   {uploadTab === "document" && (
-                  <div className="grid gap-4 py-4">
-                    <div className="text-sm text-gray-600">
-                      Upload a single PDF, DOCX, or TXT file. Knowledge Compass extracts the text and embeds it automatically — no metadata JSON file required.
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Document file</div>
-                      {!documentFile ? (
-                        <div
-                          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const droppedFile = e.dataTransfer.files?.[0];
-                            if (droppedFile) handleDocumentFileSelect(droppedFile);
-                          }}
-                          onClick={() => document.getElementById("document-upload")?.click()}
-                        >
-                          <div className="flex flex-col items-center gap-2">
-                            <FileText className="h-8 w-8 text-gray-400" />
-                            <span className="text-sm font-medium text-gray-600">
-                              Drag and drop pdf, docx, or txt
-                            </span>
-                            <span className="text-xs text-gray-400">or click to browse (max 50MB)</span>
-                          </div>
-                          <Input
-                            id="document-upload"
-                            type="file"
-                            className="hidden"
-                            accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                            onChange={(e) => {
-                              const selectedFile = e.target.files?.[0];
-                              if (selectedFile) handleDocumentFileSelect(selectedFile);
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="border rounded-lg p-4 bg-gray-50">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2 overflow-hidden">
-                              <FileText className="h-5 w-5 text-primary flex-shrink-0" />
-                              <span className="text-sm font-medium truncate">{documentFile.name}</span>
-                            </div>
-                            <button
-                              type="button"
-                              className="text-xs text-gray-400 hover:text-gray-600"
-                              onClick={() => setDocumentFile(null)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                          <div className="text-xs text-gray-500">{formatSizeMb(documentFile)}</div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-gray-900" htmlFor="document-title">
-                        Title
-                      </label>
-                      <Input
-                        id="document-title"
-                        value={documentTitle}
-                        onChange={(e) => setDocumentTitle(e.target.value)}
-                        placeholder="Family rights handbook"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-gray-900" htmlFor="document-url">
-                        Link (optional)
-                      </label>
-                      <Input
-                        id="document-url"
-                        value={documentUrl}
-                        onChange={(e) => setDocumentUrl(e.target.value)}
-                        placeholder="https://example.com/handbook.pdf"
-                      />
-                      <p className="text-xs text-gray-500">
-                        Used in citations. If left blank, this document won't have a clickable source link.
-                      </p>
-                    </div>
-                    {uploadStatus.message && uploadTab === "document" ? (
-                      <div
-                        className={`text-sm p-2 rounded ${
-                          uploadStatus.type === "success"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {uploadStatus.message}
+                    <div className="grid gap-4 py-4">
+                      <div className="text-sm text-gray-600">
+                        Upload a single PDF, DOCX, or TXT file. Knowledge
+                        Compass extracts the text and embeds it automatically —
+                        no metadata JSON file required.
                       </div>
-                    ) : null}
-                  </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-900">
+                          Document file
+                        </div>
+                        {!documentFile ? (
+                          <div
+                            className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const droppedFile = e.dataTransfer.files?.[0];
+                              if (droppedFile)
+                                handleDocumentFileSelect(droppedFile);
+                            }}
+                            onClick={() =>
+                              document
+                                .getElementById("document-upload")
+                                ?.click()
+                            }
+                          >
+                            <div className="flex flex-col items-center gap-2">
+                              <FileText className="h-8 w-8 text-gray-400" />
+                              <span className="text-sm font-medium text-gray-600">
+                                Drag and drop pdf, docx, or txt
+                              </span>
+                              <span className="text-xs text-gray-400">
+                                or click to browse (max 50MB)
+                              </span>
+                            </div>
+                            <Input
+                              id="document-upload"
+                              type="file"
+                              className="hidden"
+                              accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                              onChange={(e) => {
+                                const selectedFile = e.target.files?.[0];
+                                if (selectedFile)
+                                  handleDocumentFileSelect(selectedFile);
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="border rounded-lg p-4 bg-gray-50">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                                <span className="text-sm font-medium truncate">
+                                  {documentFile.name}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="text-xs text-gray-400 hover:text-gray-600"
+                                onClick={() => setDocumentFile(null)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {formatSizeMb(documentFile)}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <ReplaceNotice existing={documentReplaces} />
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium text-gray-900"
+                          htmlFor="document-title"
+                        >
+                          Title
+                        </label>
+                        <Input
+                          id="document-title"
+                          value={documentTitle}
+                          onChange={(e) => setDocumentTitle(e.target.value)}
+                          placeholder="Family rights handbook"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium text-gray-900"
+                          htmlFor="document-url"
+                        >
+                          Public link (required)
+                        </label>
+                        <Input
+                          id="document-url"
+                          type="url"
+                          required
+                          aria-required="true"
+                          aria-describedby="document-url-help"
+                          value={documentUrl}
+                          onChange={(e) => setDocumentUrl(e.target.value)}
+                          placeholder="https://example.com/handbook.pdf"
+                        />
+                        <p id="document-url-help" className="text-xs text-gray-500">
+                          A public http(s) link where families can open this
+                          document. It's used as the citation link in chat
+                          answers. Re-uploads are matched by file name, so the
+                          link can be changed or shared with other documents at
+                          any time.
+                        </p>
+                      </div>
+                      {uploadStatus.message && uploadTab === "document" ? (
+                        <div
+                          className={`text-sm p-2 rounded ${
+                            uploadStatus.type === "success"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {uploadStatus.message}
+                        </div>
+                      ) : null}
+                    </div>
                   )}
 
                   <DialogFooter>
-                    <Button variant="outline" onClick={resetUploadDialog} disabled={uploading || zipUploading}>
+                    <Button
+                      variant="outline"
+                      onClick={resetUploadDialog}
+                      disabled={uploading || zipUploading}
+                    >
                       Cancel
                     </Button>
                     {uploadTab === "single" ? (
@@ -2204,7 +3183,7 @@ export default function DataSourceManagement() {
                       <Button
                         className="bg-primary hover:bg-primary/90"
                         onClick={handleDocumentUpload}
-                        disabled={!documentFile || uploading}
+                        disabled={!documentFile || !documentUrl.trim() || uploading}
                       >
                         {uploading ? (
                           <>
@@ -2219,7 +3198,12 @@ export default function DataSourceManagement() {
                       <Button
                         className="bg-primary hover:bg-primary/90"
                         onClick={handleZipUpload}
-                        disabled={!zipFile || zipPairs.filter(p => !p.error).length === 0 || zipUploading || zipValidating}
+                        disabled={
+                          !zipFile ||
+                          zipPairs.filter((p) => !p.error).length === 0 ||
+                          zipUploading ||
+                          zipValidating
+                        }
                       >
                         {zipUploading ? (
                           <>
@@ -2227,7 +3211,7 @@ export default function DataSourceManagement() {
                             Uploading...
                           </>
                         ) : (
-                          `Upload & Stage ${zipPairs.filter(p => !p.error).length} pair(s)`
+                          `Upload & Stage ${zipPairs.filter((p) => !p.error).length} pair(s)`
                         )}
                       </Button>
                     )}
@@ -2310,7 +3294,10 @@ export default function DataSourceManagement() {
                   </TableRow>
                 ) : pagedDataSources.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-10 text-gray-500">
+                    <TableCell
+                      colSpan={6}
+                      className="text-center py-10 text-gray-500"
+                    >
                       No data sources found.
                     </TableCell>
                   </TableRow>
@@ -2322,12 +3309,16 @@ export default function DataSourceManagement() {
                       ds.type === "website" ||
                       ds.type === "video" ||
                       ds.type === "document" ||
-                      ((ds.type === "csv" || ds.type === "markdown") && !!jsonByCsvName.get(ds.name));
+                      ((ds.type === "csv" || ds.type === "markdown") &&
+                        !!jsonByCsvName.get(ds.name));
                     const isOpen = !!expanded[ds.id];
 
                     return (
                       <>
-                        <TableRow key={ds.id} className={isOpen ? "bg-gray-50/50" : ""}>
+                        <TableRow
+                          key={ds.id}
+                          className={isOpen ? "bg-gray-50/50" : ""}
+                        >
                           <TableCell className="align-top">
                             <div className="flex items-start gap-2">
                               {isExpandable ? (
@@ -2335,9 +3326,14 @@ export default function DataSourceManagement() {
                                   type="button"
                                   className="mt-0.5 text-xs rounded border border-gray-200 px-2 py-1 text-gray-600 hover:bg-gray-50"
                                   onClick={() =>
-                                    setExpanded((prev) => ({ ...prev, [ds.id]: !prev[ds.id] }))
+                                    setExpanded((prev) => ({
+                                      ...prev,
+                                      [ds.id]: !prev[ds.id],
+                                    }))
                                   }
-                                  title={isOpen ? "Hide details" : "Show details"}
+                                  title={
+                                    isOpen ? "Hide details" : "Show details"
+                                  }
                                 >
                                   {isOpen ? "Hide" : "Details"}
                                 </button>
@@ -2356,7 +3352,9 @@ export default function DataSourceManagement() {
                           </TableCell>
 
                           <TableCell className="align-top">
-                            <Badge variant="secondary">{typeLabel(ds.type)}</Badge>
+                            <Badge variant="secondary">
+                              {typeLabel(ds.type)}
+                            </Badge>
                           </TableCell>
 
                           <TableCell className="align-top">
@@ -2424,15 +3422,19 @@ export default function DataSourceManagement() {
                                         Include patterns
                                       </div>
                                       <div className="text-xs font-mono bg-white border border-gray-200 rounded p-3 overflow-auto">
-                                        {(ds.include_patterns ?? []).map((p, i) => (
-                                          <div key={i} className="break-all">
-                                            {p}
-                                          </div>
-                                        ))}
+                                        {(ds.include_patterns ?? []).map(
+                                          (p, i) => (
+                                            <div key={i} className="break-all">
+                                              {p}
+                                            </div>
+                                          ),
+                                        )}
                                       </div>
                                     </div>
                                   ) : (
-                                    <div className="text-xs text-gray-500">No include patterns.</div>
+                                    <div className="text-xs text-gray-500">
+                                      No include patterns.
+                                    </div>
                                   )}
 
                                   {(ds.exclude_patterns?.length ?? 0) > 0 ? (
@@ -2441,15 +3443,19 @@ export default function DataSourceManagement() {
                                         Exclude patterns
                                       </div>
                                       <div className="text-xs font-mono bg-white border border-gray-200 rounded p-3 overflow-auto">
-                                        {(ds.exclude_patterns ?? []).map((p, i) => (
-                                          <div key={i} className="break-all">
-                                            {p}
-                                          </div>
-                                        ))}
+                                        {(ds.exclude_patterns ?? []).map(
+                                          (p, i) => (
+                                            <div key={i} className="break-all">
+                                              {p}
+                                            </div>
+                                          ),
+                                        )}
                                       </div>
                                     </div>
                                   ) : (
-                                    <div className="text-xs text-gray-500">No exclude patterns.</div>
+                                    <div className="text-xs text-gray-500">
+                                      No exclude patterns.
+                                    </div>
                                   )}
 
                                   {run?.error_message ? (
@@ -2461,9 +3467,13 @@ export default function DataSourceManagement() {
                               ) : ds.type === "video" ? (
                                 <div className="space-y-3 text-sm">
                                   <div>
-                                    <div className="text-xs font-semibold text-gray-600 mb-1">Public URL</div>
+                                    <div className="text-xs font-semibold text-gray-600 mb-1">
+                                      Public URL
+                                    </div>
                                     <a
-                                      href={String(ds.metadata?.video_url || "")}
+                                      href={String(
+                                        ds.metadata?.video_url || "",
+                                      )}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="text-primary break-all underline underline-offset-2"
@@ -2472,7 +3482,11 @@ export default function DataSourceManagement() {
                                     </a>
                                   </div>
                                   <div className="text-xs text-gray-600">
-                                    Transcription: {String(ds.metadata?.transcribe_status || "not started")}
+                                    Transcription:{" "}
+                                    {String(
+                                      ds.metadata?.transcribe_status ||
+                                        "not started",
+                                    )}
                                   </div>
                                   {run?.error_message ? (
                                     <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
@@ -2483,7 +3497,11 @@ export default function DataSourceManagement() {
                               ) : ds.type === "document" ? (
                                 <div className="space-y-3 text-sm">
                                   <div className="text-xs text-gray-600">
-                                    File: {String(ds.metadata?.document_file_name || ds.name)}
+                                    File:{" "}
+                                    {String(
+                                      ds.metadata?.document_file_name ||
+                                        ds.name,
+                                    )}
                                   </div>
                                   {run?.error_message ? (
                                     <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-3">
@@ -2491,11 +3509,15 @@ export default function DataSourceManagement() {
                                     </div>
                                   ) : null}
                                 </div>
-                              ) : ds.type === "csv" || ds.type === "markdown" ? (
+                              ) : ds.type === "csv" ||
+                                ds.type === "markdown" ? (
                                 (() => {
                                   const json = jsonByCsvName.get(ds.name);
-                                  const jsonRun = json ? latestRunBySourceId.get(json.id) : undefined;
-                                  const jsonStatus = jsonRun?.status ?? "no_runs";
+                                  const jsonRun = json
+                                    ? latestRunBySourceId.get(json.id)
+                                    : undefined;
+                                  const jsonStatus =
+                                    jsonRun?.status ?? "no_runs";
 
                                   return (
                                     <div className="space-y-5">
@@ -2514,7 +3536,9 @@ export default function DataSourceManagement() {
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100">
-                                                <Badge variant="secondary">{typeLabel(json.type)}</Badge>
+                                                <Badge variant="secondary">
+                                                  {typeLabel(json.type)}
+                                                </Badge>
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100">
@@ -2527,10 +3551,15 @@ export default function DataSourceManagement() {
                                                       size="sm"
                                                       className="h-6 rounded-full px-2 text-[11px]"
                                                       title="Re-queue this resource for the next sync"
-                                                      onClick={() => handleRetry(json.id)}
-                                                      disabled={retryingId === json.id}
+                                                      onClick={() =>
+                                                        handleRetry(json.id)
+                                                      }
+                                                      disabled={
+                                                        retryingId === json.id
+                                                      }
                                                     >
-                                                      {retryingId === json.id ? (
+                                                      {retryingId ===
+                                                      json.id ? (
                                                         <Loader2 className="h-3 w-3 animate-spin" />
                                                       ) : (
                                                         <RefreshCw className="h-3 w-3" />
@@ -2541,25 +3570,46 @@ export default function DataSourceManagement() {
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100 text-xs text-gray-700">
-                                                {formatDateTime(json.created_at)}
+                                                {formatDateTime(
+                                                  json.created_at,
+                                                )}
                                               </div>
 
                                               <div className="px-3 py-3 border-r border-gray-100 text-xs text-gray-700">
-                                                {formatDateTime(jsonRun?.completed_at ?? null)}
+                                                {formatDateTime(
+                                                  jsonRun?.completed_at ?? null,
+                                                )}
                                               </div>
                                             </div>
                                           </div>
                                         ) : (
                                           <div className="text-xs text-gray-500">
-                                            No metadata JSON found for this CSV or Markdown.
+                                            No metadata JSON found for this CSV
+                                            or Markdown.
                                           </div>
                                         )}
                                       </div>
+
+                                      {ds.type === "csv" &&
+                                      typeof ds.metadata?.url_column === "string" &&
+                                      ds.metadata.url_column ? (
+                                        <CsvLinkStatusPanel
+                                          dataSourceId={ds.id}
+                                          urlColumn={ds.metadata.url_column}
+                                          rowIdColumn={
+                                            typeof ds.metadata?.row_id_column === "string"
+                                              ? ds.metadata.row_id_column
+                                              : null
+                                          }
+                                        />
+                                      ) : null}
                                     </div>
                                   );
                                 })()
                               ) : (
-                                <div className="text-xs text-gray-500">No details.</div>
+                                <div className="text-xs text-gray-500">
+                                  No details.
+                                </div>
                               )}
                             </TableCell>
                           </TableRow>
@@ -2575,9 +3625,18 @@ export default function DataSourceManagement() {
           {!loading && filteredDataSources.length > 0 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
               <div className="text-sm text-gray-600">
-                Showing <span className="font-medium">{Math.min(startIdx + 1, filteredDataSources.length)}</span> to{" "}
-                <span className="font-medium">{Math.min(startIdx + PAGE_SIZE, filteredDataSources.length)}</span> of{" "}
-                <span className="font-medium">{filteredDataSources.length}</span>
+                Showing{" "}
+                <span className="font-medium">
+                  {Math.min(startIdx + 1, filteredDataSources.length)}
+                </span>{" "}
+                to{" "}
+                <span className="font-medium">
+                  {Math.min(startIdx + PAGE_SIZE, filteredDataSources.length)}
+                </span>{" "}
+                of{" "}
+                <span className="font-medium">
+                  {filteredDataSources.length}
+                </span>
               </div>
 
               <div className="flex items-center gap-2">

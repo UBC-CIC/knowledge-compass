@@ -20,7 +20,7 @@
  * wiring, RDS IAM-auth user setup, and image availability before deploying.
  */
 
-import { Stack, StackProps, RemovalPolicy, Duration, CustomResource, CfnOutput } from "aws-cdk-lib";
+import { Stack, StackProps, RemovalPolicy, Duration, CustomResource } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -38,9 +38,6 @@ export interface IngestionStackProps extends StackProps {
   stackPrefix: string;
   crawlerRepository: ecr.IRepository;
   transcriberRepository: ecr.IRepository;
-  // Temporary: keep the CICD stack export alive while the leftover
-  // KC-KnowledgeBase / prior Ingestion template in AWS still imports it.
-  vectorIndexManagerRepository: ecr.IRepository;
   // CodePipeline that builds the crawler/transcriber images (from CICDStack).
   // Used by the ECR image waiter to trigger a build if the image is missing.
   imageBuildPipelineName: string;
@@ -69,18 +66,6 @@ export class IngestionStack extends Stack {
   ) {
     super(scope, id, props);
 
-    // Keep importing this CICD ECR repo (ARN + name). `--all` deploys CICD first;
-    // if this stack stops importing, CICD drops the CloudFormation exports and
-    // the live Ingestion stack still using them rolls CICD back.
-    new CfnOutput(this, "LegacyVectorIndexManagerRepoArn", {
-      value: props.vectorIndexManagerRepository.repositoryArn,
-      description: "Temporary import of KC-CICD vectorIndexManager repo ARN; remove after KC-Ingestion no longer imports it in AWS",
-    });
-    new CfnOutput(this, "LegacyVectorIndexManagerRepoName", {
-      value: props.vectorIndexManagerRepository.repositoryName,
-      description: "Temporary import of KC-CICD vectorIndexManager repo name; remove after KC-Ingestion no longer imports it in AWS",
-    });
-
     // ── ECS cluster ──────────────────────────────────────────────────────────
     this.cluster = new ecs.Cluster(this, `${id}-Cluster`, {
       vpc: vpcStack.vpc,
@@ -107,7 +92,7 @@ export class IngestionStack extends Stack {
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.udp(53), "DNS UDP (AmazonProvidedDNS)");
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(53), "DNS TCP fallback");
 
-    // ── S3 ingest bucket (video uploads + transcript outputs) ──────────────────
+    // ── S3 ingest bucket (uploads, transcript outputs, Textract artifacts) ────
     const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -132,6 +117,15 @@ export class IngestionStack extends Stack {
           noncurrentVersionExpiration: Duration.days(3),
           expiredObjectDeleteMarker: true,
           abortIncompleteMultipartUploadAfter: Duration.days(3),
+        },
+        {
+          // Textract staging copies of fetched PDFs (deleted once read) and
+          // cached OCR text (lambda/knowledgeBase/helpers/pdf_text.py). This
+          // bounds how long extracted text outlives its source; an expired
+          // cache entry only means that PDF is OCR'd again on its next sync.
+          id: "ExpireTextractArtifacts",
+          prefix: "textract/",
+          expiration: Duration.days(30),
         },
       ],
     });

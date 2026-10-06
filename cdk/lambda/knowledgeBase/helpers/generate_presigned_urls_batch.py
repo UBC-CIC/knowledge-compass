@@ -5,6 +5,7 @@ import logging
 import boto3
 from botocore.config import Config
 from helpers.cors import get_cors_headers
+from helpers.upload_identity import sanitize_file_name
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -41,7 +42,7 @@ def _response(event, status_code: int, body: dict):
     }
 
 
-def _sanitize_file_name(file_name: str) -> str:
+def _base_name(file_name: str) -> str:
     return os.path.basename(file_name).strip()
 
 
@@ -67,12 +68,15 @@ def generate_presigned_urls_batch(event, body):
 
     timestamp = int(time.time())
     results = []
+    issued_keys = set()
 
     for i, entry in enumerate(files):
         file_name = entry.get("file_name", "")
         content_type = entry.get("content_type", "application/octet-stream")
 
-        file_name = _sanitize_file_name(file_name)
+        # `file_name` is echoed back for the caller to match results to its
+        # files; the S3 key uses the same sanitizer as single uploads.
+        file_name = _base_name(file_name)
         if not file_name:
             return _response(event, 400, {"error": f"files[{i}]: invalid or missing file_name"})
 
@@ -84,7 +88,12 @@ def generate_presigned_urls_batch(event, body):
             )
 
         prefix = _infer_upload_prefix(file_name, content_type)
-        key = f"{prefix}/{timestamp}_{file_name}"
+        key = f"{prefix}/{timestamp}_{sanitize_file_name(file_name)}"
+        # Names that sanitize alike ("a b.csv", "a_b.csv") must not overwrite
+        # each other's object; staging then rejects the second as a duplicate.
+        if key in issued_keys:
+            key = f"{prefix}/{timestamp}_{i}_{sanitize_file_name(file_name)}"
+        issued_keys.add(key)
 
         try:
             presigned_url = s3.generate_presigned_url(

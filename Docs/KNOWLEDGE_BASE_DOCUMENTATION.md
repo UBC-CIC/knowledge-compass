@@ -388,6 +388,93 @@ If validation passes, it inserts:
 3. A `pending` `ingestion_runs` row for the primary file
 4. A `pending` `ingestion_runs` row for the metadata JSON file
 
+### CSV row resources and linked content
+
+A CSV opts in to discrete row resources by configuring `url_column`. The CSV's original whole-file, content-defined chunks remain indexed exactly as before; row resources supplement rather than replace them. Once configured, **every row** is planned, including rows whose fetch URL cell is blank or invalid.
+
+| Field | Description |
+| --- | --- |
+| `url_column` | Feature gate and the single HTML/PDF URL to fetch for each row. A blank cell does not prevent row-only indexing. |
+| `row_id_column` | Optional stable identity across re-uploads. Without it, the normalized full row determines identity. |
+| `title_column` | Optional human title used for the row source and fetched content. |
+| `description_column` | Optional description included in row text and prepended to each row-specific fetched chunk. |
+| `citation_column` | Optional public URL shown to users. It is independent of the URL that was fetched. |
+
+All configured roles require `url_column` and are resolved against the CSV header exactly, then case-insensitively after trimming. Exact header spelling is stored in `data_sources.metadata`. Mapping-only changes trigger reprocessing even when file bytes are unchanged. Without `url_column`, staging still returns `suggested_url_column` when more than 80% of sampled non-empty values in a column are safe HTTP(S) URLs, but no row-resource work runs.
+
+#### Storage and chunk layout
+
+Three layers intentionally coexist:
+
+1. The uploaded CSV remains a `document` source with its existing grouped whole-row chunks.
+2. Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source. It is fetched once per CSV/session, preserves SSRF and robots protections, supports unchanged-content reuse, and is hidden from answer retrieval after row variants are available.
+3. Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` contains all non-empty descriptive columns except the fetch URL, citation URL, and stable ID. Chunks `1+` contain canonical fetched chunks with the row description prepended. Short row-only chunks are intentionally allowed below the normal 20-word document minimum.
+
+The row source stores the mapped title, description, columns, normalized fetch URL, resolved citation, CSV identity, and canonical chunk identity in source/chunk metadata. Multiple rows can therefore share one network fetch while remaining independently searchable and citeable. This duplicates row-specific fetched chunk/vector rows: for `R` rows sharing a page with `C` chunks, storage is approximately `R × C` row chunks plus the canonical `C` chunks. The writer deduplicates identical effective Cohere inputs within a batch and reuses unchanged vectors on re-ingest, but PostgreSQL/HNSW storage still scales with the duplicated chunk count.
+
+#### Citation and status semantics
+
+Citation resolution is row-local:
+
+1. A valid HTTP(S) value from `citation_column`.
+2. Otherwise, the normalized `url_column` value.
+3. Otherwise, no public URL; the user sees a titled, non-clickable resource card.
+
+An invalid non-empty citation value records `citation_warning` and safely follows the fallback chain. Valid citation fragments (for example `#page=12` or a section anchor) are preserved even though fragments are removed from fetch identity. Internal `csvrow://` identities are never exposed. Retrieval prefers chunk citation metadata, then source citation metadata, requires the owning row to be currently indexed, and pages past competing variants of the same canonical fetched chunk before final top-k selection.
+
+`csv_row_links.status` continues to describe fetching: `pending`, `success`, `failed`, or `skipped`. A blank URL is `skipped` with reason `no fetch URL`; invalid/failing URLs remain `failed`. Independent fields report row-resource indexing: `row_indexed`, `fetched_content_indexed`, `indexing_reason`, and `indexed_at`. A fetch failure does not remove chunk `0`; permanent failures remove stale fetched chunks while transient failures preserve previously indexed fetched content.
+
+The background worker indexes row-only resources in bounded batches, fetches each distinct URL with the existing safe HTTP client, materializes bounded sets of row variants, and uses continuations for remaining fetch or indexing work. Reconciliation preserves a stable row source when `row_key` survives and deletes orphaned row/canonical sources when rows or CSV data sources disappear.
+
+Per-row fetch and indexing state is available from `GET /admin/data_sources/{id}/links?status=&limit=&offset=`. The response preserves existing fields and adds configured roles, title/description, raw/resolved citation, citation warnings, and indexing diagnostics. The run metadata continues to receive `link_summary` or `link_error`.
+
+Limits (environment variables on the knowledge base Lambda):
+
+| Variable                        | Default  | Meaning                                                                  |
+| ------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `LINK_MAX_URLS_PER_CSV`         | 500      | Distinct URLs crawled per CSV; rows past the cap are `skipped`.           |
+| `LINK_REQUEST_TIMEOUT_SECONDS`  | 15       | Per connect/read.                                                        |
+| `LINK_TOTAL_TIMEOUT_SECONDS`    | 45       | Whole fetch of one URL, redirects included.                              |
+| `LINK_MAX_CONTENT_BYTES`        | 10485760 | Largest page/PDF (after decompression).                                  |
+| `LINK_MAX_REDIRECTS`            | 5        |                                                                          |
+| `LINK_CONCURRENCY`              | 8        | Parallel fetches per worker.                                             |
+| `LINK_PER_DOMAIN_CONCURRENCY`   | 2        | Parallel requests to one host.                                           |
+| `LINK_PER_DOMAIN_DELAY_SECONDS` | 1        | Minimum gap between requests to one host (a larger robots delay wins).   |
+| `LINK_MAX_CRAWL_DELAY_SECONDS`  | 10       | Cap on a robots.txt `Crawl-delay`.                                       |
+| `LINK_MAX_CONTINUATIONS`        | 20       | Times the worker re-invokes itself when out of time before giving up.    |
+
+#### Deployment and rollback
+
+Migration `017_csv_row_resources.js` is additive. Deploy and verify DBFlow first, then deploy the API/worker stack, then the frontend; re-sync existing configured CSVs to materialize their row resources. `cdk/bin/cdk.ts` declares the API stack's dependency on DBFlow so `cdk deploy --all` respects this order, but a phased production deployment is still preferred. CloudFormation does not run migration downs during rollback, PostgreSQL enum values are intentionally retained, and the migration down deletes row-resource content. Production recovery should therefore roll application code forward rather than invoke the down migration. Snapshot the database before any destructive future contract migration.
+
+### PDF text extraction
+
+Uploaded PDF documents and PDFs linked from CSV rows are read by `helpers/pdf_text.py`. Amazon Textract document analysis with the `LAYOUT` feature OCRs scanned and image-only pages, returns paragraphs in reading order across columns, and drops running headers, footers, and page numbers. pypdf's embedded text layer is the fallback, so a PDF that indexed before Textract still indexes when Textract is unavailable.
+
+`PDF_TEXTRACT_MODE` on the knowledge base Lambda (set in `cdk/lib/api-stack.ts`) controls when Textract runs:
+
+| Value | Behavior |
+| --- | --- |
+| `always` (default) | Every PDF is read with Textract. |
+| `auto` | Only PDFs whose embedded text is missing or unreadable on at least a quarter of their pages (under 20 words, or mostly non-letter characters). |
+| `off` | pypdf only, as before Textract was added. |
+
+How a PDF is read:
+
+* Single-page PDFs up to 10 MB use the synchronous `AnalyzeDocument` API. Anything else runs as an asynchronous `StartDocumentAnalysis` job: uploads are read in place, and fetched PDFs are first copied to `textract/input/` in the ingest bucket.
+* OCR waits are budgeted against the Lambda's remaining time, keeping 90 seconds for chunking, embedding, and database writes. An upload whose job is still running is handed to a fresh invocation of the document worker (up to 10 continuations). A linked PDF falls back to its embedded text; if it has none, its rows fail with a transient reason and keep previously indexed content.
+* Unfinished jobs are recorded under `textract/jobs/` by content hash, so a continuation, a retry, or the next sync picks up a running job instead of paying for a new one. Textract keeps async results for 7 days.
+* Finished results are cached under `textract/cache/` by content hash, so re-syncing an unchanged PDF does not run OCR again.
+* Files over Textract's limits (500 MB or 3,000 pages) skip Textract. Pages missing from a partially successful job use their embedded text.
+
+Everything under `textract/` expires after 30 days (lifecycle rule `ExpireTextractArtifacts` in `cdk/lib/ingestion-stack.ts`), so cached text of a deleted document can remain for up to that long.
+
+Each PDF document run records `ingestion_runs.metadata.pdf_extraction`: `engine` (`textract` or `pypdf`), `pages`, `characters`, `seconds`, and where relevant `cached`, `textract_job_id`, and a `note` explaining a fallback. It never contains document text. When a PDF yields no text, the run's `error_message` (or the CSV row's reason) says what was tried, for example `no extractable text (OCR found none)`, and suggests a retry when the cause was transient.
+
+Textract bills per page analyzed (see [Amazon Textract pricing](https://aws.amazon.com/textract/pricing/)). The cache avoids repeat charges for unchanged PDFs, and `auto` limits OCR to the PDFs that need it. Default request quotas are low outside the largest regions (for example 2 `StartDocumentAnalysis` and 1 `AnalyzeDocument` request per second), so the client retries throttled calls adaptively and large CSV link crawls slow down rather than fail.
+
+The shared `lambdaRole` is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
+
 ## Sync Sessions
 
 A sync session starts when an admin calls:

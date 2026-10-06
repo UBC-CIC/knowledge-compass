@@ -1,12 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   LineChart,
   Line,
@@ -17,8 +10,15 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { AuthService } from "@/functions/authService";
+import { ChartCard, CustomTooltip } from "@/components/Admin/analyticsCharts";
+import FeedbackSection, {
+  type FeedbackSectionData,
+} from "@/components/Admin/FeedbackSection";
 import {
   DEMO_ANALYTICS_SERIES,
+  DEMO_DISMISSED_FEEDBACK,
+  DEMO_RECENT_FEEDBACK,
+  DEMO_STARRED_FEEDBACK,
   isDemoMode,
 } from "@/lib/demo";
 
@@ -27,55 +27,23 @@ type TimeSeriesData = {
   users: number;
   chat_sessions: number;
   questions: number;
+  thumbs_up?: number;
+  thumbs_down?: number;
 };
 
-type AnalyticsData = {
+type AnalyticsTotals = {
+  users?: number;
+  chat_sessions?: number;
+  messages?: number;
+  questions?: number;
+  thumbs_up?: number;
+  thumbs_down?: number;
+};
+
+type AnalyticsData = FeedbackSectionData & {
   timeSeries: TimeSeriesData[];
+  totals?: AnalyticsTotals;
 };
-
-type ChartCardProps = {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-};
-
-function ChartCard({ title, subtitle, children }: ChartCardProps) {
-  return (
-    <Card className="overflow-hidden rounded-[13px] border-foreground/12 shadow-sm">
-      <CardHeader className="border-b border-foreground/10 pb-3">
-        <CardTitle className="text-base font-bold tracking-[-0.005em] text-foreground">
-          {title}
-        </CardTitle>
-        <CardDescription className="text-[13px]">{subtitle}</CardDescription>
-      </CardHeader>
-      <CardContent className="h-[300px] p-5">{children}</CardContent>
-    </Card>
-  );
-}
-
-function CustomTooltip({ active, payload, label }: any) {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-white border border-gray-200 p-3 rounded-lg shadow-xl text-sm">
-        <p className="font-semibold text-gray-900 mb-2">{label}</p>
-        {payload.map((entry: any, index: number) => (
-          <div
-            key={index}
-            className="flex items-center gap-2 text-xs text-gray-600 mb-1"
-          >
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: entry.color || entry.fill }}
-            />
-            <span className="capitalize">{entry.name}:</span>
-            <span className="font-bold text-gray-900">{entry.value}</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  return null;
-}
 
 const MAX_DAYS = 365;
 
@@ -99,14 +67,18 @@ export default function Analytics() {
       ? `timeRange=${lastDays}d`
       : `timeRange=${fromDaysAgo}d&endDaysAgo=${toDaysAgo}`;
 
-  useEffect(() => {
-    if (rangeInvalid) return;
-    fetchAnalytics();
-  }, [query, rangeInvalid]);
-
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async () => {
     if (isDemoMode) {
-      setAnalyticsData({ timeSeries: DEMO_ANALYTICS_SERIES });
+      setAnalyticsData({
+        timeSeries: DEMO_ANALYTICS_SERIES,
+        totals: {
+          thumbs_up: DEMO_ANALYTICS_SERIES.reduce((sum, d) => sum + d.thumbs_up, 0),
+          thumbs_down: DEMO_ANALYTICS_SERIES.reduce((sum, d) => sum + d.thumbs_down, 0),
+        },
+        recentFeedback: DEMO_RECENT_FEEDBACK,
+        starredFeedback: DEMO_STARRED_FEEDBACK,
+        dismissedFeedback: DEMO_DISMISSED_FEEDBACK,
+      });
       setLoading(false);
       setError(null);
       return;
@@ -136,7 +108,12 @@ export default function Analytics() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [query]);
+
+  useEffect(() => {
+    if (rangeInvalid) return;
+    fetchAnalytics();
+  }, [fetchAnalytics, rangeInvalid]);
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-6">
@@ -146,7 +123,8 @@ export default function Analytics() {
             Analytics
           </h1>
           <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-            Volume over time. No conversation content is shown here.
+            Volume and feedback over time. Select a comment to review the
+            reply it was left on.
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
@@ -238,6 +216,7 @@ export default function Analytics() {
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
         </div>
       ) : (
+        <>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* Total Users Chart */}
           <ChartCard
@@ -352,6 +331,8 @@ export default function Analytics() {
             </ResponsiveContainer>
           </ChartCard>
         </div>
+        <FeedbackSection data={analyticsData} />
+        </>
       )}
     </div>
   );

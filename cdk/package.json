@@ -1,13 +1,11 @@
 {
   "name": "cdk",
   "version": "0.1.0",
-  "bin": {
-    "cdk": "bin/cdk.js"
-  },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
+    "test:lambda": "node --test \"lambda/**/tests/*.test.js\"",
     "cdk": "cdk"
   },
   "devDependencies": {

@@ -147,7 +147,7 @@ export class ApiGatewayStack extends cdk.Stack {
         email: true,
       },
       userVerification: {
-        emailSubject: "Specialization Explorer - Verify your email",
+        emailSubject: "Knowledge Compass - Verify your email",
         emailBody: `
                     <html>
                         <head>
@@ -209,17 +209,17 @@ export class ApiGatewayStack extends cdk.Stack {
                         <body>
                             <div class="email-container">
                             <div class="header">
-                                <h1>Specialization Explorer</h1>
+                                <h1>Knowledge Compass</h1>
                             </div>
                             <div class="main-content">
-                                <p>Thank you for signing up for Specialization Explorer!</p>
+                                <p>Thank you for signing up for Knowledge Compass.</p>
                                 <p>Verify your email by using the code below:</p>
                                 <div class="code">{####}</div>
                                 <p>If you did not request this verification, please ignore this email.</p>
                             </div>
                             <div class="footer">
                                 <p>Please do not reply to this email.</p>
-                                <p>Specialization Explorer, 2025</p>
+                                <p>Knowledge Compass, Inclusion Canada</p>
                             </div>
                             </div>
                         </body>
@@ -1096,12 +1096,12 @@ export class ApiGatewayStack extends cdk.Stack {
       piiInputAction: 'ANONYMIZE',
       piiInputEnabled: true,
       promptAttackStrength: 'HIGH',
-      blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
+      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
     };
 
     const inputGuardrail = new bedrock.CfnGuardrail(this, 'InputGuardrail', {
       name: `${id}-input-guardrail`,
-      blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
+      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
       blockedOutputsMessaging: 'Response blocked.',
       sensitiveInformationPolicyConfig: {
         piiEntitiesConfig: [
@@ -1226,8 +1226,9 @@ export class ApiGatewayStack extends cdk.Stack {
       functionName: `${id}-lambdaKnowledgeBase`,
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "main.handler",
-      // pypdf/python-docx (helpers/process_document_batch.py's PDF/DOCX text
-      // extraction) are vendored directly into lambda/knowledgeBase/ as prebuilt
+      // pypdf/python-docx (the PDF fallback in helpers/pdf_text.py and DOCX
+      // text extraction in helpers/process_document_batch.py) are vendored
+      // directly into lambda/knowledgeBase/ as prebuilt
       // manylinux wheels (see requirements.txt) rather than pip-installed via
       // Docker bundling, so deploying this stack has no Docker dependency —
       // consistent with the rest of this zip-asset Lambda (boto3 from the
@@ -1237,6 +1238,8 @@ export class ApiGatewayStack extends cdk.Stack {
       // (helpers/process_document_batch.py) runs via an async self-invocation,
       // not behind API Gateway's 29s limit, so it needs headroom to chunk +
       // embed larger CSV/Markdown uploads. Synchronous routes are unaffected.
+      // Textract OCR waits are budgeted against this from the Lambda context;
+      // work that doesn't fit continues in a fresh self-invocation.
       timeout: Duration.seconds(600),
       role: lambdaRole,
       layers: [psycopgLayer],
@@ -1248,14 +1251,50 @@ export class ApiGatewayStack extends cdk.Stack {
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         REGION: this.region,
         LAMBDA_FUNCTION_NAME: `${id}-lambdaKnowledgeBase`,
+        // PDF text extraction (helpers/pdf_text.py): "always" reads every PDF
+        // with Amazon Textract, "auto" only PDFs without a usable text layer
+        // (scans, image-only exports), "off" uses pypdf alone.
+        PDF_TEXTRACT_MODE: "always",
+        // Guideline mode (helpers/guideline_document.py) labels each section
+        // of an uploaded guide with Haiku. Same SSM parameter name contract as
+        // lambdaTextGen; LLM_REGION matches lambdaTextGen's.
+        HAIKU_ARN: "/KC/LLM/HaikuArn",
+        LLM_REGION: this.region,
       },
     });
+
+    // Amazon Textract document analysis for PDF ingestion (helpers/pdf_text.py):
+    // AnalyzeDocument for single-page PDFs, Start/GetDocumentAnalysis for the
+    // rest. These actions have no resource-level permissions. Textract reads
+    // the ingest-bucket objects with this role's own S3 access
+    // (grantBucketAccess below), so no Textract service role is needed. Like
+    // the other statements here, this lands on the shared lambdaRole.
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        "textract:AnalyzeDocument",
+        "textract:StartDocumentAnalysis",
+        "textract:GetDocumentAnalysis",
+      ],
+      resources: ["*"],
+    }));
 
     lambdaKnowledgeBase.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+
+    // Guideline-mode section labelling reads the Haiku model id from SSM and
+    // calls Converse. lambdaKnowledgeBase shares lambdaRole with lambdaTextGen,
+    // which already holds the Bedrock Haiku statement (textGenBedrockPolicyStatement);
+    // this explicit SSM grant documents the dependency. Plain ARN strings, no
+    // token references back to the function (see the circular-dependency note below).
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`],
     }));
 
     // Self-invoke permission for the async document-ingestion worker

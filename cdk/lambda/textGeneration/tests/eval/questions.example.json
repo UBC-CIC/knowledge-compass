@@ -1,0 +1,28 @@
+[
+  {
+    "id": "j1-reduced-schedule-01",
+    "question": "The school says my daughter can only attend until lunch every day. Is that allowed and what can I do?",
+    "search_query": "involuntary partial day attendance reduced school schedule duty to accommodate decision in writing",
+    "expected": ["REPLACE-with-expected-url-fragment-or-exact-title"]
+  },
+  {
+    "id": "j1-pickup-call-01",
+    "question": "The school keeps calling me to pick up my son early. What should I say when they call?",
+    "expected": ["REPLACE-with-expected-url-fragment-or-exact-title"]
+  },
+  {
+    "id": "j1-rights-article24-01",
+    "question": "What does CRPD Article 24 say about inclusive education?",
+    "expected": ["REPLACE-with-expected-url-fragment-or-exact-title"]
+  },
+  {
+    "id": "j2-transition-01",
+    "question": "How do we plan the move from elementary to high school so supports carry over?",
+    "expected": ["REPLACE-with-expected-url-fragment-or-exact-title"]
+  },
+  {
+    "id": "j2-course-selection-01",
+    "question": "How can we keep graduation pathway options open when choosing grade 9 courses?",
+    "expected": ["REPLACE-with-expected-url-fragment-or-exact-title"]
+  }
+]

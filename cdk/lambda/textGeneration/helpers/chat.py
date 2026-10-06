@@ -5,11 +5,16 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
-    get_exchange_count, get_session_title, update_session_title
+    get_exchange_count, get_session_title, update_session_title, save_journey_state,
+    get_session_context, save_routing_state, get_guide_state, save_guide_state
 )
+from helpers.guideline_retrieval import GUIDELINE_SOURCE_TYPE, retrieve_guideline_sections
+from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
 from helpers.logic import get_current_prompt
+from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
-from helpers.retrieval import retrieve_from_pgvector
+from helpers.retrieval import retrieve_from_pgvector, to_public_source
+from helpers.citations import parse_cited_indices, select_cited_sources, strip_internal_links
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import check_limit, record_message_sent
@@ -20,60 +25,8 @@ logger.setLevel(logging.INFO)
 
 logger.info(f"boto3 version: {boto3.__version__}")
 
-def _rewrite_query_for_retrieval(
-    raw_query: str,
-    chat_history: List[Dict[str, Any]],
-    llm_region: str,
-    haiku_model_arn: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-) -> str:
-    """
-    Uses a fast, low-cost LLM call to rewrite a conversational user query into a
-    keyword-rich search query optimized for vector database retrieval.
-    Falls back to the raw query on any error.
-    """
-    # Build a condensed history string (last few exchanges only)
-    history_lines = []
-    for msg in chat_history[-10:]:
-        role = "User" if msg["sender"] == "user" else "Assistant"
-        history_lines.append(f"{role}: {msg['content']}")
-    history_block = "\n".join(history_lines) if history_lines else "(no prior conversation)"
-
-    rewrite_system_prompt = """
-<instructions>
-You are a search query optimizer for an inclusive-education knowledge base for families in Canada.
-Given the conversation history and the user's latest message, generate a short, keyword-rich search query to find relevant documents.
-Focus on the family's situation and needs — for example: involuntary partial day attendance, reduced school schedule, exclusion from activities, requesting decisions in writing, support/accommodation plans, school meetings, transitions, EA support, rights and advocacy, and escalation.
-Output ONLY the search query. Do not include explanations, preambles, or quotes.
-</instructions>
-"""
-
-    user_message = f"""
-<conversation_history>
-{history_block}
-</conversation_history>
-
-<latest_user_message>
-{raw_query}
-</latest_user_message>
-"""
-
-    try:
-        bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
-        response = bedrock_runtime.converse(
-            modelId=haiku_model_arn,
-            messages=[{"role": "user", "content": [{"text": user_message}]}],
-            system=[{"text": rewrite_system_prompt}],
-            inferenceConfig={
-                "maxTokens": 50,  
-                "temperature": 0.0
-            }
-        )
-        rewritten = response["output"]["message"]["content"][0]["text"].strip()
-        logger.info(f"Query rewrite: '{raw_query}' -> '{rewritten}'")
-        return rewritten if rewritten else raw_query
-    except Exception as e:
-        logger.warning(f"Query rewrite failed, using raw query: {e}")
-        return raw_query
+# Library resources offered alongside the guide sections in guideline mode.
+GUIDELINE_RESOURCE_COUNT = 6
 
 def _generate_session_title(
     query: str,
@@ -131,10 +84,15 @@ def _prepare_conversation(
     user_id: Optional[str],
     db_connection,
     save_user_message: bool = True
-) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, str, List[Dict[str, Any]], str, str, Dict[str, Any]]:
     """
-    Handles validation, history fetching, user msg saving, retrieval, and prompt construction.
-    Returns: (bedrock_messages, full_system_prompt, sources, phase_name)
+    Handles validation, history fetching, user msg saving, routing, retrieval, and
+    prompt construction.
+    Returns: (bedrock_messages, static_system_prompt, dynamic_prompt, sources,
+              phase_name, model_arn, routing_ctx)
+      - phase_name is the public phase ("DETECTIVE" | "SUGGESTION")
+      - routing_ctx carries the internal phase, route and prior routing state so
+        the caller can persist the next routing state after generation.
     """
     # 1. Validation
     if not query or not query.strip():
@@ -162,20 +120,54 @@ def _prepare_conversation(
         logger.error(f"DB Error: {e}")
         raise
 
-    # 4. Determine Phase & Prompt
-    static_system_prompt, num_retrieval_results, phase_name, phase_instructions, model_arn= get_current_prompt(
-        chat_session_id,
-        db_connection
+    # Guideline mode (migration 031): answer only from uploaded guides. Skips
+    # the router, phases, journey catalog and corpus retrieval entirely.
+    if config.PROMPT_MODE == "guideline":
+        return _prepare_guideline_conversation(query, region, chat_session_id, db_connection, raw_history)
+
+    # 4. Load session context. The user message is already saved, so the
+    #    count equals the number of completed exchanges before this message.
+    exchange_count = get_exchange_count(chat_session_id, db_connection)
+    journey_state, stored_routing = get_session_context(db_connection, chat_session_id)
+    routing_state = RoutingState.from_metadata(
+        stored_routing, exchange_count, config.MIN_EXCHANGES_BEFORE_SUGGEST
     )
 
-    # 5. Rewrite query for better retrieval
-    search_query = _rewrite_query_for_retrieval(
+    # 5. Route the turn: retrieval query + routing signals in one Haiku call.
+    #    None on failure -> raw query and the count-based phase rule.
+    route = route_turn(
         raw_query=query,
         chat_history=raw_history,
-        llm_region=llm_region
+        previous_state=journey_state,
+        llm_region=llm_region,
+        model_id=config.HAIKU_ARN,
+        catalog=config.JOURNEY_CATALOG,
+    )
+    search_query = route.search_query if route else query
+
+    phase = decide_phase(
+        route=route,
+        exchange_count=exchange_count,
+        state=routing_state,
+        routing_mode=config.ROUTING_MODE,
+        floor=config.MIN_EXCHANGES_BEFORE_ANSWER,
+        ceiling=config.MIN_EXCHANGES_BEFORE_SUGGEST,
+    )
+    logger.info(
+        "Routing: mode=%s phase=%s exchange_count=%d router_ok=%s",
+        config.ROUTING_MODE, phase, exchange_count, route is not None,
     )
 
-    # 6. RAG Retrieval (using rewritten query)
+    # 6. Build the phase prompt.
+    static_system_prompt, num_retrieval_results, phase_name, phase_instructions, model_arn = get_current_prompt(
+        phase=phase,
+        exchange_count=exchange_count,
+        journey_state=journey_state,
+        route=route,
+    )
+    routing_ctx = {"phase": phase, "route": route, "state": routing_state}
+
+    # 7. RAG Retrieval (using the routed query)
     sources = retrieve_from_pgvector(
         search_query,
         db_connection,
@@ -183,10 +175,10 @@ def _prepare_conversation(
         num_results=num_retrieval_results,
     )
 
-    # 7. Build Context
+    # 8. Build Context
     context_block = format_context_for_prompt(sources)
     
-    # 8. Construct Final System Prompt.
+    # 9. Construct Final System Prompt.
     # The phase block (from logic.get_current_prompt) already carries the
     # phase-appropriate <output_format> — including the <answer>/<cited_indices>
     # contract for the suggestion phase — so chat.py only appends retrieved context.
@@ -197,7 +189,7 @@ def _prepare_conversation(
 </retrieved_context>
 """
 
-    # 9. Build Messages
+    # 10. Build Messages
     bedrock_messages = []
     for msg in raw_history:
         role = "user" if msg["sender"] == "user" else "assistant"
@@ -212,7 +204,61 @@ def _prepare_conversation(
         "content": [{"text": query}]
     })
 
-    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn
+    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx
+
+def _prepare_guideline_conversation(
+    query: str,
+    region: str,
+    chat_session_id: str,
+    db_connection,
+    raw_history: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], str, str, List[Dict[str, Any]], str, str, Dict[str, Any]]:
+    """
+    Guideline-mode counterpart of the routing/phase/retrieval steps of
+    _prepare_conversation. Returns the same tuple; the public phase is always
+    "SUGGESTION" so the <answer>/<cited_indices> streaming contract applies.
+    """
+    previous_section = get_guide_state(db_connection, chat_session_id)
+    sections = retrieve_guideline_sections(
+        query,
+        db_connection,
+        region,
+        previous_section=previous_section,
+    )
+    # Supporting library resources (videos, documents, web pages, CSV rows)
+    # from the regular corpus. Guides are hidden from this search, so there
+    # is no overlap. Searched with the situation name when one is known, so
+    # follow-ups still find resources for the same situation.
+    resource_query = query
+    if previous_section and previous_section.get("label"):
+        resource_query = f"{query}\n\n{previous_section['label']}"
+    resources = retrieve_from_pgvector(
+        resource_query,
+        db_connection,
+        region,
+        num_results=GUIDELINE_RESOURCE_COUNT,
+    )
+    static_system_prompt, dynamic_prompt, model_arn = build_guideline_prompt(
+        sections, previous_section, resources
+    )
+    logger.info(
+        "Routing: mode=guideline sections=%d resources=%d previous_section=%s",
+        len(sections), len(resources), bool(previous_section),
+    )
+
+    bedrock_messages = []
+    for msg in raw_history:
+        role = "user" if msg["sender"] == "user" else "assistant"
+        if msg["content"]:
+            bedrock_messages.append({"role": role, "content": [{"text": msg["content"]}]})
+    bedrock_messages.append({"role": "user", "content": [{"text": query}]})
+
+    routing_ctx = {"mode": "guideline", "previous_section": previous_section}
+    # One combined list: guide sections [1..n], then resources [n+1..], the
+    # same numbering the prompt uses for <cited_indices>.
+    sources = list(sections) + list(resources)
+    return bedrock_messages, static_system_prompt, dynamic_prompt, sources, "SUGGESTION", model_arn, routing_ctx
+
 
 def _save_ai_response(
     db_connection,
@@ -222,19 +268,13 @@ def _save_ai_response(
     warning_text: Optional[str] = None,
 ):
     try:
-        sources_for_db = []
-        for s in sources:
-            s_copy = s.copy()
-            if 'content' in s_copy and isinstance(s_copy['content'], str):
-                s_copy['content'] = s_copy['content']
-            sources_for_db.append(s_copy)
-
+        # `sources` is already the trimmed public projection (to_public_source).
         insert_message(
             db_connection,
             chat_session_id,
             "AI",
             answer_text,
-            sources_for_db,
+            list(sources),
             warning_text
         )
         update_last_active_session(db_connection, chat_session_id)
@@ -314,7 +354,7 @@ def get_response(
             if guardrail_result['action'] == ACTION_ANONYMIZED:
                 query = guardrail_result['text']
 
-        bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn = _prepare_conversation(
+        bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx = _prepare_conversation(
             query,
             region,
             llm_region,
@@ -367,7 +407,6 @@ def get_response(
     if model_arn == config.SONNET_ARN:
         request_payload["additionalModelRequestFields"] = {
             "thinking" : {"type": "disabled"},
-            "output_config": {"effort": "low"}
         }
 
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
@@ -378,6 +417,14 @@ def get_response(
     answer_text = ""
     cited_indices = []
     expect_answer_tags = phase_name == "SUGGESTION"
+    is_guideline = routing_ctx.get("mode") == "guideline"
+    # Hidden metadata tags that must never reach the stream. Guideline mode
+    # adds <guide_state>; standard mode keeps its original tag lists.
+    stream_stop_tags = ["</answer>", "<cited", "<detective_state"]
+    stream_hold_tags = ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]
+    if is_guideline:
+        stream_stop_tags.append("<guide_state")
+        stream_hold_tags.extend(["<guide_state>", "</guide_state>"])
 
     try:
         response = bedrock_runtime.converse_stream(**request_payload)
@@ -388,8 +435,10 @@ def get_response(
                     chunk = delta["text"]
                     full_response_text += chunk
 
-                    # Detective replies are plain text. Suggestion replies wrap
-                    # the visible answer in <answer> tags — don't stream those tags.
+                    # Detective replies are plain text followed by a hidden
+                    # <detective_state> tag. Suggestion replies wrap the visible
+                    # answer in <answer> tags. In both cases, stop streaming
+                    # before hidden metadata tags.
                     if expect_answer_tags:
                         if "<answer>" in full_response_text:
                             answer_started = True
@@ -401,9 +450,9 @@ def get_response(
                     else:
                         target_text = full_response_text
                         
-                    # 2. Stop extracting if we hit a closing tag
+                    # 2. Stop extracting if we hit a closing tag or hidden metadata tag
                     stop_found = False
-                    for stop_tag in ["</answer>", "<cited"]:
+                    for stop_tag in stream_stop_tags:
                         stop_idx = target_text.find(stop_tag)
                         if stop_idx != -1:
                             target_text = target_text[:stop_idx]
@@ -412,7 +461,7 @@ def get_response(
                     # 3. Prevent partial tags at the end of the chunk from leaking
                     if not stop_found:
                         held_back = 0
-                        for stop_tag in ["</answer>", "<cited_indices>", "</cited_indices>", "<cited"]:
+                        for stop_tag in stream_hold_tags:
                             for i in range(1, len(stop_tag)):
                                 if target_text.endswith(stop_tag[:i]):
                                     held_back = max(held_back, i)
@@ -433,32 +482,47 @@ def get_response(
         if final_answer_match:
             answer_text = final_answer_match.group(1).strip()
         else:
-            answer_text = full_response_text.split('<cited_indices>')[0].strip()
+            # Detective phase: strip any trailing <detective_state> tag from saved text
+            answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
             
-        # Parse cited_indices
-        indices_match = re.search(r'<cited_indices>\s*\[(.*?)\]\s*</cited_indices>', full_response_text, re.DOTALL)
-        if indices_match:
-            indices_str = indices_match.group(1).strip()
-            if indices_str:
-                try:
-                    cited_indices = [int(x.strip()) for x in indices_str.split(',')]
-                except ValueError:
-                    pass
+        # Parse cited_indices tolerantly: one malformed token must not drop
+        # every citation.
+        parsed_indices = parse_cited_indices(full_response_text)
+        if parsed_indices is not None:
+            cited_indices = parsed_indices
+        elif sources and "<answer>" in full_response_text:
+            # Guidance reply without the citation block: sources can't be shown.
+            logger.warning(
+                "Guidance reply had no <cited_indices> block (phase=%s, retrieved=%d)",
+                phase_name,
+                len(sources),
+            )
 
     except Exception as e:
         logger.error(f"Generation Failed: {e}")
         answer_text = "I encountered an error generating the response."
         cited_indices = []
 
-    used_sources = []
-    for i, source in enumerate(sources, 1):
-        if i in cited_indices:
-            used_sources.append(source)
+    # Full cited sources feed the grounding verifier; only the trimmed public
+    # projection is streamed to the client and persisted with the message.
+    # Guide citations stay internal: they ground the answer but are never
+    # streamed or saved, so families never see guide names. The section in
+    # use is still recorded for admins in chat_sessions.metadata.guide_state.
+    used_sources = select_cited_sources(sources, cited_indices)
+    public_sources = [
+        to_public_source(source)
+        for source in used_sources
+        if source.get("source_type") != GUIDELINE_SOURCE_TYPE
+    ]
 
     warning_text = None
     intervention_result = None
 
-    if phase_name == "SUGGESTION" and answer_text and not answer_text.startswith("I encountered an error"):
+    # Guideline mode: a clarifying question cites no section, so there is
+    # nothing to verify; answers are checked against the full sections.
+    run_grounding_check = phase_name == "SUGGESTION" and (not is_guideline or bool(used_sources))
+
+    if run_grounding_check and answer_text and not answer_text.startswith("I encountered an error"):
         try:
             intervention_result = assess_response(
                 query=query,
@@ -472,15 +536,84 @@ def get_response(
             warning_text = None
             intervention_result = None
             
-    final_answer_text = answer_text
+    # Older history turns may contain internal links the model could echo.
+    final_answer_text = strip_internal_links(answer_text)
 
     _save_ai_response(
         db_connection,
         chat_session_id,
         final_answer_text,
-        used_sources,
+        public_sources,
         warning_text
     )
+
+    # Guideline mode keeps its own state (the chosen section) under
+    # metadata.guide_state and never touches journey/routing state.
+    if is_guideline:
+        guide_state = parse_guide_state(full_response_text, sources)
+        logger.info(
+            "Guideline turn: sources=%d cited=%d selected_section=%s",
+            len(sources), len(used_sources), guide_state["section_key"] if guide_state else None,
+        )
+        if guide_state and answer_text and not answer_text.startswith("I encountered an error"):
+            try:
+                save_guide_state(db_connection, chat_session_id, guide_state)
+                db_connection.commit()
+            except Exception as e:
+                db_connection.rollback()
+                logger.warning(f"Failed to save guide state: {type(e).__name__}")
+
+    # Extract and persist journey state for multi-turn context.
+    # Suggestion phase: <journey_state> after <cited_indices>.
+    # Detective phase: <detective_state> after the visible response.
+    # Both are never streamed to the user.
+    if full_response_text and not is_guideline:
+        try:
+            state_text = None
+            if phase_name == "SUGGESTION":
+                state_match = re.search(
+                    r'<journey_state>(.*?)</journey_state>',
+                    full_response_text,
+                    re.DOTALL
+                )
+                if state_match:
+                    state_text = state_match.group(1).strip()
+            elif phase_name == "DETECTIVE":
+                state_match = re.search(
+                    r'<detective_state>(.*?)</detective_state>',
+                    full_response_text,
+                    re.DOTALL
+                )
+                if state_match:
+                    state_text = state_match.group(1).strip()
+
+            if state_text:
+                save_journey_state(db_connection, chat_session_id, state_text)
+                db_connection.commit()
+        except Exception as e:
+            db_connection.rollback()
+            logger.warning(f"Failed to save journey state: {e}")
+
+    # Advance routing state only after a successful reply, so a failed
+    # generation does not count as a question asked or guidance given.
+    if not is_guideline and answer_text and not answer_text.startswith("I encountered an error"):
+        try:
+            # Journey/situation keys only (no text) for feedback analytics.
+            journeys_touched, clusters_touched = touched_keys(
+                routing_ctx["route"], routing_ctx["phase"], config.JOURNEY_CATALOG
+            )
+            next_state = routing_ctx["state"].advance(
+                routing_ctx["phase"], journeys_touched, clusters_touched
+            )
+            save_routing_state(
+                db_connection,
+                chat_session_id,
+                next_state.to_metadata(routing_ctx["route"]),
+            )
+            db_connection.commit()
+        except Exception as e:
+            db_connection.rollback()
+            logger.warning(f"Failed to save routing state: {e}")
 
     generated_title = None
     if final_answer_text and not final_answer_text.startswith("I encountered an error"):
@@ -499,7 +632,7 @@ def get_response(
     return {
         "response": final_answer_text,
         "raw_response": answer_text,
-        "sources_used": used_sources,
+        "sources_used": public_sources,
         "sessionId": chat_session_id,
         "is_first_message": False,
         "message_usage": usage_info,

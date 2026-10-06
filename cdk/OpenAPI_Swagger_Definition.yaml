@@ -203,7 +203,6 @@ paths:
         type: aws_proxy
       x-amazon-apigateway-request-validator: all
 
-
   /admin/users/{userId}/chat_sessions:
     <<: *commonOptions
     get:
@@ -288,6 +287,94 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/feedback/{chat_session_id}/message:
+    <<: *commonOptions
+    get:
+      tags:
+        - Admin
+      summary: Get only the assistant reply a conversation's feedback was left on
+      description: >-
+        Returns { message, inferred }. message is null if no reply is found.
+        inferred is true for older feedback saved before the reply was linked,
+        where the last reply before the feedback is used instead.
+      operationId: get_admin_feedback_message
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The rated assistant reply
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "404":
+          description: Feedback not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/feedback/{chat_session_id}:
+    <<: *commonOptions
+    put:
+      tags:
+        - Admin
+      summary: Star or dismiss a conversation's feedback (shared by all admins)
+      description: >-
+        Dismissing also removes the star. Dismissed feedback still counts in
+        analytics totals. The response never includes the comment text.
+      operationId: put_admin_feedback_triage
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                starred:
+                  type: boolean
+                dismissed:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated triage state ({ chat_session_id, starred, dismissed })
+        "400":
+          description: Invalid id or body
+        "401":
+          description: Unauthorized
+        "404":
+          description: Feedback not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/data_sources:
     <<: *commonOptions
     get:
@@ -316,7 +403,8 @@ paths:
                             name: { type: string }
                             type:
                               type: string
-                              enum: [website, csv, markdown, json, video, document]
+                              enum:
+                                [website, csv, markdown, json, video, document]
                             created_at: { type: string }
                             metadata:
                               type: object
@@ -337,7 +425,8 @@ paths:
                             data_source_id: { type: string }
                             status:
                               type: string
-                              enum: [pending, queued, running, failed, completed]
+                              enum:
+                                [pending, queued, running, failed, completed]
                             error_message:
                               type: string
                               nullable: true
@@ -407,6 +496,35 @@ paths:
                 metadata_s3_key:
                   type: string
                   example: uploads/json/1712345678_alumni_data_final.csv.metadata.json
+                url_column:
+                  type: string
+                  description: >-
+                    CSV only. Column whose http(s) links are fetched (HTML/PDF) and
+                    indexed with the row's other columns as metadata. Omit to ingest
+                    the CSV without crawling links.
+                  example: website
+                row_id_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Column that identifies a row across
+                    re-uploads; defaults to a hash of the whole row.
+                  example: id
+                title_column:
+                  type: string
+                  description: CSV only, with url_column. Human-readable resource title column.
+                  example: title
+                description_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Resource description column; prepended
+                    to fetched content for row-specific retrieval.
+                  example: description
+                citation_column:
+                  type: string
+                  description: >-
+                    CSV only, with url_column. Public http(s) URL shown in citations;
+                    invalid or blank values safely fall back to the fetched URL.
+                  example: public_url
                 video_file_name:
                   type: string
                   example: family-rights-webinar.mp4
@@ -429,10 +547,17 @@ paths:
                   example: uploads/document/1712345678_family-rights-handbook.pdf
                 document_url:
                   type: string
+                  description: >-
+                    Required when type is document. Public http(s) URL where users can
+                    open the document; shown as its citation link.
                   example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
-          description: Data source(s) staged successfully
+          description: >-
+            Data source(s) staged successfully. A csv/markdown/document/video file
+            uploaded under the same name as an existing source replaces it in place
+            (action starts with "replaced_"); a byte-identical re-upload is not
+            re-processed (action "unchanged" or "unchanged_*").
           content:
             application/json:
               schema:
@@ -444,19 +569,26 @@ paths:
                     type: string
                   type:
                     type: string
-                    enum: [website, csv, markdown, video]
+                    enum: [website, csv, markdown, video, document]
                   created_by:
                     type: string
                   staged_data_source_ids:
                     type: array
                     items:
                       type: string
+                  suggested_url_column:
+                    type: string
+                    nullable: true
+                    description: >-
+                      CSV only: a column where more than 80% of sampled values are
+                      http(s) URLs. A hint for setting url_column; nothing is crawled
+                      unless url_column is set.
         "400":
           description: Invalid request
         "404":
           description: Route not found
         "409":
-          description: Conflict
+          description: Conflict (website already exists, file already staged, or the source it would replace is still being ingested)
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -653,7 +785,16 @@ paths:
                   maxItems: 100
                   items:
                     type: object
-                    required: [type, primary_file_name, primary_s3_bucket, primary_s3_key, metadata_file_name, metadata_s3_bucket, metadata_s3_key]
+                    required:
+                      [
+                        type,
+                        primary_file_name,
+                        primary_s3_bucket,
+                        primary_s3_key,
+                        metadata_file_name,
+                        metadata_s3_bucket,
+                        metadata_s3_key,
+                      ]
                     properties:
                       type:
                         type: string
@@ -664,6 +805,11 @@ paths:
                       metadata_file_name: { type: string }
                       metadata_s3_bucket: { type: string }
                       metadata_s3_key: { type: string }
+                      url_column: { type: string }
+                      row_id_column: { type: string }
+                      title_column: { type: string }
+                      description_column: { type: string }
+                      citation_column: { type: string }
       responses:
         "200":
           description: Batch staging complete
@@ -674,9 +820,17 @@ paths:
                 properties:
                   message: { type: string }
                   staged_count: { type: integer }
+                  replaced_count: { type: integer }
+                  unchanged_count: { type: integer }
                   skipped_count: { type: integer }
                   error_count: { type: integer }
                   staged:
+                    type: array
+                    items: { type: object }
+                  replaced:
+                    type: array
+                    items: { type: object }
+                  unchanged:
                     type: array
                     items: { type: object }
                   skipped:
@@ -749,6 +903,107 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /admin/data_sources/{id}/links:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Per-row crawl status of the links in a CSV data source's url_column
+      operationId: get_data_source_links
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, success, failed, skipped]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Link and row-indexing status summary with one entry per CSV row
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data_source_id: { type: string }
+                  url_column: { type: string, nullable: true }
+                  row_id_column: { type: string, nullable: true }
+                  title_column: { type: string, nullable: true }
+                  description_column: { type: string, nullable: true }
+                  citation_column: { type: string, nullable: true }
+                  summary:
+                    type: object
+                    properties:
+                      pending: { type: integer }
+                      success: { type: integer }
+                      failed: { type: integer }
+                      skipped: { type: integer }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row_key: { type: string }
+                        row_number: { type: integer }
+                        url: { type: string }
+                        normalized_url: { type: string, nullable: true }
+                        status:
+                          type: string
+                          enum: [pending, success, failed, skipped]
+                        reason: { type: string, nullable: true }
+                        http_status: { type: integer, nullable: true }
+                        content_type: { type: string, nullable: true }
+                        fetched_at: { type: string, nullable: true }
+                        raw_citation_url: { type: string, nullable: true }
+                        citation_url: { type: string, nullable: true }
+                        citation_warning: { type: string, nullable: true }
+                        title: { type: string, nullable: true }
+                        description: { type: string, nullable: true }
+                        row_indexed: { type: boolean }
+                        fetched_content_indexed: { type: boolean }
+                        indexing_reason: { type: string, nullable: true }
+                        indexed_at: { type: string, nullable: true }
+                        row_metadata:
+                          type: object
+                          additionalProperties: true
+        "400":
+          description: Invalid request, or the data source is not a CSV
+        "404":
+          description: Data source not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/data_sources/{id}:
     <<: *commonOptions
     delete:
@@ -794,6 +1049,241 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  # Guideline mode (migration 031; lambda/knowledgeBase/helpers/guideline_admin.py).
+  # Runs alongside the standard prompt system; PUT /admin/guideline/mode picks
+  # which one the public chat uses.
+  /admin/guideline:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Guideline mode, uploaded guides and their detected situations
+      operationId: get_guideline
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: Guideline mode state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [standard, guideline] }
+                  mode_updated_by: { type: string, nullable: true }
+                  mode_updated_at: { type: string, nullable: true }
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        file_name: { type: string }
+                        status:
+                          { type: string, enum: [processing, ready, failed] }
+                        error: { type: string, nullable: true }
+                        section_count: { type: integer }
+                        sections:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              section_key: { type: string }
+                              heading_path: { type: string, nullable: true }
+                              auto_label: { type: string }
+                              label_override: { type: string, nullable: true }
+                              label: { type: string }
+                              summary: { type: string, nullable: true }
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/upload-url:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Presigned PUT URL for a guide file (.md up to 1 MB, .docx or .pdf up to 10 MB)
+      operationId: create_guideline_upload_url
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_name]
+              properties:
+                file_name: { type: string }
+                content_type: { type: string }
+      responses:
+        "200":
+          description: Presigned URL and the server-generated object key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  presignedUrl: { type: string }
+                  key: { type: string }
+                  contentType: { type: string }
+                  maxBytes: { type: integer }
+        "400":
+          description: Not a Markdown, Word (.docx) or PDF file
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/documents:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Register an uploaded guide (new or replacing an existing one) and start reading it
+      operationId: register_guideline_document
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [s3_key, file_name]
+              properties:
+                s3_key: { type: string }
+                file_name: { type: string }
+                replace_document_id: { type: string, format: uuid }
+      responses:
+        "202":
+          description: Guide accepted; status is processing
+        "400":
+          description: Invalid key, file type or size
+        "404":
+          description: Guide to replace not found
+        "500":
+          description: Internal Server Error
+        "502":
+          description: Could not start processing
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/documents/{id}:
+    <<: *commonOptions
+    delete:
+      tags: [Admin]
+      summary: Remove a guide, its detected situations and its search chunks
+      operationId: delete_guideline_document
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Guide removed
+        "400":
+          description: Invalid id
+        "404":
+          description: Guide not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/sections/{id}:
+    <<: *commonOptions
+    patch:
+      tags: [Admin]
+      summary: Rename a detected situation (empty label resets to the detected name)
+      operationId: rename_guideline_section
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+      responses:
+        "200":
+          description: Label saved
+        "400":
+          description: Invalid id or label
+        "404":
+          description: Situation not found
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/guideline/mode:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Choose which prompt system the public chat uses
+      operationId: set_guideline_mode
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [standard, guideline] }
+      responses:
+        "200":
+          description: Mode saved (applies to chat within about 5 minutes)
+        "400":
+          description: Invalid mode
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/system-settings:
     <<: *commonOptions
     get:
@@ -813,6 +1303,8 @@ paths:
                   id: { type: string }
                   max_messages_per_day: { type: integer }
                   min_messages_before_suggest: { type: integer }
+                  routing_mode: { type: string, enum: [fixed, dynamic] }
+                  min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
@@ -846,7 +1338,16 @@ paths:
               type: object
               properties:
                 max_messages_per_day: { type: integer }
-                min_messages_before_suggest: { type: integer }
+                min_messages_before_suggest:
+                  type: integer
+                  description: Fixed mode - exchange that switches to guidance. Dynamic mode - guidance by this exchange at the latest.
+                routing_mode:
+                  type: string
+                  enum: [fixed, dynamic]
+                  description: fixed uses the exchange count only; dynamic lets the per-turn router decide.
+                min_exchanges_before_answer:
+                  type: integer
+                  description: Dynamic mode floor (questions before guidance, urgent turns bypass it). Must be <= min_messages_before_suggest.
                 max_characters_per_user_message: { type: integer }
                 max_characters_per_ai_message: { type: integer }
                 temperature: { type: number }
@@ -866,6 +1367,8 @@ paths:
                   id: { type: string }
                   max_messages_per_day: { type: integer }
                   min_messages_before_suggest: { type: integer }
+                  routing_mode: { type: string, enum: [fixed, dynamic] }
+                  min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
@@ -933,6 +1436,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       content:
@@ -1033,6 +1537,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
       requestBody:
@@ -1142,6 +1647,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
         - name: version_id
@@ -1199,6 +1705,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       version:
@@ -1253,6 +1760,7 @@ paths:
               - suggestion_phase_prompt
               - output_format_detective
               - output_format_suggestion
+              - output_format_partial
               - welcome_message
               - disclaimer
         - name: version_id
@@ -1322,6 +1830,7 @@ paths:
                           - suggestion_phase_prompt
                           - output_format_detective
                           - output_format_suggestion
+                          - output_format_partial
                           - welcome_message
                           - disclaimer
                       content:
@@ -1407,6 +1916,389 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  # Journeys and situation clusters (handlers/utils/journeyPrompts.js, migration 024).
+  /admin/journeys:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: List journeys with their situation clusters and prompt versions (archived included)
+      operationId: get_admin_journeys
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: Journey tree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  journeys:
+                    type: array
+                    description: >-
+                      Journeys (id, key, name, description, detection_signals, sort_order,
+                      is_archived, prompts.{detective_questions,guidance}[], clusters[] with
+                      id, key, name, matches_when, sort_order, is_archived,
+                      prompts.response_pattern[]). Each prompt version has id, field,
+                      owner_id, content, character_limit, version, is_active,
+                      created_by_email, created_at.
+                    items:
+                      type: object
+        "403":
+          description: Forbidden - Not an admin
+        "503":
+          description: Journey tables are not set up yet (migration 024 not run)
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      tags: [Admin]
+      summary: Create a journey (optionally with its first detective questions and guidance versions)
+      operationId: create_admin_journey
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name]
+              properties:
+                key:
+                  type: string
+                  pattern: "^[A-Z0-9_]{1,16}$"
+                  description: Immutable key; BOTH, UNCLEAR, UNKNOWN and NONE are reserved
+                name:
+                  type: string
+                  maxLength: 120
+                description:
+                  type: string
+                  maxLength: 2000
+                detection_signals:
+                  type: string
+                  maxLength: 4000
+                sort_order:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                detective_questions:
+                  type: string
+                guidance:
+                  type: string
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+        "400":
+          description: Invalid input
+        "409":
+          description: Key already exists
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/feedback:
+    <<: *commonOptions
+    get:
+      tags: [Admin]
+      summary: Thumbs up/down counts per journey and situation cluster (counts only, no message text)
+      operationId: get_admin_journey_feedback
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: timeRange
+          in: query
+          required: false
+          description: Window such as 7d, 30d (default), 3m, 1y (max 365 days) or "all"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Feedback counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days:
+                    type: integer
+                    description: Window in days (null for all time)
+                  journeys:
+                    type: array
+                    description: "{ key, name, is_archived, up, down, sessions }"
+                    items:
+                      type: object
+                  clusters:
+                    type: array
+                    description: "{ key, name, journey_key, is_archived, up, down, sessions }"
+                    items:
+                      type: object
+                  untagged:
+                    type: object
+                    description: "{ up, down, sessions } for sessions with no journey recorded"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/{journey_id}:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Update journey metadata or archive/restore it
+      operationId: update_admin_journey
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: journey_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                detection_signals:
+                  type: string
+                sort_order:
+                  type: integer
+                is_archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated
+        "400":
+          description: Invalid input, or archiving the last active journey
+        "404":
+          description: Journey not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journeys/{journey_id}/clusters:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Add a situation cluster to a journey (optionally with its first response pattern version)
+      operationId: create_admin_journey_cluster
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: journey_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name, matches_when]
+              properties:
+                key:
+                  type: string
+                  pattern: "^[A-Z0-9_]{1,16}$"
+                name:
+                  type: string
+                  maxLength: 120
+                matches_when:
+                  type: string
+                  maxLength: 2000
+                sort_order:
+                  type: integer
+                response_pattern:
+                  type: string
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Invalid input
+        "404":
+          description: Journey not found
+        "409":
+          description: Key already exists
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/clusters/{cluster_id}:
+    <<: *commonOptions
+    put:
+      tags: [Admin]
+      summary: Update situation cluster metadata or archive/restore it
+      operationId: update_admin_cluster
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: cluster_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                matches_when:
+                  type: string
+                sort_order:
+                  type: integer
+                is_archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated
+        "400":
+          description: Invalid input
+        "404":
+          description: Situation not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Save a new active version of a journey or situation prompt field
+      operationId: create_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [field, owner_id, content]
+              properties:
+                field:
+                  type: string
+                  enum: [detective_questions, guidance, response_pattern]
+                owner_id:
+                  type: string
+                  format: uuid
+                  description: Journey id for detective_questions/guidance, cluster id for response_pattern
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Created version
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The new version (id, field, owner_id, content, character_limit, version, is_active, created_by_email, created_at)
+        "400":
+          description: Invalid input or content exceeds character_limit
+        "404":
+          description: Journey or situation not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts/{version_id}:
+    <<: *commonOptions
+    delete:
+      tags: [Admin]
+      summary: Delete a non-active journey or situation prompt version
+      operationId: delete_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deleted
+        "400":
+          description: Cannot delete the active version
+        "404":
+          description: Version not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
+  /admin/journey-prompts/{version_id}/activate:
+    <<: *commonOptions
+    post:
+      tags: [Admin]
+      summary: Activate a journey or situation prompt version (deactivates the previous one)
+      operationId: activate_admin_journey_prompt_version
+      security:
+        - adminAuthorizer: []
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Activated (or already active)
+        "404":
+          description: Version not found
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/analytics:
     <<: *commonOptions
     get:
@@ -1445,6 +2337,8 @@ paths:
                       chat_sessions: { type: integer }
                       messages: { type: integer }
                       questions: { type: integer }
+                      thumbs_up: { type: integer }
+                      thumbs_down: { type: integer }
                   timeSeries:
                     type: array
                     nullable: true
@@ -1455,6 +2349,19 @@ paths:
                         users: { type: integer }
                         questions: { type: integer }
                         chat_sessions: { type: integer }
+                        thumbs_up: { type: integer }
+                        thumbs_down: { type: integer }
+                  recentFeedback:
+                    type: array
+                    nullable: true
+                    description: Up to 50 most recent feedback entries with a written comment in the window
+                    items:
+                      type: object
+                      properties:
+                        chat_session_id: { type: string, format: uuid }
+                        rating: { type: string, enum: [up, down] }
+                        comment: { type: string }
+                        updated_at: { type: string, format: date-time }
         "401": { description: Unauthorized }
         "500": { description: Internal Server Error }
       x-amazon-apigateway-integration:
@@ -1646,6 +2553,127 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /chat_sessions/{chat_session_id}/feedback:
+    <<: *commonOptions
+    get:
+      tags:
+        - ChatSessions
+      summary: Get the owning user's feedback for a chat session
+      operationId: get_chat_session_feedback
+      security:
+        - userAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          description: Chat session UUID
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: true
+          description: User UUID used to verify ownership
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Feedback for the session, or null if none has been given
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feedback:
+                    type: object
+                    nullable: true
+                    properties:
+                      rating: { type: string, enum: [up, down] }
+                      comment: { type: string, nullable: true }
+                      updated_at: { type: string, format: date-time }
+        "400":
+          description: Invalid request
+        "403":
+          description: Forbidden - User does not own this chat session
+        "404":
+          description: Chat session not found
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${chatSessionFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+    put:
+      tags:
+        - ChatSessions
+      summary: Create or replace thumbs up/down feedback (and optional comment) for a chat session
+      operationId: put_chat_session_feedback
+      security:
+        - userAuthorizer: []
+      parameters:
+        - name: chat_session_id
+          in: path
+          required: true
+          description: Chat session UUID
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: true
+          description: User UUID used to verify ownership
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - rating
+              properties:
+                rating:
+                  type: string
+                  enum: [up, down]
+                comment:
+                  type: string
+                  nullable: true
+                  maxLength: 1000
+      responses:
+        "200":
+          description: Feedback saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rating: { type: string, enum: [up, down] }
+                  has_comment: { type: boolean }
+                  updated_at: { type: string, format: date-time }
+        "400":
+          description: Invalid request
+        "403":
+          description: Forbidden - User does not own this chat session
+        "404":
+          description: Chat session not found
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${chatSessionFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /chat_sessions/{chat_session_id}/text_generation:
     <<: *commonOptions
     post:
@@ -1808,38 +2836,6 @@ paths:
                   last_seen_at:
                     type: string
                     format: date-time
-        "401":
-          description: Unauthorized
-        "500":
-          description: Internal Server Error
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${userFunction.Arn}/invocations
-        passthroughBehavior: "when_no_match"
-        httpMethod: POST
-        type: aws_proxy
-
-  /user/{user_id}:
-    <<: *commonOptions
-    get:
-      tags:
-        - User
-      summary: Get user by id
-      operationId: get_user
-      security:
-        - userAuthorizer: []
-      parameters:
-        - name: user_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: User found
-        "404":
-          description: User not found
         "401":
           description: Unauthorized
         "500":
@@ -2138,56 +3134,6 @@ paths:
       x-amazon-apigateway-integration:
         uri:
           Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${chatSessionFunction.Arn}/invocations
-        passthroughBehavior: "when_no_match"
-        httpMethod: POST
-        type: aws_proxy
-
-  /user/exampleEndpoint:
-    options:
-      summary: CORS support
-      description: Enable CORS by returning correct headers
-      responses:
-        200:
-          $ref: "#/components/responses/Success"
-      x-amazon-apigateway-integration:
-        type: mock
-        requestTemplates:
-          application/json: |
-            {
-              "statusCode" : 200
-            }
-        responses:
-          default:
-            statusCode: "200"
-            responseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-            responseTemplates:
-              application/json: |
-                {}
-    get:
-      tags:
-        - User
-      summary: Example endpoint for testing user functionality
-      operationId: get_example_endpoint
-      security:
-        - userAuthorizer: []
-      responses:
-        "200":
-          description: Example endpoint response
-          content:
-            application/json:
-              schema:
-                type: string
-                example: "Example endpoint invoked"
-        "401":
-          description: Unauthorized
-        "500":
-          description: Internal Server Error
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${userFunction.Arn}/invocations
         passthroughBehavior: "when_no_match"
         httpMethod: POST
         type: aws_proxy

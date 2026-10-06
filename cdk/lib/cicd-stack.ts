@@ -131,6 +131,54 @@ export class CICDStack extends cdk.Stack {
       ],
     });
 
+    // Unit tests gate the image builds: a failing test stops the pipeline
+    // before any container image is built or pushed. Runs without AWS access
+    // (the project role only gets the defaults CodeBuild needs for logs and
+    // pipeline artifacts), so tests must stay hermetic.
+    const unitTestProject = new codebuild.PipelineProject(this, "UnitTestProject", {
+      projectName: `${id}-UnitTests`,
+      description: "CDK contract tests, Node.js handler tests, and Python Lambda unit tests",
+      environment: {
+        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+        computeType: codebuild.ComputeType.SMALL,
+      },
+      timeout: cdk.Duration.minutes(20),
+      buildSpec: codebuild.BuildSpec.fromObject({
+        version: "0.2",
+        phases: {
+          install: {
+            "runtime-versions": { nodejs: "22", python: "3.12" },
+            commands: [
+              // boto3 is provided by the Lambda runtime; tests import it but
+              // stub every client call.
+              "pip install --quiet boto3==1.43.42",
+            ],
+          },
+          build: {
+            commands: [
+              "cd $CODEBUILD_SRC_DIR/cdk && npm ci",
+              "cd $CODEBUILD_SRC_DIR/cdk && npx tsc --noEmit",
+              "cd $CODEBUILD_SRC_DIR/cdk && npx jest --ci",
+              "cd $CODEBUILD_SRC_DIR/cdk && npm run test:lambda",
+              "cd $CODEBUILD_SRC_DIR/cdk/lambda/textGeneration && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests",
+              "cd $CODEBUILD_SRC_DIR/cdk/lambda/knowledgeBase && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests",
+            ],
+          },
+        },
+      }),
+    });
+
+    pipeline.addStage({
+      stageName: "Test",
+      actions: [
+        new codepipeline_actions.CodeBuildAction({
+          actionName: "UnitTests",
+          project: unitTestProject,
+          input: sourceOutput,
+        }),
+      ],
+    });
+
     // Create build actions for each Lambda function
     const buildActions: codepipeline_actions.CodeBuildAction[] = [];
 

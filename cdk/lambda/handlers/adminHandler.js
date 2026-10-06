@@ -13,6 +13,12 @@
 const postgres = require("postgres");
 const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
+const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
+const {
+  handleFeedbackTriageRequest,
+  isFeedbackTriageRoute,
+  fetchFeedbackLists,
+} = require("./utils/feedbackTriage.js");
 const {
   SecretsManagerClient,
   GetSecretValueCommand,
@@ -28,6 +34,7 @@ const SYSTEM_MESSAGE_TYPES = new Set([
   "suggestion_phase_prompt",
   "output_format_detective",
   "output_format_suggestion",
+  "output_format_partial",
   "welcome_message",
   "disclaimer",
 ]);
@@ -44,6 +51,7 @@ const DEFAULT_CHARACTER_LIMITS = {
   suggestion_phase_prompt: 6000,
   output_format_detective: 1000,
   output_format_suggestion: 3500,
+  output_format_partial: 3500,
   welcome_message: 2000,
   disclaimer: 700,
 };
@@ -121,18 +129,22 @@ exports.handler = async (event) => {
   try {
     // Route requests based on HTTP method and URL path
     // event.httpMethod: GET, POST, PUT, DELETE
-    // event.resource: URL pattern like /admin/users or /admin/exampleEndpoint
+    // event.resource: URL pattern like /admin/users
     const pathData = event.httpMethod + " " + event.resource;
+
+    // Journeys, situation clusters, their prompt versions and feedback counts
+    // (utils/journeyPrompts.js). Handles its own errors.
+    if (await handleJourneyRequest(sqlConnection, event, pathData, response)) {
+      return logAndReturn(event, response);
+    }
+
+    // Star / dismiss user feedback (utils/feedbackTriage.js). Handles its own errors.
+    if (await handleFeedbackTriageRequest(sqlConnection, event, pathData, response)) {
+      return logAndReturn(event, response);
+    }
 
     // Handle different API endpoints using switch statement
     switch (pathData) {
-      // GET /admin/exampleEndpoint - Test endpoint for development and debugging
-      case "GET /admin/exampleEndpoint":
-        // Simple test response to verify Lambda function is working
-        data = "Example endpoint invoked";
-        response.body = JSON.stringify(data);
-        break;
-
       // POST /admin/promote_user - Ensure the signed-in admin exists in users
       case "POST /admin/promote_user": {
         let body;
@@ -776,7 +788,9 @@ exports.handler = async (event) => {
                 (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs) AS users,
                 (SELECT COUNT(cs.id)::int FROM chat_sessions cs) AS chat_sessions,
                 (SELECT COUNT(cm.id)::int FROM chat_messages cm) AS messages,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm WHERE cm.sender = 'user') AS questions
+                (SELECT COUNT(cm.id)::int FROM chat_messages cm WHERE cm.sender = 'user') AS questions,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'up') AS thumbs_up,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'down') AS thumbs_down
             `;
             return totalsRows[0];
           }
@@ -802,7 +816,19 @@ exports.handler = async (event) => {
               FROM chat_messages cm
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
-                AND cm.sender = 'user') AS questions
+                AND cm.sender = 'user') AS questions,
+
+              (SELECT COUNT(sf.id)::int
+              FROM session_feedback sf
+              WHERE sf.updated_at >= ${startDateIso}
+                AND sf.updated_at < ${endDateIso}
+                AND sf.rating = 'up') AS thumbs_up,
+
+              (SELECT COUNT(sf.id)::int
+              FROM session_feedback sf
+              WHERE sf.updated_at >= ${startDateIso}
+                AND sf.updated_at < ${endDateIso}
+                AND sf.rating = 'down') AS thumbs_down
           `;
           return totalsRows[0];
         };
@@ -875,22 +901,46 @@ exports.handler = async (event) => {
               AND cm.created_at < ${endDateIso}
               AND cm.sender = 'user'
             GROUP BY DATE_TRUNC('day', cm.created_at)::date
+          ),
+          daily_feedback AS (
+            SELECT
+              DATE_TRUNC('day', sf.updated_at)::date AS date,
+              COUNT(sf.id) FILTER (WHERE sf.rating = 'up')::int AS thumbs_up,
+              COUNT(sf.id) FILTER (WHERE sf.rating = 'down')::int AS thumbs_down
+            FROM session_feedback sf
+            WHERE sf.updated_at >= ${startDateIso}
+              AND sf.updated_at < ${endDateIso}
+            GROUP BY DATE_TRUNC('day', sf.updated_at)::date
           )
           SELECT
             TO_CHAR(ds.date, 'Mon DD') AS date,
             COALESCE(GREATEST(dcs.session_users, dq.question_users), 0)::int AS users,
             COALESCE(dq.questions, 0)::int AS questions,
-            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions
+            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions,
+            COALESCE(df.thumbs_up, 0)::int AS thumbs_up,
+            COALESCE(df.thumbs_down, 0)::int AS thumbs_down
           FROM date_series ds
           LEFT JOIN daily_chat_sessions dcs ON ds.date = dcs.date
           LEFT JOIN daily_questions dq ON ds.date = dq.date
+          LEFT JOIN daily_feedback df ON ds.date = df.date
           ORDER BY ds.date ASC
         `;
 
         const totals = await fetchTotals(startDateIso, endDateIso);
 
+        // Written feedback for the admin view: recent (not dismissed), starred
+        // (any date) and dismissed. Totals above still include dismissed rows.
+        const { recentFeedback, starredFeedback, dismissedFeedback } =
+          await fetchFeedbackLists(sqlConnection, startDateIso, endDateIso);
+
         response.statusCode = 200;
-        response.body = JSON.stringify({ timeSeries, totals });
+        response.body = JSON.stringify({
+          timeSeries,
+          totals,
+          recentFeedback,
+          starredFeedback,
+          dismissedFeedback,
+        });
         break;
       }
 
@@ -974,6 +1024,8 @@ exports.handler = async (event) => {
             latest.id,
             latest.max_messages_per_day,
             latest.min_messages_before_suggest,
+            latest.routing_mode,
+            latest.min_exchanges_before_answer,
             latest.max_characters_per_user_message,
             latest.max_characters_per_ai_message,
             latest.temperature,
@@ -988,14 +1040,17 @@ exports.handler = async (event) => {
           LEFT JOIN users u ON u.id = latest.updated_by
         `;
 
-        // But keep a safe fallback to avoid crashing UI.
+        // But keep a safe fallback to avoid crashing UI. Keep in sync with
+        // textGeneration/helpers/config.py and frontend lib/assistantSettings.ts.
         const fallback = {
           max_messages_per_day: 45,
           min_messages_before_suggest: 4,
+          routing_mode: "fixed",
+          min_exchanges_before_answer: 0,
           max_characters_per_user_message: 2000,
           max_characters_per_ai_message: 5000,
-          temperature: 0.2,
-          top_p: 0.9,
+          temperature: 0.15,
+          top_p: 0.5,
           support_score_threshold: 0.25,
           scope_alignment_score_threshold: 0.25,
           grounded_threshold: 0.75,
@@ -1129,6 +1184,8 @@ exports.handler = async (event) => {
         const allowed = [
           "max_messages_per_day",
           "min_messages_before_suggest",
+          "routing_mode",
+          "min_exchanges_before_answer",
           "max_characters_per_user_message",
           "max_characters_per_ai_message",
           "temperature",
@@ -1180,6 +1237,30 @@ exports.handler = async (event) => {
           response.statusCode = 400;
           response.body = JSON.stringify({
             error: "min_messages_before_suggest must be an integer between 0 and 500",
+          });
+          break;
+        }
+
+        if (
+          patch.routing_mode !== undefined &&
+          !["fixed", "dynamic"].includes(patch.routing_mode)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "routing_mode must be 'fixed' or 'dynamic'",
+          });
+          break;
+        }
+
+        if (
+          patch.min_exchanges_before_answer !== undefined &&
+          (!isFiniteInt(patch.min_exchanges_before_answer) ||
+            patch.min_exchanges_before_answer < 0 ||
+            patch.min_exchanges_before_answer > 500)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "min_exchanges_before_answer must be an integer between 0 and 500",
           });
           break;
         }
@@ -1266,6 +1347,33 @@ exports.handler = async (event) => {
 
         const updatedByUserId = adminRows[0].id;
 
+        // The dynamic-routing floor may not exceed the ceiling. Compare against
+        // stored values for whichever side is not in this patch.
+        if (
+          patch.min_exchanges_before_answer !== undefined ||
+          patch.min_messages_before_suggest !== undefined
+        ) {
+          const currentRows = await sqlConnection`
+            SELECT min_messages_before_suggest, min_exchanges_before_answer
+            FROM system_settings
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+          `;
+          const current = currentRows[0] ?? {};
+          const floor =
+            patch.min_exchanges_before_answer ?? current.min_exchanges_before_answer ?? 0;
+          const ceiling =
+            patch.min_messages_before_suggest ?? current.min_messages_before_suggest ?? 4;
+          if (floor > ceiling) {
+            response.statusCode = 400;
+            response.body = JSON.stringify({
+              error:
+                "min_exchanges_before_answer must be less than or equal to min_messages_before_suggest",
+            });
+            break;
+          }
+        }
+
         // Single UPDATE of the latest row (no â€œensure row existsâ€ step)
         const updated = await sqlConnection`
           WITH latest AS (
@@ -1278,6 +1386,8 @@ exports.handler = async (event) => {
           SET
             max_messages_per_day = COALESCE(${patch.max_messages_per_day}, s.max_messages_per_day),
             min_messages_before_suggest = COALESCE(${patch.min_messages_before_suggest}, s.min_messages_before_suggest),
+            routing_mode = COALESCE(${patch.routing_mode ?? null}::varchar, s.routing_mode),
+            min_exchanges_before_answer = COALESCE(${patch.min_exchanges_before_answer ?? null}::int, s.min_exchanges_before_answer),
             max_characters_per_user_message = COALESCE(${patch.max_characters_per_user_message}, s.max_characters_per_user_message),
             max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message}, s.max_characters_per_ai_message),
             temperature = COALESCE(${patch.temperature}, s.temperature),
@@ -1293,6 +1403,8 @@ exports.handler = async (event) => {
             s.id,
             s.max_messages_per_day,
             s.min_messages_before_suggest,
+            s.routing_mode,
+            s.min_exchanges_before_answer,
             s.max_characters_per_user_message,
             s.max_characters_per_ai_message,
             s.temperature,
@@ -1341,9 +1453,23 @@ exports.handler = async (event) => {
     }
   }
 
-  // Log response for debugging (visible in AWS CloudWatch Logs)
-  console.log(response);
-
-  // Return HTTP response to API Gateway, which forwards it to the client
-  return response;
+  return logAndReturn(event, response);
 };
+
+// Log response for debugging (visible in AWS CloudWatch Logs), then return it
+// to API Gateway. Analytics includes user-written feedback comments and journey
+// routes return large prompt trees; log status only for those. Feedback triage
+// is status-only too so it stays consistent with the feedback privacy rules.
+function logAndReturn(event, response) {
+  const routeKey = `${event.httpMethod} ${event.resource}`;
+  if (
+    event.resource === "/admin/analytics" ||
+    isJourneyRoute(routeKey) ||
+    isFeedbackTriageRoute(routeKey)
+  ) {
+    console.log({ statusCode: response.statusCode, resource: event.resource });
+  } else {
+    console.log(response);
+  }
+  return response;
+}

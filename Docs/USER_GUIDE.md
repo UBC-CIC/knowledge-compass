@@ -163,6 +163,27 @@ The Chat History page lets admins review all user conversations. Expand a user r
 
 ![image](./media/admin-chat-history.png)
 
+### Guideline Mode
+
+Guideline mode is a second way for the assistant to answer, built for testing next to the standard prompts. Admins upload the guides they already use with families. The assistant finds the situations in them, picks the one that fits each family's message, and follows that part of the guide, linking to supporting videos and documents from the knowledge base. There are no prompts to write and no journeys or situations to set up. The standard prompts, journeys and settings are not changed, so you can switch between the two at any time and compare them.
+
+Open **Guideline mode** in the admin sidebar.
+
+- **Upload guides.** Drag in or choose one or more Word (`.docx`, up to 10 MB), PDF (`.pdf`, up to 10 MB) or Markdown (`.md`, up to 1 MB) files. Each file shows "Reading the guide…" and then "Ready" once it can be searched. That usually takes under a minute; PDFs, especially scans, can take a few minutes. Headings help, because a heading for each situation makes matching more reliable: use Word's Heading styles, `## Child sent home early` in Markdown, or a short title line above each section in a PDF. Plain text also works and is split into passages automatically. Older `.doc` files need to be saved as `.docx` first. Markdown gives the best results, because its headings mark exactly where each situation starts. Word and PDF layouts have to be interpreted, so check their detected situations after uploading.
+- **Check the situations.** Each ready guide lists the situations the assistant found, each with a short summary. Renaming is optional: **Rename** changes how a situation is matched and shown to families, and **Reset to detected** goes back to the original name. Renamed situations keep their name when you replace the file, as long as the heading is the same.
+- **Replace or remove a guide.** **Replace** uploads a new version of the same guide. **Remove** stops the assistant using it and deletes its search data.
+- **Turn guideline mode on or off.** The switch at the top applies to every family. It can take up to 5 minutes to reach new messages.
+
+How answers work in guideline mode:
+
+- The matching guide section decides what the assistant says and which steps it gives.
+- The regular knowledge base (videos, documents, web pages and CSV resources from the Dashboard) is still searched. The assistant can point families to up to two of those resources when they support a step from the guide, and they appear as normal resource cards. Resources never add steps or change the guide's advice. Guides are never used in standard mode.
+- If no section fits clearly, or the section says to ask something first, the assistant asks one clarifying question.
+- Families see a "Family guide: [situation]" source under the answer, plus any resources it used. The guide text itself is not shown or linked.
+- The input guardrail, guardrail and language-guideline text, daily message limits and the answer check all still apply.
+
+To roll back, turn the switch off to go back to the standard prompts, or remove a guide that isn't working well. Developers can compare both modes on the same questions with `tests/eval/run_eval.py --mode standard|guideline` in `cdk/lambda/textGeneration`.
+
 ---
 
 ## Additional Resources

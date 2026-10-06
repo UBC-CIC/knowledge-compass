@@ -36,3 +36,9 @@ cdk/containers/**/global-bundle.pem
 !.env.example
 
 new frontend
+
+
+__pycache__/
+*.py[cod]
+
+.agents
