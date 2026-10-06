@@ -40,3 +40,5 @@ Prompts 2a Simplified (standalone).html
 
 __pycache__/
 *.py[cod]
+
+.agents
