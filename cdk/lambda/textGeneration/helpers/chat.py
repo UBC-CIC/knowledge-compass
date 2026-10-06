@@ -13,7 +13,7 @@ from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
 from helpers.logic import get_current_prompt
 from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
-from helpers.retrieval import retrieve_from_pgvector, to_public_source
+from helpers.retrieval import DEFAULT_MIN_SCORE, public_http_url, retrieve_from_pgvector, to_public_source
 from helpers.citations import parse_cited_indices, select_cited_sources, strip_internal_links
 from helpers.intervention import assess_response
 import helpers.config as config
@@ -27,6 +27,9 @@ logger.info(f"boto3 version: {boto3.__version__}")
 
 # Library resources offered alongside the guide sections in guideline mode.
 GUIDELINE_RESOURCE_COUNT = 6
+# Library resources shown under "More resources" when a guidance answer cited
+# no resource itself (matches the prompt's "no more than two").
+GUIDELINE_FALLBACK_RESOURCE_COUNT = 2
 
 def _generate_session_title(
     query: str,
@@ -260,6 +263,38 @@ def _prepare_guideline_conversation(
     return bedrock_messages, static_system_prompt, dynamic_prompt, sources, "SUGGESTION", model_arn, routing_ctx
 
 
+def _fallback_resources(
+    sources: List[Dict[str, Any]],
+    answer_text: str,
+    limit: int = GUIDELINE_FALLBACK_RESOURCE_COUNT,
+) -> List[Dict[str, Any]]:
+    """
+    Library resources to show under "More resources" when a guideline-mode
+    guidance answer cited only its guide section. Display-only: they are not
+    grounding and are never passed to the grounding check. Guides are never
+    returned.
+
+    Order: resources whose public URL appears in the answer (linked but not
+    cited, in retrieval order), then the rest at or above DEFAULT_MIN_SCORE by
+    descending score.
+    """
+    resources = [s for s in sources if s.get("source_type") != GUIDELINE_SOURCE_TYPE]
+    linked = []
+    for source in resources:
+        url = public_http_url(source.get("url") or source.get("uri"))
+        if url and url in (answer_text or ""):
+            linked.append(source)
+    rest = sorted(
+        (
+            s for s in resources
+            if not any(s is chosen for chosen in linked) and (s.get("score") or 0) >= DEFAULT_MIN_SCORE
+        ),
+        key=lambda s: s.get("score") or 0,
+        reverse=True,
+    )
+    return (linked + rest)[:limit]
+
+
 def _save_ai_response(
     db_connection,
     chat_session_id: str,
@@ -416,6 +451,7 @@ def get_response(
     answer_started = False
     answer_text = ""
     cited_indices = []
+    parsed_indices = None
     expect_answer_tags = phase_name == "SUGGESTION"
     is_guideline = routing_ctx.get("mode") == "guideline"
     # Hidden metadata tags that must never reach the stream. Guideline mode
@@ -514,6 +550,17 @@ def get_response(
         for source in used_sources
         if source.get("source_type") != GUIDELINE_SOURCE_TYPE
     ]
+    guide_state = parse_guide_state(full_response_text, sources) if is_guideline else None
+
+    # Guideline mode: a guidance answer that cited only its guide section
+    # still keeps "More resources", using library resources only (never
+    # guides). An explicit [] marks a clarifying turn, which shows none.
+    # Fallback items are display-only and are not sent to grounding.
+    fallback_count = 0
+    if (is_guideline and guide_state and not public_sources and parsed_indices != []
+            and answer_text and not answer_text.startswith("I encountered an error")):
+        public_sources = [to_public_source(s) for s in _fallback_resources(sources, answer_text)]
+        fallback_count = len(public_sources)
 
     warning_text = None
     intervention_result = None
@@ -550,10 +597,10 @@ def get_response(
     # Guideline mode keeps its own state (the chosen section) under
     # metadata.guide_state and never touches journey/routing state.
     if is_guideline:
-        guide_state = parse_guide_state(full_response_text, sources)
         logger.info(
-            "Guideline turn: sources=%d cited=%d selected_section=%s",
-            len(sources), len(used_sources), guide_state["section_key"] if guide_state else None,
+            "Guideline turn: sources=%d cited=%d fallback_resources=%d selected_section=%s",
+            len(sources), len(used_sources), fallback_count,
+            guide_state["section_key"] if guide_state else None,
         )
         if guide_state and answer_text and not answer_text.startswith("I encountered an error"):
             try:
