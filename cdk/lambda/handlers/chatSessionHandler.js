@@ -109,8 +109,10 @@ exports.handler = async (event) => {
           break;
         }
 
+        // guide_state names the guide section in use; it is admin-only.
         const sessions = await sqlConnection`
-          SELECT id, user_id, title, created_at, last_active_at, metadata
+          SELECT id, user_id, title, created_at, last_active_at,
+                 metadata - 'guide_state' AS metadata
           FROM chat_sessions
           WHERE user_id = ${userId}
           ORDER BY created_at DESC
@@ -155,7 +157,8 @@ exports.handler = async (event) => {
           VALUES (
             ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata}
           )
-          RETURNING id, user_id, title, created_at, last_active_at, metadata
+          RETURNING id, user_id, title, created_at, last_active_at,
+                    metadata - 'guide_state' AS metadata
         `;
 
         response.statusCode = 201;
@@ -215,7 +218,8 @@ exports.handler = async (event) => {
           UPDATE chat_sessions
           SET title = ${title}, last_active_at = NOW()
           WHERE id = ${chatSessionId}
-          RETURNING id, user_id, title, created_at, last_active_at, metadata
+          RETURNING id, user_id, title, created_at, last_active_at,
+                    metadata - 'guide_state' AS metadata
         `;
 
         response.statusCode = 200;
