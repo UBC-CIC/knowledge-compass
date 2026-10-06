@@ -146,11 +146,13 @@ function isHttpSource(source: SourceItem | string) {
   return isSafeUrl(url);
 }
 
-// Uploaded documents, CSV row resources and guideline-mode guide sections
-// (title only, no link or preview) still get cards without public URLs.
+// Uploaded documents and CSV row resources still get cards without public
+// URLs. Guideline-mode guide sections are never shown: the server already
+// drops them, and this is a fallback in case one ever arrives.
 function isResourceSource(source: SourceItem | string) {
   const type = sourceLabel(source).type;
-  return isHttpSource(source) || type === "document" || type === "csv_row" || type === "guideline";
+  if (type === "guideline") return false;
+  return isHttpSource(source) || type === "document" || type === "csv_row";
 }
 
 export default function AIChatMessage({

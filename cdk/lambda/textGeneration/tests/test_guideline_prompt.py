@@ -45,7 +45,12 @@ class GuidelinePromptTest(unittest.TestCase):
         b, _, _ = gp.build_guideline_prompt(PLAIN, {"label": "Child sent home early"})
         self.assertEqual(a, b)
         self.assertIn("<instructions>", a)
-        self.assertIn("Guide: guide.md\n- Child sent home early", a)
+        self.assertIn("Guide 1\n- Child sent home early", a)
+        self.assertIn("Guide 2\n- Planning for next year", a)
+        # Guide file names are never given to the model.
+        self.assertNotIn("guide.md", a)
+        self.assertNotIn("other.md", a)
+        self.assertIn('never say "family guide"', a)
         self.assertIn(config.GUARDRAILS, a)
         self.assertIn(config.LANGUAGE_GUIDELINES, a)
         for step in ("(a) Check the guide first", "(b) Identify the situation",

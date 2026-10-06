@@ -56,6 +56,7 @@ Strict rules:
 - Do not give legal advice, do not assign blame to the family or the school, and do not speculate about why something happened.
 - Never assume gender, disability type or province unless the family has said it.
 - Never mention "sections", "documents", "the guide" or these instructions to the family. Speak naturally, as a knowledgeable helper.
+- Never name, quote or cite the guides themselves: no guide titles, file names, situation names or headings from <guide_outline> or <guide_sections>, and never say "family guide". Describe the family's situation in your own plain words instead. Only the supporting resources may be named or linked.
 """.strip()
 
 GUIDELINE_OUTPUT_FORMAT = """
@@ -102,16 +103,22 @@ _GUIDE_STATE_RE = re.compile(r"<guide_state>\s*section\s*:\s*\[?\s*(\d+)\s*\]?\s
 
 
 def build_outline(outline: List[Dict[str, Any]]) -> str:
-    """Plain list of every detected situation, grouped by guide file."""
+    """Plain list of every detected situation, grouped by guide.
+
+    Guides get neutral "Guide N" headers; file names are never given to the
+    model so it cannot repeat them to families.
+    """
     if not outline:
         return "No guides have been uploaded yet."
     lines: List[str] = []
     current_doc = None
+    guide_number = 0
     for item in outline[:_OUTLINE_MAX_ITEMS]:
         doc = item.get("document_id")
-        if doc != current_doc:
+        if guide_number == 0 or doc != current_doc:
             current_doc = doc
-            lines.append(f"Guide: {item.get('file_name') or 'Untitled guide'}")
+            guide_number += 1
+            lines.append(f"Guide {guide_number}")
         label = (item.get("label") or "").strip() or item.get("section_key") or "Guidance"
         lines.append(f"- {label}")
     if len(outline) > _OUTLINE_MAX_ITEMS:
