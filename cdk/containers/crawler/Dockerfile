@@ -18,6 +18,11 @@ ENV PYTHONUNBUFFERED=1 \
 # cannot create in the root-owned /app. Point it at a writable tmp path.
 ENV CRAWLEE_STORAGE_DIR=/tmp/crawlee-storage
 
+# Chromium's user-namespace sandbox is unavailable on Fargate (and in default
+# Docker), so the browser fails to launch with "No usable sandbox". Isolation
+# comes from the container boundary plus the non-root pwuser instead.
+ENV CRAWLEE_DISABLE_BROWSER_SANDBOX=true
+
 WORKDIR /app
 
 # Install Python deps first for better layer caching.
