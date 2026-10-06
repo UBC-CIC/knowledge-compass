@@ -14,6 +14,10 @@ FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# Crawlee defaults to ./storage (i.e. /app/storage), which the non-root pwuser
+# cannot create in the root-owned /app. Point it at a writable tmp path.
+ENV CRAWLEE_STORAGE_DIR=/tmp/crawlee-storage
+
 WORKDIR /app
 
 # Install Python deps first for better layer caching.
