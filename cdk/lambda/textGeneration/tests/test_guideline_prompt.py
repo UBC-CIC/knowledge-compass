@@ -51,6 +51,10 @@ class GuidelinePromptTest(unittest.TestCase):
         self.assertNotIn("guide.md", a)
         self.assertNotIn("other.md", a)
         self.assertIn('never say "family guide"', a)
+        # The no-guide-names rule covers the visible answer only; it must not
+        # stop the model from citing section and resource numbers.
+        self.assertNotIn("cite the guides", a)
+        self.assertIn("still list the guide section number and every resource number you used in <cited_indices>", a)
         self.assertIn(config.GUARDRAILS, a)
         self.assertIn(config.LANGUAGE_GUIDELINES, a)
         for step in ("(a) Check the guide first", "(b) Identify the situation",
@@ -63,6 +67,7 @@ class GuidelinePromptTest(unittest.TestCase):
         self.assertIn("[2] Situation: Reduced school day", dynamic)
         self.assertLess(dynamic.index("[1]"), dynamic.index("[2]"))
         self.assertIn("<cited_indices>", dynamic)
+        self.assertIn("resource you linked or mentioned", dynamic)
         self.assertIn("<guide_state>section: n</guide_state>", dynamic)
         self.assertEqual(model, config.SONNET_ARN)
         print("\n--- structured prompt (dynamic) ---\n" + dynamic)
