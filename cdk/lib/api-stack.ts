@@ -26,6 +26,29 @@ function computeConfigHash(config: object): string {
   return crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 }
 
+// Custom regex PII filters for the input guardrail. They replace Bedrock's
+// ADDRESS entity, which also masks city/province/country and stripped the
+// location families need for jurisdiction-specific answers. Street addresses
+// and postal codes are still masked. Bedrock regexes do not support lookaround.
+export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[] = [
+  {
+    name: 'CA_POSTAL_CODE',
+    description: 'Canadian postal code, e.g. K1A 0B1',
+    pattern: String.raw`\b[ABCEGHJ-NPRSTVXYabceghj-nprstvxy]\d[ABCEGHJ-NPRSTV-Zabceghj-nprstv-z][ -]?\d[ABCEGHJ-NPRSTV-Zabceghj-nprstv-z]\d\b`,
+    action: 'ANONYMIZE',
+    inputAction: 'ANONYMIZE',
+    inputEnabled: true,
+  },
+  {
+    name: 'STREET_ADDRESS',
+    description: 'House number, street name and street type, e.g. 123 Main Street',
+    pattern: String.raw`\b\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s+(?:[A-Z0-9][^\s,]*\s+){1,3}(?:[Ss]treet|[Ss]t|[Aa]venue|[Aa]ve|[Rr]oad|[Rr]d|[Bb]oulevard|[Bb]lvd|[Dd]rive|[Dd]r|[Cc]rescent|[Cc]res|[Cc]t|[Ww]ay|[Ll]ane|[Ll]n|[Pp]lace|[Pp]l|[Tt]errace|[Cc]ircle|[Cc]ir|[Hh]ighway|[Hh]wy|[Pp]arkway|[Pp]kwy|[Tt]rail|[Tt]rl)\b\.?`,
+    action: 'ANONYMIZE',
+    inputAction: 'ANONYMIZE',
+    inputEnabled: true,
+  },
+];
+
 interface ApiGatewayStackProps extends cdk.StackProps {
   ecrRepositories: { [key: string]: ecr.Repository };
   // pgvector ingestion wiring (R2/R12). Structural to avoid a hard
@@ -1083,7 +1106,7 @@ export class ApiGatewayStack extends cdk.Stack {
     const guardrailConfig = {
       piiEntities: [
         // General
-        'ADDRESS', 'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
+        'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
         'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
         // Finance
         'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
@@ -1093,6 +1116,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // Canada
         'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
       ],
+      regexes: GUARDRAIL_REGEXES_CONFIG,
       piiInputAction: 'ANONYMIZE',
       piiInputEnabled: true,
       promptAttackStrength: 'HIGH',
@@ -1106,7 +1130,6 @@ export class ApiGatewayStack extends cdk.Stack {
       sensitiveInformationPolicyConfig: {
         piiEntitiesConfig: [
           // General
-          { type: 'ADDRESS',                    action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'AGE',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'NAME',                       action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'EMAIL',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
@@ -1131,6 +1154,7 @@ export class ApiGatewayStack extends cdk.Stack {
           { type: 'CA_HEALTH_NUMBER',           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'CA_SOCIAL_INSURANCE_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
         ],
+        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
       },
       contentPolicyConfig: {
         filtersConfig: [
