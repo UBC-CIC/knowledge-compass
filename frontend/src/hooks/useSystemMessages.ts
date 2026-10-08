@@ -7,10 +7,11 @@ import type {
   SystemMessageVersion,
   SystemMessages,
 } from "@/types/systemMessages";
+import { API_ENDPOINT } from "@/lib/api";
 
 async function adminFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await AuthService.getAdminIdToken();
-  const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}${path}`, {
+  const res = await fetch(`${API_ENDPOINT}${path}`, {
     ...init,
     headers: { Authorization: token, "Content-Type": "application/json", ...(init.headers ?? {}) },
   });

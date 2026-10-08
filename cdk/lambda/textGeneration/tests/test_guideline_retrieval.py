@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from helpers import guideline_retrieval as gr  # noqa: E402
+from helpers.embedding_space import ActiveSpace, EmbeddingSpaceError  # noqa: E402
 from helpers.retrieval import to_public_source  # noqa: E402
 
 
@@ -72,8 +73,15 @@ CHUNKS = [
 ]
 
 
+SPACE = ActiveSpace(
+    id="11111111-1111-4111-8111-111111111111", name="cohere-v3-1024", provider="cohere_v3",
+    invoke_target="cohere.embed-english-v3", dimensions=1024, status="active", min_score=0.4,
+)
+
+
 def run(conn, query="my child keeps getting sent home early", **kwargs):
-    with mock.patch.object(gr, "embed_query", return_value=[0.1, 0.2]) as embed:
+    with mock.patch.object(gr, "get_active_space", return_value=SPACE), \
+            mock.patch.object(gr, "embed_query", return_value=[0.1, 0.2]) as embed:
         result = gr.retrieve_guideline_sections(query, conn, "us-east-1", **kwargs)
     return result, embed
 
@@ -155,9 +163,29 @@ class GuidelineRetrievalTest(unittest.TestCase):
 
     def test_embed_error_returns_empty(self):
         conn = FakeConnection()
-        with mock.patch.object(gr, "embed_query", side_effect=RuntimeError("bedrock")):
+        with mock.patch.object(gr, "get_active_space", return_value=SPACE), \
+                mock.patch.object(gr, "embed_query", side_effect=RuntimeError("bedrock")):
             self.assertEqual(gr.retrieve_guideline_sections("q", conn, "us-east-1"), [])
         self.assertEqual(conn.executed, [])
+
+    def test_embedding_space_error_propagates(self):
+        conn = FakeConnection()
+        with mock.patch.object(gr, "get_active_space", side_effect=EmbeddingSpaceError("INDEX_MISSING")):
+            with self.assertRaises(EmbeddingSpaceError):
+                gr.retrieve_guideline_sections("q", conn, "us-east-1")
+        self.assertEqual(conn.executed, [])
+
+    def test_candidate_sql_searches_the_space_with_hash_check(self):
+        conn = FakeConnection(candidates=[("d1", "Sent home", 0.9)], chunks=CHUNKS)
+        _, embed = run(conn)
+        sql = conn.executed[0][0]
+        self.assertIn("JOIN chunk_embeddings ce", sql)
+        self.assertIn("ce.space_id = '11111111-1111-4111-8111-111111111111'", sql)
+        self.assertIn("ce.embed_hash = md5(c.embed_text)", sql)
+        self.assertIn("ce.embedding::vector(1024)", sql)
+        self.assertNotIn("c.embedding", sql)
+        spec = embed.call_args.kwargs["spec"]
+        self.assertEqual((spec.provider, spec.dimensions), ("cohere_v3", 1024))
 
     def test_no_candidates(self):
         results, _ = run(FakeConnection())

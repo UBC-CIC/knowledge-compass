@@ -353,11 +353,13 @@ Specialization Explorer is an AI-powered conversational application that helps u
 
 | Category | Protected Data Types |
 |----------|---------------------|
-| **Contact** | Email, phone, address |
+| **Contact** | Email, phone, street addresses and Canadian postal codes (custom regex filters) |
 | **Identity** | Name, age, username |
 | **Financial** | Credit card numbers, bank accounts |
 | **Government** | Social insurance numbers, health numbers |
 | **Technical** | IP addresses, URLs |
+
+Coarse location (province/territory, city, school board) is intentionally not masked, because answers depend on jurisdiction; it is still never logged.
 
 ### 7.3 Prompt Security
 

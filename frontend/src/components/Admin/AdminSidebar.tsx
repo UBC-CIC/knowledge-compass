@@ -1,4 +1,4 @@
-export type AdminView = "dashboard" | "analytics" | "prompts" | "system-settings" | "guideline";
+export type AdminView = "dashboard" | "analytics" | "prompts" | "system-settings" | "guideline" | "embeddings";
 
 type AdminSidebarProps = {
   activeView: AdminView;
@@ -15,6 +15,7 @@ const NAV_ITEMS: Array<{
   { key: "prompts", label: "Prompts", hint: "What the assistant asks and says" },
   { key: "system-settings", label: "Assistant settings", hint: "Limits and answer checks" },
   { key: "guideline", label: "Guideline mode", hint: "Answer from your uploaded guides" },
+  { key: "embeddings", label: "Search index", hint: "Embedding model and cutover" },
 ];
 
 export default function AdminSidebar({

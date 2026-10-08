@@ -20,11 +20,39 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
 
 function computeConfigHash(config: object): string {
   return crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 }
+
+// Custom regex PII filters for the input guardrail. They replace Bedrock's
+// ADDRESS entity, which also masks city/province/country and stripped the
+// location families need for jurisdiction-specific answers. Street addresses
+// and postal codes are still masked. Bedrock regexes do not support lookaround.
+export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[] = [
+  {
+    name: 'CA_POSTAL_CODE',
+    description: 'Canadian postal code, e.g. K1A 0B1',
+    pattern: String.raw`\b[ABCEGHJ-NPRSTVXYabceghj-nprstvxy]\d[ABCEGHJ-NPRSTV-Zabceghj-nprstv-z][ -]?\d[ABCEGHJ-NPRSTV-Zabceghj-nprstv-z]\d\b`,
+    action: 'ANONYMIZE',
+    inputAction: 'ANONYMIZE',
+    inputEnabled: true,
+  },
+  {
+    name: 'STREET_ADDRESS',
+    description: 'House number, street name and street type, e.g. 123 Main Street',
+    pattern: String.raw`\b\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s+(?:[A-Z0-9][^\s,]*\s+){1,3}(?:[Ss]treet|[Ss]t|[Aa]venue|[Aa]ve|[Rr]oad|[Rr]d|[Bb]oulevard|[Bb]lvd|[Dd]rive|[Dd]r|[Cc]rescent|[Cc]res|[Cc]t|[Ww]ay|[Ll]ane|[Ll]n|[Pp]lace|[Pp]l|[Tt]errace|[Cc]ircle|[Cc]ir|[Hh]ighway|[Hh]wy|[Pp]arkway|[Pp]kwy|[Tt]rail|[Tt]rl)\b\.?`,
+    action: 'ANONYMIZE',
+    inputAction: 'ANONYMIZE',
+    inputEnabled: true,
+  },
+];
 
 interface ApiGatewayStackProps extends cdk.StackProps {
   ecrRepositories: { [key: string]: ecr.Repository };
@@ -1083,7 +1111,7 @@ export class ApiGatewayStack extends cdk.Stack {
     const guardrailConfig = {
       piiEntities: [
         // General
-        'ADDRESS', 'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
+        'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
         'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
         // Finance
         'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
@@ -1093,6 +1121,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // Canada
         'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
       ],
+      regexes: GUARDRAIL_REGEXES_CONFIG,
       piiInputAction: 'ANONYMIZE',
       piiInputEnabled: true,
       promptAttackStrength: 'HIGH',
@@ -1106,7 +1135,6 @@ export class ApiGatewayStack extends cdk.Stack {
       sensitiveInformationPolicyConfig: {
         piiEntitiesConfig: [
           // General
-          { type: 'ADDRESS',                    action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'AGE',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'NAME',                       action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'EMAIL',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
@@ -1131,6 +1159,7 @@ export class ApiGatewayStack extends cdk.Stack {
           { type: 'CA_HEALTH_NUMBER',           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
           { type: 'CA_SOCIAL_INSURANCE_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
         ],
+        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
       },
       contentPolicyConfig: {
         filtersConfig: [
@@ -1178,6 +1207,146 @@ export class ApiGatewayStack extends cdk.Stack {
       alarmDescription: 'Text Generation Lambda approaching concurrency limit',
     });
 
+    // The embedding-space consistency check in textGeneration (helpers/embedding_space.py)
+    // writes this metric as a CloudWatch Embedded Metric Format log line, so no
+    // PutMetricData permission is needed. The metric is referenced by namespace and
+    // name only (no token to lambdaTextGen, which would risk a circular dependency).
+    // The alarm action (SNS) is attached below, once the lifecycle notification topic exists.
+    const embeddingSpaceCheckFailedAlarm = new cloudwatch.Alarm(this, 'EmbeddingSpaceCheckFailedAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'KnowledgeCompass/Embeddings',
+        metricName: 'EmbeddingSpaceCheckFailed',
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'The active embedding space failed its startup/refresh consistency check; chat returns EMBEDDING_SPACE_UNAVAILABLE until it is fixed or rolled back',
+    });
+
+    // The knowledge-base Lambda's cutover job (helpers/cutover.py) writes this metric the same
+    // way (CloudWatch Embedded Metric Format on stdout), so no PutMetricData permission is added
+    // to the shared lambdaRole. It fires when the golden-set check after a pointer flip fails.
+    // The job does NOT roll back by itself: the alarm tells the operator to review and use the
+    // Rollback action. Referenced by namespace/name only (no token to lambdaKnowledgeBase, which
+    // would recreate the documented circular dependency). The SNS action is attached with the
+    // notification topic, below.
+    const postFlipCheckFailedAlarm = new cloudwatch.Alarm(this, 'PostFlipCheckFailedAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'KnowledgeCompass/Embeddings',
+        metricName: 'PostFlipCheckFailed',
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'The golden-set check after an embedding-space cutover failed; the new space is live. Review the job report and use Rollback in the admin Search index page if retrieval quality dropped',
+    });
+
+    // --- Model lifecycle guardrail ---------------------------------------------------
+    // A weekly Lambda (lambda/lifecycleCheck) lists the Bedrock models the system depends on
+    // (non-purged embedding spaces + the /KC/LLM generation parameters) and publishes ONE
+    // message to this topic when a model is not ACTIVE, is missing, or reaches end of life
+    // within 90 days. The same topic is the action of the two embedding alarms above.
+    //
+    // Circular-dependency note: everything here is NEW and self-contained. The function has its
+    // OWN role (not the shared lambdaRole), and the alarms reference the topic only; nothing
+    // takes a token from lambdaKnowledgeBase or lambdaTextGen. No stack output is exported.
+    const lifecycleTopic = new sns.Topic(this, 'ModelLifecycleAlerts', {
+      topicName: `${id}-ModelLifecycleAlerts`,
+      displayName: 'Knowledge Compass model lifecycle alerts',
+    });
+
+    // TODO(CIC): alert channel/endpoint placeholder. No address is hard-coded. Until CIC names
+    // the channel (email list, chat webhook via AWS Chatbot, pager), the topic exists but has no
+    // subscriber, so alerts are only visible in CloudWatch. Subscribe an address with
+    //   cdk deploy -c lifecycleAlertEmail=<address>
+    // or keep it out of the command line with
+    //   cdk deploy -c lifecycleAlertEmailParam=<name of an SSM String parameter holding the address>
+    const lifecycleAlertEmail = this.node.tryGetContext('lifecycleAlertEmail');
+    const lifecycleAlertEmailParam = this.node.tryGetContext('lifecycleAlertEmailParam');
+    if (lifecycleAlertEmail) {
+      lifecycleTopic.addSubscription(new subscriptions.EmailSubscription(String(lifecycleAlertEmail)));
+    } else if (lifecycleAlertEmailParam) {
+      lifecycleTopic.addSubscription(
+        new subscriptions.EmailSubscription(
+          ssm.StringParameter.valueForStringParameter(this, String(lifecycleAlertEmailParam)),
+        ),
+      );
+    }
+
+    embeddingSpaceCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
+    postFlipCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
+
+    // Own role, least privilege. bedrock:ListFoundationModels has no resource-level scoping.
+    // The two SSM parameters are the generation-model names the app already reads
+    // (/KC/LLM/HaikuArn, /KC/LLM/SonnetArn); this is the only SSM access.
+    const lifecycleRole = new iam.Role(this, `${id}-lifecycleCheckRole`, {
+      roleName: `${id}-lifecycleCheckRole`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      // VPC network interfaces plus CloudWatch Logs.
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:ListFoundationModels'],
+      resources: ['*'],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['sns:Publish'],
+      resources: [lifecycleTopic.topicArn],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [db.secretPathUser.secretArn],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameters'],
+      resources: [
+        `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
+      ],
+    }));
+
+    // Same VPC (default private-with-egress subnets, like lambdaKnowledgeBase, which the
+    // database security group already admits) and psycopg2 layer. The VPC has a NAT gateway, so
+    // the Bedrock control-plane call is reachable; confirm on first deploy by invoking the
+    // function once and reading its log.
+    const lifecycleCheckFunction = new lambda.Function(this, `${id}-lifecycleCheck`, {
+      functionName: `${id}-lifecycleCheck`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'main.handler',
+      code: lambda.Code.fromAsset('lambda/lifecycleCheck'),
+      timeout: Duration.seconds(120),
+      memorySize: 256,
+      role: lifecycleRole,
+      layers: [psycopgLayer],
+      vpc: vpcStack.vpc,
+      environment: {
+        SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+        RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+        REGION: this.region,
+        SNS_TOPIC_ARN: lifecycleTopic.topicArn,
+        GENERATION_MODEL_PARAMS: '/KC/LLM/HaikuArn,/KC/LLM/SonnetArn',
+      },
+    });
+
+    new events.Rule(this, 'ModelLifecycleWeeklyRule', {
+      ruleName: `${id}-ModelLifecycleWeekly`,
+      description: 'Weekly check of the Bedrock models in use (end of life, status)',
+      schedule: events.Schedule.rate(Duration.days(7)),
+      targets: [new targets.LambdaFunction(lifecycleCheckFunction)],
+    });
+
     lambdaTextGen.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -1207,6 +1376,18 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [
         `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-english-v3`,
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
+        // Candidate embedding models. Model ids / inference-profile ARNs are
+        // configuration on the embedding_spaces row; these grants enable
+        // candidates and do not assert availability in this region. Wildcard
+        // region on the foundation-model ARNs covers the destination regions of
+        // cross-region profiles. Manual ARNs on purpose (no CDK token
+        // references; see the documented circular-dependency notes).
+        `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`,
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
+        // Cohere Embed v4 (model id suffix not verified: grant both forms)
+        `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
+        `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
         // Claude Sonnet 4.6 (Converse currently resolves this model in us-west-2)
         `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6`,
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6`,

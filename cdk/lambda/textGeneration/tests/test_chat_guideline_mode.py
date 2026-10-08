@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from helpers import chat, config  # noqa: E402
+from helpers.embedding_space import EmbeddingSpaceError  # noqa: E402
 
 SECTIONS = [
     {
@@ -45,6 +46,36 @@ CLARIFY_REPLY = (
     "<cited_indices>[]</cited_indices>\n"
     "<guide_state>section: 0</guide_state>"
 )
+
+
+GUIDE_ONLY_LINKED_REPLY = (
+    "<answer>It sounds hard. **Keep a record.** Note each early pickup. "
+    "[Keeping a school log](https://example.org/video)</answer>\n"
+    "<cited_indices>[1]</cited_indices>\n"
+    "<guide_state>section: 1</guide_state>"
+)
+GUIDE_ONLY_REPLY = (
+    "<answer>It sounds hard. **Keep a record.** Note each early pickup.</answer>\n"
+    "<cited_indices>[1]</cited_indices>\n"
+    "<guide_state>section: 1</guide_state>"
+)
+NO_CITATIONS_REPLY = (
+    "<answer>It sounds hard. **Keep a record.** Note each early pickup.</answer>\n"
+    "<guide_state>section: 1</guide_state>"
+)
+EMPTY_CITATIONS_WITH_SECTION_REPLY = (
+    "<answer>Thanks for sharing. **How long has this been happening?**</answer>\n"
+    "<cited_indices>[]</cited_indices>\n"
+    "<guide_state>section: 1</guide_state>"
+)
+
+
+def _is_guide(source):
+    return (
+        source.get("source_type") == "guideline"
+        or str(source.get("type", "")).lower() == "guideline"
+        or str(source.get("title", "")).startswith("Family guide")
+    )
 
 
 class FakeConnection:
@@ -88,6 +119,8 @@ class ChatModeTestBase(unittest.TestCase):
             "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "sonnet")),
             "retrieve_from_pgvector": mock.Mock(return_value=list(RESOURCES)),
             "retrieve_guideline_sections": mock.Mock(return_value=SECTIONS),
+            # The active embedding space's min_score (migration 032); 0.40 = DEFAULT_MIN_SCORE.
+            "effective_min_score": mock.Mock(return_value=0.40),
             "assess_response": mock.Mock(return_value={"warning_text": None}),
             "invoke_guardrail": mock.Mock(side_effect=lambda q, r: {"action": "NONE", "text": q}),
         }
@@ -115,6 +148,18 @@ class ChatModeTestBase(unittest.TestCase):
             stream_callback=streamed.append,
         )
         return result, "".join(streamed)
+
+    def _saved_ai_sources(self):
+        """Sources saved with the single AI message (insert_message args[4])."""
+        ai_inserts = [c for c in self.patches["insert_message"].call_args_list if c.args[2] == "AI"]
+        self.assertEqual(len(ai_inserts), 1)
+        return ai_inserts[0].args[4]
+
+    def assert_resources_shown(self, result, titles):
+        self.assertEqual([s["title"] for s in result["sources_used"]], titles)
+        self.assertEqual(self._saved_ai_sources(), result["sources_used"])
+        self.assertFalse(any(_is_guide(s) for s in result["sources_used"]))
+        self.assertFalse(any(_is_guide(s) for s in self._saved_ai_sources()))
 
 
 class StandardModeTest(ChatModeTestBase):
@@ -186,13 +231,7 @@ class GuidelineModeTest(ChatModeTestBase):
         self.patches["save_journey_state"].assert_not_called()
         self.patches["save_routing_state"].assert_not_called()
 
-    @staticmethod
-    def _is_guide(source):
-        return (
-            source.get("source_type") == "guideline"
-            or str(source.get("type", "")).lower() == "guideline"
-            or str(source.get("title", "")).startswith("Family guide")
-        )
+    _is_guide = staticmethod(_is_guide)
 
     def test_guide_citations_are_never_public(self):
         result, _ = self.respond("guideline")
@@ -226,8 +265,97 @@ class GuidelineClarifyTest(ChatModeTestBase):
         result, streamed = self.respond("guideline")
         self.assertIn("What has been happening at school?", streamed)
         self.assertEqual(result["sources_used"], [])
+        self.assertEqual(self._saved_ai_sources(), [])
         self.patches["assess_response"].assert_not_called()
         self.patches["save_guide_state"].assert_not_called()
+
+
+class GuidelineEmptyCitationsWithSectionTest(ChatModeTestBase):
+    """Explicit [] marks a clarifying turn even when a section is chosen."""
+    reply = EMPTY_CITATIONS_WITH_SECTION_REPLY
+
+    def test_explicit_empty_citations_show_no_resources(self):
+        result, _ = self.respond("guideline")
+        self.assertEqual(result["sources_used"], [])
+        self.assertEqual(self._saved_ai_sources(), [])
+
+
+class GuidelineGuideOnlyCitationTest(ChatModeTestBase):
+    """Regression: the model cited only the guide section, so "More resources"
+    was empty. main.py sends sources_used unchanged as complete.sources, so
+    asserting sources_used covers the streamed complete payload."""
+    reply = GUIDE_ONLY_LINKED_REPLY
+
+    def test_library_resources_still_shown(self):
+        result, _ = self.respond("guideline")
+        # Linked resource first, then by score; both are >= DEFAULT_MIN_SCORE.
+        self.assert_resources_shown(result, ["Keeping a school log", "Unrelated PDF"])
+
+    def test_fallback_resources_are_not_grounding(self):
+        self.respond("guideline")
+        sources_arg = self.patches["assess_response"].call_args.kwargs["sources"]
+        self.assertEqual(len(sources_arg), 1)
+        self.assertEqual(sources_arg[0]["source_type"], "guideline")
+        self.patches["save_guide_state"].assert_called_once()
+
+
+class GuidelineGuideOnlyNoLinkTest(ChatModeTestBase):
+    """Guide-only citation, no link in the answer: resources ordered by score;
+    complete.sources is sources_used (see main.py)."""
+    reply = GUIDE_ONLY_REPLY
+
+    def test_resources_ordered_by_score_and_low_scores_excluded(self):
+        low = {
+            "type": "WEB", "source_type": "http", "title": "Low score page",
+            "url": "https://example.org/low", "uri": "https://example.org/low",
+            "content": "Barely related.", "score": 0.2, "metadata": {},
+        }
+        higher_pdf = dict(RESOURCES[1], title="Better PDF", score=0.7)
+        self.patches["retrieve_from_pgvector"].return_value = [RESOURCES[0], low, higher_pdf]
+        result, _ = self.respond("guideline")
+        self.assert_resources_shown(result, ["Better PDF", "Keeping a school log"])
+        self.assertLessEqual(len(result["sources_used"]), chat.GUIDELINE_FALLBACK_RESOURCE_COUNT)
+
+    def test_fallback_uses_the_active_spaces_min_score(self):
+        mid = dict(RESOURCES[1], title="Mid score PDF", score=0.5)
+        self.patches["retrieve_from_pgvector"].return_value = [RESOURCES[0], mid]
+        self.patches["effective_min_score"].return_value = 0.6
+        result, _ = self.respond("guideline")
+        # RESOURCES[0] scores above 0.6; the 0.5 PDF is below this space's cutoff.
+        self.assert_resources_shown(result, ["Keeping a school log"])
+        self.patches["effective_min_score"].assert_called()
+
+    def test_only_low_scores_shows_nothing(self):
+        low = dict(RESOURCES[1], score=0.1)
+        self.patches["retrieve_from_pgvector"].return_value = [low]
+        result, _ = self.respond("guideline")
+        self.assertEqual(result["sources_used"], [])
+        self.assertEqual(self._saved_ai_sources(), [])
+
+
+class EmbeddingSpaceFailureTest(ChatModeTestBase):
+    """A missing/inconsistent embedding space must reach main.py, not become a generic reply."""
+    reply = "<answer>x</answer><cited_indices>[]</cited_indices>"
+
+    def test_standard_mode_reraises_embedding_space_error(self):
+        self.patches["retrieve_from_pgvector"].side_effect = EmbeddingSpaceError("INDEX_MISSING")
+        with self.assertRaises(EmbeddingSpaceError):
+            self.respond("standard")
+
+    def test_guideline_mode_reraises_embedding_space_error(self):
+        self.patches["retrieve_guideline_sections"].side_effect = EmbeddingSpaceError("PROBE_FAILED")
+        with self.assertRaises(EmbeddingSpaceError):
+            self.respond("guideline")
+
+
+class GuidelineMissingCitationsTest(ChatModeTestBase):
+    """No <cited_indices> block at all on a guidance answer."""
+    reply = NO_CITATIONS_REPLY
+
+    def test_resources_still_shown(self):
+        result, _ = self.respond("guideline")
+        self.assert_resources_shown(result, ["Keeping a school log", "Unrelated PDF"])
+        self.patches["save_guide_state"].assert_called_once()
 
 
 if __name__ == "__main__":

@@ -148,6 +148,16 @@ async function createAppUsers(
 
     GRANT readwrite TO ${RW_NAME};
     GRANT tablecreator TO ${TC_NAME};
+
+    -- Migration 032 grants these when readwrite already exists; on a brand-new
+    -- database the role is created above, after migrations, so grant here too.
+    DO $$
+    BEGIN
+      IF to_regprocedure('create_space_index(uuid)') IS NOT NULL
+         AND to_regprocedure('drop_space_index(uuid)') IS NOT NULL THEN
+        GRANT EXECUTE ON FUNCTION create_space_index(uuid), drop_space_index(uuid) TO readwrite;
+      END IF;
+    END$$;
   `;
 
   await adminClient.query("BEGIN");

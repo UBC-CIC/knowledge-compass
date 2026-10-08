@@ -155,6 +155,11 @@ function isResourceSource(source: SourceItem | string) {
   return isHttpSource(source) || type === "document" || type === "csv_row";
 }
 
+// CSV row resources are presented to families as documents.
+function displayType(type: string) {
+  return type === "csv_row" ? "document" : type;
+}
+
 export default function AIChatMessage({
   text,
   question,
@@ -192,7 +197,7 @@ export default function AIChatMessage({
                 <span className="min-w-0">
                   {type ? (
                     <span className="block text-[11px] font-bold uppercase tracking-[0.06em] text-foreground/70">
-                      {type}
+                      {displayType(type)}
                     </span>
                   ) : null}
                   {linkable ? (

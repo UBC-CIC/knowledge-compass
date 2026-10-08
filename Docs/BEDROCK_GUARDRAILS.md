@@ -213,10 +213,13 @@ The guardrail is configured in `api-stack.ts` with:
 
   | Category | Entities |
   |----------|----------|
-  | General  | ADDRESS, AGE, NAME, EMAIL, PHONE, USERNAME, PASSWORD, DRIVER_ID, LICENSE_PLATE, VEHICLE_IDENTIFICATION_NUMBER |
+  | General  | AGE, NAME, EMAIL, PHONE, USERNAME, PASSWORD, DRIVER_ID, LICENSE_PLATE, VEHICLE_IDENTIFICATION_NUMBER |
   | Finance  | CREDIT_DEBIT_CARD_CVV, CREDIT_DEBIT_CARD_EXPIRY, CREDIT_DEBIT_CARD_NUMBER, PIN, INTERNATIONAL_BANK_ACCOUNT_NUMBER, SWIFT_CODE |
   | IT       | IP_ADDRESS, MAC_ADDRESS, URL |
   | Canada   | CA_HEALTH_NUMBER, CA_SOCIAL_INSURANCE_NUMBER |
+  | Custom regex | CA_POSTAL_CODE, STREET_ADDRESS (ANONYMIZE, input) |
+
+  Regex matches (`sensitiveInformationPolicy.regexes`) are classified as ANONYMIZED in `helpers/guardrail.py`, the same as built-in PII entities.
 
 - **Prompt attack filter:** `PROMPT_ATTACK` with `inputStrength: HIGH`, `outputStrength: NONE` — prompt injection attempts are blocked before reaching the LLM.
 - **`blockedInputMessaging`:** Friendly redirect message shown to the user when a prompt injection is detected.

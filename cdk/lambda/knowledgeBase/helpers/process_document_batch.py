@@ -70,7 +70,9 @@ import time
 import boto3
 from docx import Document as DocxDocument
 
+from helpers import embeddings
 from helpers.csv_links import start_link_phase
+from helpers.embedding_space import resolve_active_space
 from helpers.pdf_text import TextractPending, extract_pdf
 from helpers.upload_identity import source_url_for
 
@@ -78,8 +80,8 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.environ["REGION"]
-EMBED_MODEL_ID = "cohere.embed-english-v3"
-EMBED_BATCH_SIZE = 96
+EMBED_MODEL_ID = embeddings.DEFAULT_SPEC.invoke_target
+EMBED_BATCH_SIZE = embeddings.DEFAULT_SPEC.batch_size
 # Same shared execution role as textGen already grants bedrock:InvokeModel /
 # s3:GetObject-PutObject-DeleteObject on the ingest bucket; only the
 # self-invoke permission below is new.
@@ -106,7 +108,6 @@ _MAX_CONTINUATIONS = 10
 _DEFAULT_LAMBDA_SECONDS = 600
 
 s3_client = boto3.client("s3", region_name=REGION)
-bedrock_runtime = boto3.client("bedrock-runtime", region_name=REGION)
 lambda_client = boto3.client("lambda", region_name=REGION)
 
 
@@ -302,28 +303,18 @@ def _chunk_document_text(text: str, doc_name: str, max_words: int = _MAX_WORDS_P
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
 
-def _embedding_input(text: str) -> str:
-    """The exact text sent to Cohere, used as the embedding reuse key."""
-    if len(text) <= 2048:
-        return text
-    return text[:2048].rsplit(" ", 1)[0]
+def _embedding_input(text: str, spec=None) -> str:
+    """The exact text sent to the embedding model, used as the embedding reuse key."""
+    return embeddings.embedding_input(text, spec or embeddings.DEFAULT_SPEC)
 
 
-def _embed_texts(texts: list) -> list:
-    """Cohere embed-english-v3 via Bedrock, batched at 96 texts/call (API limit)."""
-    texts = [_embedding_input(text) for text in texts]
-    embeddings: list = []
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i : i + EMBED_BATCH_SIZE]
-        response = bedrock_runtime.invoke_model(
-            modelId=EMBED_MODEL_ID,
-            body=json.dumps({"texts": batch, "input_type": "search_document", "truncate": "END"}),
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        embeddings.extend(result["embeddings"])
-    return embeddings
+def _embed_texts(texts: list, spec=None) -> list:
+    """
+    Embed document chunks through the shared embeddings module. `spec` is the
+    active embedding space's model spec; without it (legacy callers, tests) the
+    Cohere v3 DEFAULT_SPEC applies.
+    """
+    return embeddings.embed_documents(texts, spec or embeddings.DEFAULT_SPEC, REGION)
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -477,27 +468,38 @@ def _embed_text_md5(chunk: dict) -> str:
     return hashlib.md5(chunk["text"].encode()).hexdigest()
 
 
-def _existing_chunk_states(connection, source_id: str) -> dict:
-    """chunk_index -> _chunk_state of what is stored there."""
+def _existing_chunk_states(connection, source_id: str, space_id: str) -> dict:
+    """
+    chunk_index -> _chunk_state of what is stored there, for chunks that also
+    have a CURRENT vector in the active space (embed_hash = md5(embed_text)).
+    A chunk with unchanged text but a missing or stale vector in that space is
+    left out, so it counts as changed and gets embedded or reused.
+    """
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT chunk_index, content_hash, md5(embed_text), metadata
-            FROM chunks
-            WHERE source_id = %s::uuid
+            SELECT c.chunk_index, c.content_hash, md5(c.embed_text), c.metadata
+            FROM chunks c
+            JOIN chunk_embeddings ce
+              ON ce.chunk_id = c.id
+             AND ce.space_id = %s::uuid
+             AND ce.embed_hash = md5(c.embed_text)
+            WHERE c.source_id = %s::uuid
             """,
-            (source_id,),
+            (space_id, source_id),
         )
         return {row[0]: (row[1], row[2], _metadata_state(row[3])) for row in cursor.fetchall()}
 
 
-def _reusable_embeddings(connection, source_id: str, chunks: list) -> dict:
+def _reusable_embeddings(connection, source_id: str, chunks: list, space_id: str) -> dict:
     """
     Stored embeddings (as pgvector text) for chunk texts this source already
     holds at ANY index, keyed by (content_hash, md5(embed_text)). A row inserted
     or deleted shifts every later chunk_index; this lets those shifted chunks
     keep their embedding instead of being re-embedded. Read before any writes,
-    since the upserts below overwrite chunks by index.
+    since the upserts below overwrite chunks by index. Only vectors of the
+    ACTIVE space whose embed_hash matches the chunk's current text are reused;
+    a vector from another space is never returned.
     """
     hashes = sorted({c["content_hash"] for c in chunks})
     if not hashes:
@@ -505,57 +507,79 @@ def _reusable_embeddings(connection, source_id: str, chunks: list) -> dict:
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT DISTINCT ON (content_hash, md5(embed_text))
-                   content_hash, md5(embed_text), embedding::text
-            FROM chunks
-            WHERE source_id = %s::uuid
-              AND content_hash = ANY(%s)
-              AND embedding IS NOT NULL
+            SELECT DISTINCT ON (c.content_hash, md5(c.embed_text))
+                   c.content_hash, md5(c.embed_text), ce.embedding::text
+            FROM chunks c
+            JOIN chunk_embeddings ce
+              ON ce.chunk_id = c.id
+             AND ce.space_id = %s::uuid
+             AND ce.embed_hash = md5(c.embed_text)
+            WHERE c.source_id = %s::uuid
+              AND c.content_hash = ANY(%s)
             """,
-            (source_id, hashes),
+            (space_id, source_id, hashes),
         )
         return {(row[0], row[1]): row[2] for row in cursor.fetchall()}
 
 
-def _globally_reusable_embeddings(connection, chunks: list) -> dict:
-    """Reuse exact embed_text vectors already present anywhere in this corpus."""
+def _globally_reusable_embeddings(connection, chunks: list, space_id: str) -> dict:
+    """Reuse exact embed_text vectors already present anywhere in this corpus, in the active space only."""
     hashes = sorted({chunk["content_hash"] for chunk in chunks})
     if not hashes:
         return {}
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT DISTINCT ON (content_hash, md5(embed_text))
-                   content_hash, md5(embed_text), embedding::text
-            FROM chunks
-            WHERE content_hash = ANY(%s)
-              AND embedding IS NOT NULL
+            SELECT DISTINCT ON (c.content_hash, md5(c.embed_text))
+                   c.content_hash, md5(c.embed_text), ce.embedding::text
+            FROM chunks c
+            JOIN chunk_embeddings ce
+              ON ce.chunk_id = c.id
+             AND ce.space_id = %s::uuid
+             AND ce.embed_hash = md5(c.embed_text)
+            WHERE c.content_hash = ANY(%s)
             """,
-            (hashes,),
+            (space_id, hashes),
         )
         return {(row[0], row[1]): row[2] for row in cursor.fetchall()}
 
 
-def _upsert_chunk(connection, source_id: str, chunk: dict, embedding):
-    """`embedding` is a float list (fresh) or pgvector text (reused)."""
+def _upsert_chunk(connection, source_id: str, chunk: dict, embedding, space_id: str):
+    """
+    Write the chunk row WITHOUT an embedding (chunks.embedding is legacy: left
+    NULL on insert and untouched on conflict, so the compatibility trigger of
+    migration 032 never fires) and its vector in the active space, in one
+    statement. `embedding` is a float list (fresh) or pgvector text (reused).
+    embed_hash is md5(embed_text) computed by Postgres from the stored row, the
+    same expression the read path compares against.
+    """
     embedding_str = embedding if isinstance(embedding, str) else "[" + ",".join(str(x) for x in embedding) + "]"
     metadata = json.dumps(_chunk_metadata(chunk), sort_keys=True, ensure_ascii=False)
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO chunks (
-              source_id, chunk_index, body, embed_text,
-              word_count, content_hash, embedding, metadata, updated_at
+            WITH upserted AS (
+              INSERT INTO chunks (
+                source_id, chunk_index, body, embed_text,
+                word_count, content_hash, metadata, updated_at
+              )
+              VALUES (%s::uuid, %s, %s, %s, %s, %s, %s::jsonb, now())
+              ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+                body         = EXCLUDED.body,
+                embed_text   = EXCLUDED.embed_text,
+                word_count   = EXCLUDED.word_count,
+                content_hash = EXCLUDED.content_hash,
+                metadata     = EXCLUDED.metadata,
+                updated_at   = now()
+              RETURNING id, embed_text
             )
-            VALUES (%s::uuid, %s, %s, %s, %s, %s, %s::vector, %s::jsonb, now())
-            ON CONFLICT (source_id, chunk_index) DO UPDATE SET
-              body         = EXCLUDED.body,
-              embed_text   = EXCLUDED.embed_text,
-              word_count   = EXCLUDED.word_count,
-              content_hash = EXCLUDED.content_hash,
-              embedding    = EXCLUDED.embedding,
-              metadata     = EXCLUDED.metadata,
-              updated_at   = now()
+            INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash, embedded_at)
+            SELECT id, %s::uuid, %s::vector, md5(embed_text), now()
+            FROM upserted
+            ON CONFLICT (chunk_id, space_id) DO UPDATE SET
+              embedding   = EXCLUDED.embedding,
+              embed_hash  = EXCLUDED.embed_hash,
+              embedded_at = EXCLUDED.embedded_at
             """,
             (
                 source_id,
@@ -564,8 +588,9 @@ def _upsert_chunk(connection, source_id: str, chunk: dict, embedding):
                 chunk["text"],
                 chunk["word_count"],
                 chunk["content_hash"],
-                embedding_str,
                 metadata,
+                space_id,
+                embedding_str,
             ),
         )
 
@@ -579,37 +604,43 @@ def _delete_stale_chunks(connection, source_id: str, current_indices: list) -> i
         return cursor.rowcount
 
 
-def write_chunk_sets(connection, chunk_sets: list[tuple[str, list]]) -> dict:
+def write_chunk_sets(connection, chunk_sets: list[tuple[str, list]], space=None) -> dict:
     """
     Store complete chunk sets for multiple sources in one embedding batch.
 
-    Existing vectors are reused within each source whenever the effective
-    embedded text is unchanged, including metadata-only updates. New embedding
-    inputs are deduplicated across the supplied sources before Cohere is called.
+    Vectors are written to the ACTIVE embedding space, resolved once per call
+    (`space` overrides it, for tests and re-embed jobs). Existing vectors of
+    that space are reused within each source whenever the effective embedded
+    text is unchanged, including metadata-only updates; a chunk whose text is
+    unchanged but which has no current vector in the active space counts as
+    changed. New embedding inputs are deduplicated across the supplied sources
+    before the embedding model is called.
     """
+    space = space or resolve_active_space(connection)
+    spec = space.spec
     changed_by_source: dict[str, list] = {}
     reusable_by_source: dict[str, dict] = {}
     all_changed: list = []
 
     for source_id, chunks in chunk_sets:
-        existing_states = _existing_chunk_states(connection, source_id)
+        existing_states = _existing_chunk_states(connection, source_id, space.id)
         changed = [chunk for chunk in chunks if existing_states.get(chunk["chunk_index"]) != _chunk_state(chunk)]
-        reusable = _reusable_embeddings(connection, source_id, changed)
+        reusable = _reusable_embeddings(connection, source_id, changed, space.id)
         changed_by_source[source_id] = changed
         reusable_by_source[source_id] = reusable
         all_changed.extend(changed)
 
-    globally_reusable = _globally_reusable_embeddings(connection, all_changed)
+    globally_reusable = _globally_reusable_embeddings(connection, all_changed, space.id)
     fresh_inputs: dict[str, None] = {}
     for source_id, _ in chunk_sets:
         reusable = reusable_by_source[source_id]
         for chunk in changed_by_source[source_id]:
             reuse_key = (chunk["content_hash"], _embed_text_md5(chunk))
             if reuse_key not in reusable and reuse_key not in globally_reusable:
-                fresh_inputs.setdefault(_embedding_input(chunk["text"]), None)
+                fresh_inputs.setdefault(_embedding_input(chunk["text"], spec), None)
 
     unique_inputs = list(fresh_inputs)
-    fresh_embeddings = dict(zip(unique_inputs, _embed_texts(unique_inputs))) if unique_inputs else {}
+    fresh_embeddings = dict(zip(unique_inputs, _embed_texts(unique_inputs, spec))) if unique_inputs else {}
 
     written = 0
     deleted = 0
@@ -621,17 +652,17 @@ def write_chunk_sets(connection, chunk_sets: list[tuple[str, list]]) -> dict:
             if embedding is None:
                 embedding = globally_reusable.get(reuse_key)
             if embedding is None:
-                embedding = fresh_embeddings[_embedding_input(chunk["text"])]
-            _upsert_chunk(connection, source_id, chunk, embedding)
+                embedding = fresh_embeddings[_embedding_input(chunk["text"], spec)]
+            _upsert_chunk(connection, source_id, chunk, embedding, space.id)
             written += 1
         deleted += _delete_stale_chunks(connection, source_id, [chunk["chunk_index"] for chunk in chunks])
 
     return {"written": written, "embedded": len(unique_inputs), "deleted": deleted}
 
 
-def write_chunks(connection, source_id: str, chunks: list) -> dict:
+def write_chunks(connection, source_id: str, chunks: list, space=None) -> dict:
     """Store one source's complete chunk set using the batched writer."""
-    return write_chunk_sets(connection, [(source_id, chunks)])
+    return write_chunk_sets(connection, [(source_id, chunks)], space=space)
 
 
 def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> dict:

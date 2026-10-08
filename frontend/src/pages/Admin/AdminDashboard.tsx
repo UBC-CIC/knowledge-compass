@@ -9,6 +9,7 @@ import Analytics from "@/components/Admin/Analytics";
 import PromptManagement from "@/components/Admin/Prompts/PromptManagement";
 import SystemSettings from "@/components/Admin/SystemSettings";
 import GuidelineMode from "@/components/Admin/Guideline/GuidelineMode";
+import EmbeddingSpaces from "@/components/Admin/Embeddings/EmbeddingSpaces";
 import { DEMO_ADMIN_EMAIL, isDemoMode } from "@/lib/demo";
 
 export default function AdminDashboard() {
@@ -81,6 +82,7 @@ export default function AdminDashboard() {
                 ["prompts", "Prompts"],
                 ["system-settings", "Settings"],
                 ["guideline", "Guides"],
+                ["embeddings", "Search index"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -103,6 +105,7 @@ export default function AdminDashboard() {
           {activeView === "prompts" && <PromptManagement />}
           {activeView === "system-settings" && <SystemSettings />}
           {activeView === "guideline" && <GuidelineMode />}
+          {activeView === "embeddings" && <EmbeddingSpaces />}
         </main>
       </div>
     </div>

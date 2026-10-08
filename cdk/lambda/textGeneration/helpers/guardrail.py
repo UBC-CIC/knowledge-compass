@@ -52,8 +52,11 @@ def invoke_guardrail(user_message: str, region: str) -> dict:
         for f in assessment.get('contentPolicy', {}).get('filters', []):
             if f.get('type') == 'PROMPT_ATTACK' and f.get('action') == 'BLOCKED':
                 has_prompt_attack = True
-        # PII is under sensitiveInformationPolicy.piiEntities
-        if assessment.get('sensitiveInformationPolicy', {}).get('piiEntities'):
+        # PII is under sensitiveInformationPolicy.piiEntities (built-in entities)
+        # or .regexes (custom filters, e.g. CA_POSTAL_CODE / STREET_ADDRESS).
+        # Never log the 'match' values: they hold the raw PII.
+        sensitive = assessment.get('sensitiveInformationPolicy', {})
+        if sensitive.get('piiEntities') or sensitive.get('regexes'):
             has_pii = True
 
     if has_prompt_attack:

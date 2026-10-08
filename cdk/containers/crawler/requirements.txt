@@ -1,4 +1,6 @@
-crawlee[playwright]
+crawlee[playwright]==1.10.4
+# Must match the Playwright base image tag in Dockerfile.
+playwright==1.63.0
 trafilatura
 lxml
 beautifulsoup4

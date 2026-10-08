@@ -3,6 +3,7 @@ import logging
 
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.cors import get_cors_headers
+from helpers.ingestion_lock import reject_if_locked
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -90,6 +91,10 @@ def retry_ingestion_run(event, body, connection, data_source_id: str):
     the existing Sync now flow (start_ingestion_job), same as any other
     staged source.
     """
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
+
     created_by = admin_email_from_request(event, body)
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UserContext } from "./user";
 import { DEMO_USER_ID, isDemoMode } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 
 export function UserProvider({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
       try {
         // get public token
         const tokenResp = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+          `${API_ENDPOINT}/user/publicToken`
         );
         if (!tokenResp.ok) {
           console.error("Failed to get public token");
@@ -31,7 +32,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
         // Validate user exists
         const validateResp = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/${stored.userId}`,
+          `${API_ENDPOINT}/user/${stored.userId}`,
           {
             method: "GET",
             headers: {
@@ -51,13 +52,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
       try {
         // First get a public token
         const tokenResponse = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+          `${API_ENDPOINT}/user/publicToken`
         );
         if (!tokenResponse.ok) throw new Error("Failed to get public token");
         const { token } = await tokenResponse.json();
 
         // Create an anonymous session user — guardians do not sign in.
-        const response = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user`, {
+        const response = await fetch(`${API_ENDPOINT}/user`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

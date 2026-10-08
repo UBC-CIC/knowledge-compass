@@ -6,6 +6,8 @@ import logging
 import os
 import boto3
 from helpers.chat import get_response
+from helpers.crud import fetch_service_status
+from helpers.embedding_space import EmbeddingSpaceError
 from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import validate_session_ownership, sanitize_session_id
@@ -14,6 +16,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 GENERIC_ERROR_MESSAGE = "Sorry, something went wrong while preparing a response. Please try again."
+READ_ONLY_DEFAULT_MESSAGE = "Chat is temporarily read-only. Please try again later."
 
 
 def _get_ws_client(event):
@@ -129,6 +132,18 @@ def handler(event, context=None):
                 "This chat session couldn't be found. Please start a new chat.",
             )
 
+        # Read-only fallback (admin "Assistant settings" > service status, migration 034).
+        # Refuses a new turn with the standard `error` event, before `start` is sent and
+        # before any retrieval or model call. A banner does not block. The status read
+        # falls back to normal on error, so it can never take chat down by itself.
+        service = fetch_service_status(conn)
+        if service['status'] == 'read_only':
+            return fail(
+                503,
+                'SERVICE_READ_ONLY',
+                service['message'] or READ_ONLY_DEFAULT_MESSAGE,
+            )
+
         # Load dynamic configuration from DB
         config.load_config(conn)
 
@@ -197,6 +212,16 @@ def handler(event, context=None):
             'body': json.dumps(response_body)
         }
 
+    except EmbeddingSpaceError as e:
+        # The embedding space is missing or inconsistent (already logged with its
+        # code and emitted as a metric). The client gets the standard `error`
+        # event with no internal detail.
+        logger.error("Embedding space unavailable: code=%s", e.code)
+        return fail(
+            503,
+            'EMBEDDING_SPACE_UNAVAILABLE',
+            "The assistant is temporarily unavailable. Please try again shortly.",
+        )
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return fail(500, 'Internal server error')

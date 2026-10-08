@@ -4,6 +4,7 @@ import { confirmSignIn } from "aws-amplify/auth";
 import { AuthService } from "@/functions/authService";
 import BrandMark from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 export default function AdminLogin() {
   const [email, setEmail] = useState("");
@@ -44,7 +45,7 @@ export default function AdminLogin() {
   const updateAdminUser = async (adminEmail: string) => {
     const token = await AuthService.getAdminIdToken(false);
 
-    const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/promote_user`, {
+    const res = await fetch(`${API_ENDPOINT}/admin/promote_user`, {
       method: "POST",
       headers: {
         Authorization: token,

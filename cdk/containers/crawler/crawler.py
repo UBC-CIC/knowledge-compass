@@ -27,6 +27,7 @@ Requirements:
 
 import argparse
 import asyncio
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -35,7 +36,6 @@ import re
 import sys
 from xml.etree import ElementTree as ET
 
-import boto3
 import trafilatura
 from bs4 import BeautifulSoup
 from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
@@ -58,15 +58,95 @@ except ImportError:
     db_config = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(db_config)  # type: ignore
 
+# Shared embedding interface; same import / path-load fallback as db_config.
+try:
+    from common import embeddings as shared_embeddings  # type: ignore
+except ImportError:
+    _emb_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "embeddings.py",
+    )
+    if not os.path.exists(_emb_path):
+        _emb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings.py")
+    _emb_spec = importlib.util.spec_from_file_location("embeddings", _emb_path)
+    shared_embeddings = importlib.util.module_from_spec(_emb_spec)
+    _emb_spec.loader.exec_module(shared_embeddings)  # type: ignore
+
 
 # ── Config (environment-driven) ───────────────────────────────────────────────
 
 REGION = db_config.get_region()
+# DEPRECATED fallbacks (db_config): the embedding model comes from the active
+# embedding space in the database. These are used only when that lookup is
+# unavailable, for example a standalone crawl-only run without database access.
 EMBED_MODEL_ID = db_config.get_embed_model_id()
 EMBED_BATCH_SIZE = db_config.get_embed_batch_size()  # Cohere API limit is 96 per call
+DEFAULT_SEMANTIC_THRESHOLD = 0.6
 # ~300 words of web text (~6 chars/word) plus the heading label stays under the
 # 2048-char Cohere input cap in embed_texts, so the whole chunk is embedded.
 MAX_WORDS_PER_CHUNK = 300
+
+
+# ── Active embedding space ────────────────────────────────────────────────────
+# Set once per run by load_active_space(); embed_texts and the DB writer use it.
+ACTIVE_SPACE = None   # registry row (dict) of the space ingestion writes to
+ACTIVE_SPEC = None    # its ModelSpec
+
+
+def load_active_space(conn) -> dict:
+    """Resolve the active embedding space from the database (never from task env)."""
+    global ACTIVE_SPACE, ACTIVE_SPEC
+    row = db_config.get_active_embedding_space(conn)
+    ACTIVE_SPEC = db_config.spec_from_space(row)
+    ACTIVE_SPACE = row
+    return row
+
+
+def init_active_space(needed: bool, write_db: bool):
+    """
+    Resolve the space at startup. A run that writes to the database must have
+    one (the error propagates). A crawl-only run without database access may
+    continue on the deprecated env fallback; semantic splitting then uses
+    the Cohere v3 defaults.
+    """
+    if not needed:
+        return None
+    try:
+        conn = get_db_connection()
+        try:
+            row = load_active_space(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        if write_db:
+            raise
+        print(
+            f"[space] could not read the active embedding space ({type(exc).__name__}); "
+            "using the deprecated EMBED_* fallback",
+            file=sys.stderr,
+        )
+        return None
+    print(f"[space] embedding with space '{row['name']}' ({row['dimensions']} dims)", file=sys.stderr)
+    return row
+
+
+def resolve_semantic_threshold(cli_value, space) -> float:
+    """Precedence: explicit --semantic-threshold, then the space's split_threshold, then 0.6."""
+    if cli_value is not None:
+        return cli_value
+    if space and space.get("split_threshold") is not None:
+        return space["split_threshold"]
+    return DEFAULT_SEMANTIC_THRESHOLD
+
+
+def current_spec():
+    """The active space's spec, or the deprecated env fallback when none was loaded."""
+    if ACTIVE_SPEC is not None:
+        return ACTIVE_SPEC
+    return dataclasses.replace(
+        shared_embeddings.DEFAULT_SPEC, invoke_target=EMBED_MODEL_ID, batch_size=EMBED_BATCH_SIZE
+    )
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -163,35 +243,66 @@ def finish_crawl_run(conn, run_id: str, status: str, stats: dict, error_message:
         )
 
 
-def get_existing_chunk_hashes(conn, source_id: str) -> dict:
-    """Returns {chunk_index: content_hash} for all stored chunks for this source."""
+def get_existing_chunk_hashes(conn, source_id: str, space_id: str) -> dict:
+    """
+    Returns {chunk_index: (content_hash, has_current_vector)} for the stored
+    chunks of this source. has_current_vector is True when the active space
+    holds a vector whose embed_hash matches the chunk's current embed_text.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT chunk_index, content_hash FROM chunks WHERE source_id = %s",
-            (source_id,),
+            """
+            SELECT c.chunk_index, c.content_hash,
+                   (ce.chunk_id IS NOT NULL AND ce.embed_hash = md5(c.embed_text)) AS has_current_vector
+            FROM chunks c
+            LEFT JOIN chunk_embeddings ce
+              ON ce.chunk_id = c.id AND ce.space_id = %s::uuid
+            WHERE c.source_id = %s
+            """,
+            (space_id, source_id),
         )
-        return {row[0]: row[1] for row in cur.fetchall()}
+        return {row[0]: (row[1], bool(row[2])) for row in cur.fetchall()}
 
 
-def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list) -> None:
+def needs_embedding(chunk: dict, existing: dict) -> bool:
+    """A chunk is (re)embedded when its content changed or the active space has no current vector for it."""
+    stored = existing.get(chunk["chunk_index"])
+    return stored is None or stored[0] != chunk["content_hash"] or not stored[1]
+
+
+def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list, space_id: str) -> None:
+    """
+    Write the chunk row WITHOUT an embedding (chunks.embedding is legacy and
+    left alone) and its vector in the active space, in one statement. embed_hash
+    is md5(embed_text) computed by Postgres from the stored row.
+    """
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
     metadata = json.dumps({"heading_path": chunk.get("heading_path")})
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chunks (
-              source_id, chunk_index, body, embed_text,
-              word_count, content_hash, embedding, metadata, updated_at
+            WITH upserted AS (
+              INSERT INTO chunks (
+                source_id, chunk_index, body, embed_text,
+                word_count, content_hash, metadata, updated_at
+              )
+              VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, now())
+              ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+                body         = EXCLUDED.body,
+                embed_text   = EXCLUDED.embed_text,
+                word_count   = EXCLUDED.word_count,
+                content_hash = EXCLUDED.content_hash,
+                metadata     = EXCLUDED.metadata,
+                updated_at   = now()
+              RETURNING id, embed_text
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s::jsonb, now())
-            ON CONFLICT (source_id, chunk_index) DO UPDATE SET
-              body         = EXCLUDED.body,
-              embed_text   = EXCLUDED.embed_text,
-              word_count   = EXCLUDED.word_count,
-              content_hash = EXCLUDED.content_hash,
-              embedding    = EXCLUDED.embedding,
-              metadata     = EXCLUDED.metadata,
-              updated_at   = now()
+            INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash, embedded_at)
+            SELECT id, %s::uuid, %s::vector, md5(embed_text), now()
+            FROM upserted
+            ON CONFLICT (chunk_id, space_id) DO UPDATE SET
+              embedding   = EXCLUDED.embedding,
+              embed_hash  = EXCLUDED.embed_hash,
+              embedded_at = EXCLUDED.embedded_at
             """,
             (
                 source_id,
@@ -200,8 +311,9 @@ def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list) -> None:
                 chunk["text"],
                 chunk["word_count"],
                 chunk["content_hash"],
-                embedding_str,
                 metadata,
+                space_id,
+                embedding_str,
             ),
         )
 
@@ -220,34 +332,14 @@ def delete_stale_chunks(conn, source_id: str, current_indices: list) -> int:
 
 def embed_texts(texts: list, input_type: str = "search_document") -> list:
     """
-    Embed texts using Cohere embed-english-v3 via Amazon Bedrock.
-    Batches at EMBED_BATCH_SIZE (96) per call — Cohere API limit.
+    Embed texts via the shared embeddings module (Amazon Bedrock) with the
+    active embedding space's model (see load_active_space). Batching and input
+    truncation follow that model's adapter (Cohere v3: 96 per call, cut to 2048
+    chars at a word boundary).
     input_type: 'search_document' when indexing, 'search_query' when querying.
-    Returns list of 1024-dim float vectors.
+    Returns one vector per text.
     """
-    client = boto3.client("bedrock-runtime", region_name=REGION)
-    embeddings = []
-
-    # Cohere max 2048 chars per text — truncate at word boundary
-    texts = [t[:2048].rsplit(" ", 1)[0] if len(t) > 2048 else t for t in texts]
-
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i : i + EMBED_BATCH_SIZE]
-        response = client.invoke_model(
-            modelId=EMBED_MODEL_ID,
-            body=json.dumps({
-                "texts": batch,
-                "input_type": input_type,
-                "truncate": "END",
-            }),
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        embeddings.extend(result["embeddings"])
-        print(f"  [embed] batch {i // EMBED_BATCH_SIZE + 1} — {len(batch)} texts", file=sys.stderr)
-
-    return embeddings
+    return shared_embeddings.embed_texts(texts, current_spec(), input_type, REGION)
 
 
 # ── Semantic Chunking Utilities ──────────────────────────────────────────────
@@ -391,7 +483,8 @@ def _fail_adopted_run(job_id: str, error_message: str) -> None:
 def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_id: str = None) -> None:
     """
     For each crawled page, upsert a row in sources then upsert chunks.
-    Change detection: only call Bedrock for chunks whose content_hash changed.
+    Change detection: only call Bedrock for chunks whose content_hash changed or
+    that have no current vector in the active embedding space.
     Commits per page so a crash mid-crawl doesn't lose everything.
 
     `job_id` optionally adopts a pre-created ingestion_runs row (proxy Lambda flow).
@@ -401,6 +494,10 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
     run_id = None
 
     try:
+        # The space was resolved once at startup (main); resolve here only when
+        # write_to_db is called on its own.
+        space_id = (ACTIVE_SPACE or load_active_space(conn))["id"]
+
         # One source row for the seed domain (the website as a whole)
         seed_source_id = upsert_source(conn, seed_url, seed_url, source_type="web")
         conn.commit()
@@ -417,16 +514,17 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
             # Each page is its own source row
             page_source_id = upsert_source(conn, page["url"], page["title"] or page["url"], source_type="web")
 
-            # Change detection — only embed chunks whose body changed
-            existing_hashes = get_existing_chunk_hashes(conn, page_source_id)
-            chunks_to_embed = [c for c in chunks if existing_hashes.get(c["chunk_index"]) != c["content_hash"]]
+            # Change detection — only embed chunks whose body changed or that have
+            # no current vector in the active embedding space
+            existing_hashes = get_existing_chunk_hashes(conn, page_source_id, space_id)
+            chunks_to_embed = [c for c in chunks if needs_embedding(c, existing_hashes)]
             chunks_unchanged = len(chunks) - len(chunks_to_embed)
 
             if chunks_to_embed:
                 texts = [c["text"] for c in chunks_to_embed]
                 embeddings = embed_texts(texts)
                 for chunk, embedding in zip(chunks_to_embed, embeddings):
-                    upsert_chunk(conn, page_source_id, chunk, embedding)
+                    upsert_chunk(conn, page_source_id, chunk, embedding, space_id)
                     stats["chunks_upserted"] += 1
 
             deleted = delete_stale_chunks(conn, page_source_id, [c["chunk_index"] for c in chunks])
@@ -763,20 +861,26 @@ def main() -> None:
                         help="Adopt an existing ingestion_runs row id (or JOB_ID env)")
     parser.add_argument("--semantic", action="store_true", default=env_semantic,
                         help="Use semantic chunking (embed sentences to detect topic boundaries)")
-    parser.add_argument("--semantic-threshold", type=float, default=0.6,
-                        help="Cosine similarity threshold for topic boundary detection (default 0.6)")
+    parser.add_argument("--semantic-threshold", type=float, default=None,
+                        help="Cosine similarity threshold for topic boundary detection "
+                             "(default: the active embedding space's split_threshold, else 0.6)")
     args = parser.parse_args()
 
     if not args.seed_url:
         parser.error("seed_url is required (pass as an argument or set SEED_URL env)")
 
+    # Resolve the embedding space once, before crawling: semantic splitting
+    # embeds sentences and needs the space's model and split_threshold.
+    space = init_active_space(needed=args.write_db or args.semantic, write_db=args.write_db)
+    semantic_threshold = resolve_semantic_threshold(args.semantic_threshold, space)
+
     if args.semantic:
-        print(f"Semantic chunking enabled (threshold={args.semantic_threshold})", file=sys.stderr)
+        print(f"Semantic chunking enabled (threshold={semantic_threshold})", file=sys.stderr)
     print(f"Crawling {args.seed_url} (max {args.max_pages} pages)...", file=sys.stderr)
     pages, discovered_urls = asyncio.run(
         crawl(args.seed_url, args.max_pages, args.max_words,
               use_semantic=args.semantic,
-              semantic_threshold=args.semantic_threshold)
+              semantic_threshold=semantic_threshold)
     )
 
     all_chunks = [c for p in pages for c in p["chunks"]]
