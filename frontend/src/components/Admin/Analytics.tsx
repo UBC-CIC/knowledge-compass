@@ -21,6 +21,7 @@ import {
   DEMO_STARRED_FEEDBACK,
   isDemoMode,
 } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 type TimeSeriesData = {
   date: string;
@@ -89,7 +90,7 @@ export default function Analytics() {
 
       const token = await AuthService.getAdminIdToken();
 
-      const analyticsUrl = `${import.meta.env.VITE_API_ENDPOINT}/admin/analytics?${query}`;
+      const analyticsUrl = `${API_ENDPOINT}/admin/analytics?${query}`;
 
       const res = await fetch(analyticsUrl, {
         headers: {

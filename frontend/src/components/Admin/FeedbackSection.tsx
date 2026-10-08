@@ -36,6 +36,7 @@ import {
   type FeedbackEntry,
   type FeedbackLists,
 } from "@/hooks/useFeedbackTriage";
+import { API_ENDPOINT } from "@/lib/api";
 
 // ------------------------------------------------------------------
 // Types and constants
@@ -385,7 +386,7 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
       const token = await AuthService.getAdminIdToken();
       // Only the rated reply is fetched, not the whole conversation.
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/feedback/${encodeURIComponent(id)}/message`,
+        `${API_ENDPOINT}/admin/feedback/${encodeURIComponent(id)}/message`,
         { headers: { Authorization: token, "Content-Type": "application/json" } }
       );
       if (!res.ok) throw new Error("Failed to load rated message");

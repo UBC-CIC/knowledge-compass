@@ -12,6 +12,7 @@ import {
   type GuidelineMode,
   type GuidelineState,
 } from "@/lib/guideline";
+import { API_ENDPOINT } from "@/lib/api";
 
 // Guideline mode admin API (cdk/lambda/knowledgeBase/helpers/guideline_admin.py).
 
@@ -19,7 +20,7 @@ const POLL_MS = 4000;
 
 async function adminFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await AuthService.getAdminIdToken();
-  const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}${path}`, {
+  const res = await fetch(`${API_ENDPOINT}${path}`, {
     ...init,
     headers: {
       Authorization: token,

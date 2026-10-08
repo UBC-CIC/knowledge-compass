@@ -9,13 +9,20 @@ const Module = require("node:module");
 const path = require("node:path");
 
 // Minimal stand-in for the postgres.js tagged-template client. `respond` maps
-// the joined SQL text + values to the rows a query returns.
-function fakeSql(respond = () => []) {
+// the joined SQL text + values to the rows a query returns. With
+// `rejectUndefined`, a query that binds `undefined` rejects the way postgres.js
+// does when no `transform.undefined` is configured (as in the Lambda handlers).
+function fakeSql(respond = () => [], { rejectUndefined = false } = {}) {
   const calls = [];
   const sql = (strings, ...values) => {
     const text = strings.join("?").replace(/\s+/g, " ").trim();
     calls.push({ text, values });
     if (text === "SELECT 1") return Promise.resolve([{ "?column?": 1 }]);
+    if (rejectUndefined && values.some((v) => v === undefined)) {
+      const error = new Error("Undefined values are not allowed");
+      error.code = "UNDEFINED_VALUE";
+      return Promise.reject(error);
+    }
     try {
       return Promise.resolve(respond(text, values));
     } catch (error) {

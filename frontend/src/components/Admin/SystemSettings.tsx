@@ -23,6 +23,7 @@ import {
   type RoutingMode,
   type SettingKey,
 } from "@/lib/assistantSettings";
+import { API_ENDPOINT } from "@/lib/api";
 
 type Meta = { updated_at?: string; updated_by_email?: string | null };
 
@@ -32,7 +33,7 @@ let demoMeta: Meta = {};
 
 async function settingsFetch<T>(init: RequestInit = {}): Promise<T> {
   const token = await AuthService.getAdminIdToken();
-  const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/system-settings`, {
+  const res = await fetch(`${API_ENDPOINT}/admin/system-settings`, {
     ...init,
     headers: { Authorization: token, "Content-Type": "application/json", ...(init.headers ?? {}) },
   });

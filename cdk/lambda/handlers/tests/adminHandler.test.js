@@ -42,3 +42,90 @@ test("removed example endpoint and unknown routes are not served", async () => {
     assert.notEqual(res.statusCode, 200, resource);
   }
 });
+
+// PUT /admin/system-settings is patch-style: the admin console sends only the
+// keys that changed. postgres.js rejects `undefined` bindings, so the fake does too.
+function settingsSql() {
+  return fakeSql(
+    (text) => {
+      if (text.includes("FROM users")) return [{ id: "u1", role: "admin" }];
+      if (text.startsWith("SELECT min_messages_before_suggest")) {
+        return [{ min_messages_before_suggest: 4, min_exchanges_before_answer: 0 }];
+      }
+      if (text.includes("UPDATE system_settings")) return [{ id: "s1" }];
+      return [];
+    },
+    { rejectUndefined: true }
+  );
+}
+
+function putSettings(sql, patch) {
+  return invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: adminContext,
+    body: JSON.stringify(patch),
+  });
+}
+
+const updateQuery = (sql) => sql.queries().find((q) => q.text.includes("UPDATE system_settings"));
+
+test("system settings: a single-key patch updates without binding undefined", async () => {
+  const sql = settingsSql();
+  const res = await putSettings(sql, { max_messages_per_day: 50 });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const update = updateQuery(sql);
+  assert.ok(update, "UPDATE was issued");
+  assert.ok(!update.values.includes(undefined), "no undefined bindings");
+  assert.ok(update.values.includes(50));
+  assert.ok(update.values.includes("u1"));
+});
+
+test("system settings: each allowed key can be patched on its own", async () => {
+  const singles = {
+    max_messages_per_day: 50,
+    min_messages_before_suggest: 3,
+    routing_mode: "dynamic",
+    min_exchanges_before_answer: 0,
+    max_characters_per_user_message: 2000,
+    max_characters_per_ai_message: 8000,
+    temperature: 0.3,
+    top_p: 0.6,
+    support_score_threshold: 0.4,
+    scope_alignment_score_threshold: 0.5,
+    grounded_threshold: 0.7,
+    partially_grounded_threshold: 0.4,
+  };
+  for (const [key, value] of Object.entries(singles)) {
+    const sql = settingsSql();
+    const res = await putSettings(sql, { [key]: value });
+    assert.equal(res.statusCode, 200, `${key}: ${JSON.stringify(res.body)}`);
+    assert.ok(updateQuery(sql).values.includes(value), key);
+  }
+});
+
+test("system settings: a flow preset patch updates", async () => {
+  const sql = settingsSql();
+  const res = await putSettings(sql, {
+    routing_mode: "dynamic",
+    min_exchanges_before_answer: 1,
+    min_messages_before_suggest: 3,
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.ok(updateQuery(sql));
+});
+
+test("system settings: invalid patches return 400 without updating", async () => {
+  const cases = [
+    [{ temperature: 3 }, "temperature must be a number between 0 and 2"],
+    [{ max_messages_per_day: null }, "max_messages_per_day must be an integer between 1 and 1000"],
+    [{}, "No valid fields to update"],
+  ];
+  for (const [patch, error] of cases) {
+    const sql = settingsSql();
+    const res = await putSettings(sql, patch);
+    assert.equal(res.statusCode, 400, JSON.stringify(patch));
+    assert.deepEqual(res.body, { error });
+    assert.equal(updateQuery(sql), undefined, "no UPDATE for invalid input");
+  }
+});

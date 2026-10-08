@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 export type FeedbackRating = "up" | "down";
 
@@ -15,7 +16,7 @@ const demoFeedbackStore = new Map<string, SessionFeedback>();
 
 async function getPublicToken(): Promise<string> {
   const response = await fetch(
-    `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+    `${API_ENDPOINT}/user/publicToken`
   );
   if (!response.ok) throw new Error("Failed to get public token");
   const { token } = (await response.json()) as { token: string };
@@ -24,7 +25,7 @@ async function getPublicToken(): Promise<string> {
 
 function feedbackUrl(sessionId: string, userId: string): string {
   const url = new URL(
-    `${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/${encodeURIComponent(sessionId)}/feedback`
+    `${API_ENDPOINT}/chat_sessions/${encodeURIComponent(sessionId)}/feedback`
   );
   url.searchParams.set("user_id", userId);
   return url.toString();

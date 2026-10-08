@@ -20,6 +20,7 @@ import {
   setDemoSessionState,
   type DemoFacts,
 } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
@@ -206,7 +207,7 @@ export default function AIChatPage({
   }, [baseWebSocketUrl, webSocketToken]);
 
   useEffect(() => {
-    const apiEndpoint = import.meta.env.VITE_API_ENDPOINT;
+    const apiEndpoint = API_ENDPOINT;
     if (isDemoMode || !apiEndpoint) {
       return;
     }
@@ -392,7 +393,7 @@ export default function AIChatPage({
   const fetchMaxCharactersPerUserMessage = async () => {
     try {
       const tokenResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+        `${API_ENDPOINT}/user/publicToken`
       );
       if (!tokenResponse.ok) {
         throw new Error("Failed to get public token");
@@ -401,7 +402,7 @@ export default function AIChatPage({
       const { token } = await tokenResponse.json();
 
       const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/system-settings/max-characters-per-user-message`,
+        `${API_ENDPOINT}/system-settings/max-characters-per-user-message`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -477,13 +478,13 @@ export default function AIChatPage({
       try {
         // Get public token
         const tokenResponse = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+          `${API_ENDPOINT}/user/publicToken`
         );
         if (!tokenResponse.ok) throw new Error("Failed to get public token");
         const { token } = await tokenResponse.json();
 
         const response = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/${userId}/chat_sessions/${activeChatSessionId}/chat_history`,
+          `${API_ENDPOINT}/user/${userId}/chat_sessions/${activeChatSessionId}/chat_history`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -704,11 +705,11 @@ export default function AIChatPage({
     try {
       // Get fresh token for the request
       const tokenResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
+        `${API_ENDPOINT}/user/publicToken`
       );
       const { token } = await tokenResponse.json();
       const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT
+        `${API_ENDPOINT
         }/chat_sessions/${sessionId}/text_generation`,
         {
           method: "POST",

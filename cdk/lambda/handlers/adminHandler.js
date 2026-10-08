@@ -1384,18 +1384,18 @@ exports.handler = async (event) => {
           )
           UPDATE system_settings s
           SET
-            max_messages_per_day = COALESCE(${patch.max_messages_per_day}, s.max_messages_per_day),
-            min_messages_before_suggest = COALESCE(${patch.min_messages_before_suggest}, s.min_messages_before_suggest),
+            max_messages_per_day = COALESCE(${patch.max_messages_per_day ?? null}::int, s.max_messages_per_day),
+            min_messages_before_suggest = COALESCE(${patch.min_messages_before_suggest ?? null}::int, s.min_messages_before_suggest),
             routing_mode = COALESCE(${patch.routing_mode ?? null}::varchar, s.routing_mode),
             min_exchanges_before_answer = COALESCE(${patch.min_exchanges_before_answer ?? null}::int, s.min_exchanges_before_answer),
-            max_characters_per_user_message = COALESCE(${patch.max_characters_per_user_message}, s.max_characters_per_user_message),
-            max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message}, s.max_characters_per_ai_message),
-            temperature = COALESCE(${patch.temperature}, s.temperature),
-            top_p = COALESCE(${patch.top_p}, s.top_p),
-            support_score_threshold = COALESCE(${patch.support_score_threshold}, s.support_score_threshold),
-            scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold}, s.scope_alignment_score_threshold),
-            grounded_threshold = COALESCE(${patch.grounded_threshold}, s.grounded_threshold),
-            partially_grounded_threshold = COALESCE(${patch.partially_grounded_threshold}, s.partially_grounded_threshold),
+            max_characters_per_user_message = COALESCE(${patch.max_characters_per_user_message ?? null}::int, s.max_characters_per_user_message),
+            max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message ?? null}::int, s.max_characters_per_ai_message),
+            temperature = COALESCE(${patch.temperature ?? null}::float8, s.temperature),
+            top_p = COALESCE(${patch.top_p ?? null}::float8, s.top_p),
+            support_score_threshold = COALESCE(${patch.support_score_threshold ?? null}::float8, s.support_score_threshold),
+            scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold ?? null}::float8, s.scope_alignment_score_threshold),
+            grounded_threshold = COALESCE(${patch.grounded_threshold ?? null}::float8, s.grounded_threshold),
+            partially_grounded_threshold = COALESCE(${patch.partially_grounded_threshold ?? null}::float8, s.partially_grounded_threshold),
             updated_by = ${updatedByUserId},
             updated_at = NOW()
           WHERE s.id = (SELECT id FROM latest)
