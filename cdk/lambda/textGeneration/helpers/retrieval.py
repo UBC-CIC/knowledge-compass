@@ -33,12 +33,11 @@ chat_messages.sources; the full dict above stays server-side for the prompt
 and the grounding verifier.
 """
 
-import json
 import logging
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 
-import boto3
+from helpers import embeddings
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -69,22 +68,15 @@ def embed_query(query: str, region: str, embed_model_id: str = EMBED_MODEL_ID) -
     """
     Embed a query string with Cohere embed-english-v3 via Bedrock, using the
     'search_query' input space (must match the 'search_document' space used at
-    ingest time). Returns a 1024-dim float vector.
+    ingest time). Returns a 1024-dim float vector. The request itself is built
+    by helpers/embeddings.py.
     """
-    client = boto3.client("bedrock-runtime", region_name=region)
-    response = client.invoke_model(
-        modelId=embed_model_id,
-        body=json.dumps(
-            {
-                "texts": [query[:2048]],
-                "input_type": "search_query",
-                "truncate": "END",
-            }
-        ),
-        contentType="application/json",
-        accept="application/json",
+    spec = (
+        embeddings.DEFAULT_SPEC
+        if embed_model_id == EMBED_MODEL_ID
+        else embeddings.with_invoke_target(embeddings.DEFAULT_SPEC, embed_model_id)
     )
-    return json.loads(response["body"].read())["embeddings"][0]
+    return embeddings.embed_query(query, spec, region)
 
 
 def _vector_literal(embedding: List[float]) -> str:

@@ -70,6 +70,7 @@ import time
 import boto3
 from docx import Document as DocxDocument
 
+from helpers import embeddings
 from helpers.csv_links import start_link_phase
 from helpers.pdf_text import TextractPending, extract_pdf
 from helpers.upload_identity import source_url_for
@@ -78,8 +79,8 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.environ["REGION"]
-EMBED_MODEL_ID = "cohere.embed-english-v3"
-EMBED_BATCH_SIZE = 96
+EMBED_MODEL_ID = embeddings.DEFAULT_SPEC.invoke_target
+EMBED_BATCH_SIZE = embeddings.DEFAULT_SPEC.batch_size
 # Same shared execution role as textGen already grants bedrock:InvokeModel /
 # s3:GetObject-PutObject-DeleteObject on the ingest bucket; only the
 # self-invoke permission below is new.
@@ -106,7 +107,6 @@ _MAX_CONTINUATIONS = 10
 _DEFAULT_LAMBDA_SECONDS = 600
 
 s3_client = boto3.client("s3", region_name=REGION)
-bedrock_runtime = boto3.client("bedrock-runtime", region_name=REGION)
 lambda_client = boto3.client("lambda", region_name=REGION)
 
 
@@ -303,27 +303,13 @@ def _chunk_document_text(text: str, doc_name: str, max_words: int = _MAX_WORDS_P
 # ── Embeddings ────────────────────────────────────────────────────────────────
 
 def _embedding_input(text: str) -> str:
-    """The exact text sent to Cohere, used as the embedding reuse key."""
-    if len(text) <= 2048:
-        return text
-    return text[:2048].rsplit(" ", 1)[0]
+    """The exact text sent to the embedding model, used as the embedding reuse key."""
+    return embeddings.embedding_input(text, embeddings.DEFAULT_SPEC)
 
 
 def _embed_texts(texts: list) -> list:
-    """Cohere embed-english-v3 via Bedrock, batched at 96 texts/call (API limit)."""
-    texts = [_embedding_input(text) for text in texts]
-    embeddings: list = []
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i : i + EMBED_BATCH_SIZE]
-        response = bedrock_runtime.invoke_model(
-            modelId=EMBED_MODEL_ID,
-            body=json.dumps({"texts": batch, "input_type": "search_document", "truncate": "END"}),
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        embeddings.extend(result["embeddings"])
-    return embeddings
+    """Embed document chunks through the shared embeddings module (DEFAULT_SPEC)."""
+    return embeddings.embed_documents(texts, embeddings.DEFAULT_SPEC, REGION)
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────

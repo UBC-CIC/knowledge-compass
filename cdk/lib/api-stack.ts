@@ -1207,6 +1207,18 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [
         `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-english-v3`,
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
+        // Candidate embedding models. Model ids / inference-profile ARNs are
+        // configuration on the embedding_spaces row; these grants enable
+        // candidates and do not assert availability in this region. Wildcard
+        // region on the foundation-model ARNs covers the destination regions of
+        // cross-region profiles. Manual ARNs on purpose (no CDK token
+        // references; see the documented circular-dependency notes).
+        `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`,
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
+        // Cohere Embed v4 (model id suffix not verified: grant both forms)
+        `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
+        `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
         // Claude Sonnet 4.6 (Converse currently resolves this model in us-west-2)
         `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6`,
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6`,

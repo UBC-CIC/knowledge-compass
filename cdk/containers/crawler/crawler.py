@@ -27,6 +27,7 @@ Requirements:
 
 import argparse
 import asyncio
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -35,7 +36,6 @@ import re
 import sys
 from xml.etree import ElementTree as ET
 
-import boto3
 import trafilatura
 from bs4 import BeautifulSoup
 from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
@@ -57,6 +57,21 @@ except ImportError:
     _spec = importlib.util.spec_from_file_location("db_config", _common_path)
     db_config = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(db_config)  # type: ignore
+
+# Shared embedding interface; same import / path-load fallback as db_config.
+try:
+    from common import embeddings as shared_embeddings  # type: ignore
+except ImportError:
+    _emb_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "embeddings.py",
+    )
+    if not os.path.exists(_emb_path):
+        _emb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings.py")
+    _emb_spec = importlib.util.spec_from_file_location("embeddings", _emb_path)
+    shared_embeddings = importlib.util.module_from_spec(_emb_spec)
+    _emb_spec.loader.exec_module(shared_embeddings)  # type: ignore
 
 
 # ── Config (environment-driven) ───────────────────────────────────────────────
@@ -220,34 +235,16 @@ def delete_stale_chunks(conn, source_id: str, current_indices: list) -> int:
 
 def embed_texts(texts: list, input_type: str = "search_document") -> list:
     """
-    Embed texts using Cohere embed-english-v3 via Amazon Bedrock.
-    Batches at EMBED_BATCH_SIZE (96) per call — Cohere API limit.
+    Embed texts via the shared embeddings module (Amazon Bedrock).
+    Batches at EMBED_BATCH_SIZE (96) per call — Cohere v3 API limit; inputs are
+    cut to 2048 chars at a word boundary.
     input_type: 'search_document' when indexing, 'search_query' when querying.
     Returns list of 1024-dim float vectors.
     """
-    client = boto3.client("bedrock-runtime", region_name=REGION)
-    embeddings = []
-
-    # Cohere max 2048 chars per text — truncate at word boundary
-    texts = [t[:2048].rsplit(" ", 1)[0] if len(t) > 2048 else t for t in texts]
-
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i : i + EMBED_BATCH_SIZE]
-        response = client.invoke_model(
-            modelId=EMBED_MODEL_ID,
-            body=json.dumps({
-                "texts": batch,
-                "input_type": input_type,
-                "truncate": "END",
-            }),
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        embeddings.extend(result["embeddings"])
-        print(f"  [embed] batch {i // EMBED_BATCH_SIZE + 1} — {len(batch)} texts", file=sys.stderr)
-
-    return embeddings
+    spec = dataclasses.replace(
+        shared_embeddings.DEFAULT_SPEC, invoke_target=EMBED_MODEL_ID, batch_size=EMBED_BATCH_SIZE
+    )
+    return shared_embeddings.embed_texts(texts, spec, input_type, REGION)
 
 
 # ── Semantic Chunking Utilities ──────────────────────────────────────────────

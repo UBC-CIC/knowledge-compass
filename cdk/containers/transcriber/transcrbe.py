@@ -16,6 +16,7 @@ Usage (semantic chunking):
 """
 
 import argparse
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -42,6 +43,21 @@ except ImportError:
     _spec = importlib.util.spec_from_file_location("db_config", _common_path)
     db_config = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(db_config)  # type: ignore
+
+# Shared embedding interface; same import / path-load fallback as db_config.
+try:
+    from common import embeddings as shared_embeddings  # type: ignore
+except ImportError:
+    _emb_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "embeddings.py",
+    )
+    if not os.path.exists(_emb_path):
+        _emb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings.py")
+    _emb_spec = importlib.util.spec_from_file_location("embeddings", _emb_path)
+    shared_embeddings = importlib.util.module_from_spec(_emb_spec)
+    _emb_spec.loader.exec_module(shared_embeddings)  # type: ignore
 
 
 # ── Config (environment-driven) ───────────────────────────────────────────────
@@ -280,29 +296,11 @@ def chunk_segments(segments: list, video_name: str, video_url: str,
 # ── Embeddings ────────────────────────────────────────────────────────────────
 
 def embed_texts(texts: list, input_type: str = "search_document") -> list:
-    """Embed texts using Cohere embed-english-v3 via Amazon Bedrock."""
-    client = boto3.client("bedrock-runtime", region_name=REGION)
-    embeddings = []
-    safe_texts = [t[:2048].rsplit(" ", 1)[0] if len(t) > 2048 else t for t in texts]
-
-    for i in range(0, len(safe_texts), EMBED_BATCH_SIZE):
-        batch = safe_texts[i : i + EMBED_BATCH_SIZE]
-        response = client.invoke_model(
-            modelId=EMBED_MODEL_ID,
-            body=json.dumps({
-                "texts": batch,
-                "input_type": input_type,
-                "truncate": "END",
-            }),
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        embeddings.extend(result["embeddings"])
-        print(f"  [embed] batch {i // EMBED_BATCH_SIZE + 1} — {len(batch)} texts",
-              file=sys.stderr)
-
-    return embeddings
+    """Embed texts via the shared embeddings module (Amazon Bedrock)."""
+    spec = dataclasses.replace(
+        shared_embeddings.DEFAULT_SPEC, invoke_target=EMBED_MODEL_ID, batch_size=EMBED_BATCH_SIZE
+    )
+    return shared_embeddings.embed_texts(texts, spec, input_type, REGION)
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
