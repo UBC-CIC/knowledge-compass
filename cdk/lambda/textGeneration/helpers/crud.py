@@ -1,6 +1,7 @@
 
 import json
 import logging
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -207,6 +208,51 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
         logger.error(f"fetch_system_config failed: {e}")
         # Return what we have (empty or partial)
     return config
+
+
+SERVICE_STATUSES = ("normal", "banner", "read_only")
+# Its own short cache (not config.CONFIG_TTL_SECONDS, 300 s): ops flip this flag to stop
+# or resume chat, so the change has to reach every warm Lambda within seconds.
+SERVICE_STATUS_TTL_SECONDS = 30
+_service_status_cache: Dict[str, Any] = {"value": None, "at": 0.0}
+_service_status_clock = time.monotonic  # module-level so tests can replace it
+
+
+def fetch_service_status(db_connection) -> Dict[str, Any]:
+    """
+    Maintenance banner / read-only flag (migration 034): {"status", "message"}.
+
+    status is 'normal', 'banner' or 'read_only'. Cached for SERVICE_STATUS_TTL_SECONDS.
+
+    Unlike fetch_active_space this deliberately FALLS BACK to normal on any error: a failed
+    status read must never take chat down, and the worst case is that a read-only switch
+    takes effect a little late. The failure is logged (class name only) as a WARNING and
+    is not cached, so the next call tries again.
+    """
+    now = _service_status_clock()
+    cached = _service_status_cache["value"]
+    if cached is not None and now - _service_status_cache["at"] < SERVICE_STATUS_TTL_SECONDS:
+        return dict(cached)
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                "SELECT service_status, service_message FROM system_settings "
+                "ORDER BY updated_at DESC NULLS LAST LIMIT 1"
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(f"fetch_service_status failed, treating the service as normal: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        return {"status": "normal", "message": None}
+    status = row[0] if row and row[0] in SERVICE_STATUSES else "normal"
+    message = row[1] if row and isinstance(row[1], str) and row[1].strip() else None
+    value = {"status": status, "message": message}
+    _service_status_cache["value"] = value
+    _service_status_cache["at"] = now
+    return dict(value)
 
 
 GUIDELINE_MODES = ("standard", "guideline")

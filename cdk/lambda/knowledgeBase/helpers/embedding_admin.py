@@ -10,12 +10,25 @@ email (the audit identity); a body-supplied email is ignored.
   POST /admin/embedding-spaces/{id}/validate       validation job              (202)
   POST /admin/embedding-spaces/{id}/activate       cutover to this space       (202)
   POST /admin/embedding-spaces/{id}/rollback       cutover back to a retired space (202)
+  POST /admin/embedding-spaces/{id}/purge          delete a retired space's vectors and index
   GET  /admin/embedding-jobs/{id}                  progress, steps, estimate / report
 
 Long work never runs in the API request: each POST records a job row and fires an
 Event self-invocation (`reembed_space`, `validate_space`, `activate_space`,
-`rollback_space`); the UI polls GET /admin/embedding-jobs/{id}. A purge route is added
-by the retention task together with its OpenAPI entry.
+`rollback_space`); the UI polls GET /admin/embedding-jobs/{id}.
+
+Retention and purge. A retired space is kept for RETENTION_DAYS (30) so a rollback stays
+possible. Purging it is MANUAL ONLY: there is no scheduler, no lifecycle rule and no code
+path that calls purge_space except the admin route below. The route enforces, on the
+server, whatever the UI shows: the space must be 'retired' (never active, building or
+validated), retired for at least RETENTION_DAYS (the database clock decides), no cutover
+may hold the lock, no job may be queued or running for it, and the body must carry the
+space's exact name as `confirm_name` (case-sensitive). The work is idempotent and
+resumable: vectors go in batches of PURGE_BATCH_SIZE with a commit per batch, then the
+index is dropped, then the status becomes 'purged'. A request that dies half way leaves
+the space 'retired' and can simply be sent again. The call runs inside the API request,
+so a very large space could outlast the API Gateway timeout; the work still continues
+safely on the next call.
 
 Responses and job reports carry ids, counts and metrics only: no chunk text, no
 queries, no credentials. Request bodies are never logged.
@@ -51,6 +64,11 @@ JOB_MODES = ("dry_run", "rebuild", "delta")
 STALE_REBUILD_SECONDS = 15 * 60
 STALE_CUTOVER_SECONDS = LOCK_TTL_SECONDS
 MAX_TOLERANCE = 0.5
+# A retired space is kept this long before it may be purged (rollback window).
+RETENTION_DAYS = 30
+PURGE_BATCH_SIZE = 5000
+# Safety stop for the delete loop (5000 x 10,000 = 50 million vectors).
+_PURGE_MAX_BATCHES = 10_000
 
 # setting -> (minimum, maximum) for the integer settings; `normalize` is a boolean.
 _SETTING_BOUNDS = {
@@ -125,6 +143,7 @@ _ROUTES = (
     ("POST", "/admin/embedding-spaces/{id}/validate", re.compile(r"/admin/embedding-spaces/[^/]+/validate$")),
     ("POST", "/admin/embedding-spaces/{id}/activate", re.compile(r"/admin/embedding-spaces/[^/]+/activate$")),
     ("POST", "/admin/embedding-spaces/{id}/rollback", re.compile(r"/admin/embedding-spaces/[^/]+/rollback$")),
+    ("POST", "/admin/embedding-spaces/{id}/purge", re.compile(r"/admin/embedding-spaces/[^/]+/purge$")),
     ("GET", "/admin/embedding-jobs/{id}", re.compile(r"/admin/embedding-jobs/[^/]+$")),
 )
 
@@ -179,6 +198,8 @@ def handle_embedding_request(event, body, connection):
             return create_cutover_job(event, body, connection, path_id, admin, "activate")
         if resource == "/admin/embedding-spaces/{id}/rollback":
             return create_cutover_job(event, body, connection, path_id, admin, "rollback")
+        if resource == "/admin/embedding-spaces/{id}/purge":
+            return purge_space(event, body, connection, path_id, admin)
         if resource == "/admin/embedding-jobs/{id}":
             return get_job(event, connection, path_id)
     except Exception as e:  # noqa: BLE001
@@ -328,7 +349,9 @@ def list_spaces(event, connection):
                      SELECT count(*) FROM chunk_embeddings ce
                      JOIN chunks c ON c.id = ce.chunk_id
                      WHERE ce.space_id = s.id AND ce.embed_hash = md5(c.embed_text)
-                   ) END AS current_vectors
+                   ) END AS current_vectors,
+                   CASE WHEN s.status = 'retired' AND s.retired_at IS NOT NULL
+                        THEN s.retired_at + interval '{RETENTION_DAYS} days' END AS purge_eligible_at
             FROM embedding_spaces s
             ORDER BY s.created_at, s.name
             """
@@ -357,6 +380,7 @@ def list_spaces(event, connection):
             "settings": r[12] if isinstance(r[12], dict) else json.loads(r[12] or "{}"),
             "created_by": r[13], "created_at": r[14], "activated_at": r[15], "retired_at": r[16],
             "is_active": r[0] == active_id,
+            "purge_eligible_at": r[18],
             "coverage": {
                 "current_vectors": current,
                 "total_chunks": total_chunks,
@@ -368,6 +392,7 @@ def list_spaces(event, connection):
         "spaces": spaces,
         "active_space_id": active_id,
         "total_chunks": total_chunks,
+        "retention_days": RETENTION_DAYS,
         "cutover_locked": lock["locked"],
         "cutover": {"locked": lock["locked"], "locked_at": lock["locked_at"], "job_id": lock["job_id"]},
     })
@@ -595,6 +620,100 @@ def create_cutover_job(event, body, connection, space_id, admin, mode: str):
             return _response(event, 409, {"error": "A cutover is already in progress."})
         raise
     return _start_job(event, connection, job_id, mode)
+
+
+def purge_space(event, body, connection, space_id, admin):
+    """
+    POST .../purge. Manual only (see the module docstring). Every guard is checked here,
+    on the server, in this order: the space exists, is not already purged, is not the
+    active space, is 'retired', has been retired for RETENTION_DAYS, no cutover holds the
+    lock, no job is queued or running for it, and the typed name matches exactly.
+    """
+    confirm_name = body.get("confirm_name")
+
+    with connection.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT s.id::text, s.name, s.status, s.retired_at,
+                   (s.retired_at IS NOT NULL
+                    AND now() - s.retired_at >= interval '{RETENTION_DAYS} days') AS retention_over,
+                   (s.retired_at + interval '{RETENTION_DAYS} days') AS eligible_at,
+                   EXISTS (SELECT 1 FROM embedding_active_space a WHERE a.space_id = s.id) AS is_active
+            FROM embedding_spaces s
+            WHERE s.id = %s::uuid
+            """,
+            (space_id,),
+        )
+        row = cur.fetchone()
+    connection.commit()
+    if row is None:
+        return _response(event, 404, {"error": "Embedding space not found."})
+    _, name, status, _retired_at, retention_over, eligible_at, is_active = row
+
+    if status == "purged":
+        return _response(event, 409, {"error": "This space has already been purged."})
+    if is_active or status == "active":
+        return _response(event, 409, {"error": "The active space cannot be purged."})
+    if status != "retired":
+        return _response(event, 409, {
+            "error": f"Only a retired space can be purged. This space is {status}.",
+        })
+    if not retention_over:
+        when = eligible_at.date().isoformat() if hasattr(eligible_at, "date") else None
+        return _response(event, 409, {
+            "error": (
+                f"This space was retired too recently. A retired space is kept for {RETENTION_DAYS} days"
+                + (f" and can be purged from {when}." if when else ".")
+            ),
+            "purge_eligible_at": eligible_at,
+        })
+    if lock_state(connection)["locked"]:
+        return _locked_response(event)
+    running = _active_job_exists(connection, tuple(_TASK_FOR_MODE), space_id)
+    if running:
+        return _response(event, 409, {
+            "error": "A job is still running for this space. Wait for it to finish first.",
+            "job_id": running,
+        })
+    # Typed confirmation, compared exactly (case-sensitive) with the stored name.
+    if not isinstance(confirm_name, str) or confirm_name != name:
+        return _response(event, 400, {
+            "error": "Type the exact name of the space in confirm_name to purge it.",
+        })
+
+    deleted = 0
+    batches = 0
+    while batches < _PURGE_MAX_BATCHES:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM chunk_embeddings
+                WHERE ctid IN (
+                    SELECT ctid FROM chunk_embeddings WHERE space_id = %s::uuid LIMIT %s
+                )
+                """,
+                (space_id, PURGE_BATCH_SIZE),
+            )
+            count = cur.rowcount or 0
+        connection.commit()   # one commit per batch: resumable, short locks
+        if count <= 0:
+            break
+        deleted += count
+        batches += 1
+
+    with connection.cursor() as cur:
+        cur.execute("SELECT drop_space_index(%s::uuid)", (space_id,))
+        cur.execute(
+            "UPDATE embedding_spaces SET status = 'purged' WHERE id = %s::uuid AND status = 'retired'",
+            (space_id,),
+        )
+        updated = cur.rowcount
+    if not updated:
+        _rollback_quietly(connection)
+        return _response(event, 409, {"error": "The space changed while it was being purged. Check its status."})
+    connection.commit()
+    logger.info("Embedding space %s purged by an administrator (%s vectors removed)", name, deleted)
+    return _response(event, 200, {"id": space_id, "name": name, "status": "purged", "deleted_vectors": deleted})
 
 
 def get_job(event, connection, job_id):

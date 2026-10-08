@@ -138,6 +138,33 @@ exports.handler = async (event) => {
                 break;
             }
 
+            // Maintenance banner / read-only flag for the chat UI.
+            // SECURITY NOTE: this route is guarded only by the anonymous public-session
+            // token (userAuthorizer), so in practice any visitor can read it. It therefore
+            // returns exactly two operator-written fields and nothing else. Do not add
+            // fields (no ids, timestamps, admin emails or settings) to this response.
+            case "GET /system-settings/service-status": {
+                const rows = await sqlConnection`
+                SELECT service_status, service_message
+                FROM system_settings
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 1
+                `;
+
+                const row = rows[0] ?? {};
+                const known = ["normal", "banner", "read_only"];
+                const status = known.includes(row.service_status) ? row.service_status : "normal";
+
+                response.statusCode = 200;
+                // Browsers and API Gateway may reuse this for 30 s; the chat UI polls once a minute.
+                response.headers = { ...response.headers, "Cache-Control": "public, max-age=30" };
+                response.body = JSON.stringify({
+                    service_status: status,
+                    service_message: status === "normal" ? null : row.service_message ?? null,
+                });
+                break;
+            }
+
             default:
                 throw new Error(`Unsupported route: "${pathData}"`);
         }

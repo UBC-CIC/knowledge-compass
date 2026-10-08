@@ -122,12 +122,13 @@ describe("OpenAPI definition", () => {
   test("every knowledgeBase helper route table entry is documented", () => {
     const routes = helperTableRoutes();
     // Guard against the extractor silently matching nothing.
-    expect(routes.size).toBeGreaterThanOrEqual(13);
+    expect(routes.size).toBeGreaterThanOrEqual(14);
     expect([...routes.keys()]).toEqual(
       expect.arrayContaining([
         "GET /admin/embedding-spaces",
         "POST /admin/embedding-spaces/{id}/activate",
         "POST /admin/embedding-spaces/{id}/rollback",
+        "POST /admin/embedding-spaces/{id}/purge",
         "GET /admin/embedding-jobs/{id}",
         "PUT /admin/guideline/mode",
       ]),

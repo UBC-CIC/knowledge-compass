@@ -1034,6 +1034,8 @@ exports.handler = async (event) => {
             latest.scope_alignment_score_threshold,
             latest.grounded_threshold,
             latest.partially_grounded_threshold,
+            latest.service_status,
+            latest.service_message,
             u.email AS updated_by_email,
             latest.updated_at
           FROM latest
@@ -1055,6 +1057,8 @@ exports.handler = async (event) => {
           scope_alignment_score_threshold: 0.25,
           grounded_threshold: 0.75,
           partially_grounded_threshold: 0.5,
+          service_status: "normal",
+          service_message: null,
           updated_by: null,
           updated_at: null,
         };
@@ -1194,6 +1198,8 @@ exports.handler = async (event) => {
           "scope_alignment_score_threshold",
           "grounded_threshold",
           "partially_grounded_threshold",
+          "service_status",
+          "service_message",
         ];
 
         const patch = {};
@@ -1325,6 +1331,47 @@ exports.handler = async (event) => {
           break;
         }
 
+        // Service status (maintenance banner / read-only). service_message may be
+        // cleared explicitly with null or an empty string; leaving it out keeps it.
+        const SERVICE_STATUSES = ["normal", "banner", "read_only"];
+        const SERVICE_MESSAGE_MAX = 500;
+        const serviceMessageProvided = patch.service_message !== undefined;
+
+        if (
+          patch.service_status !== undefined &&
+          !SERVICE_STATUSES.includes(patch.service_status)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "service_status must be 'normal', 'banner' or 'read_only'",
+          });
+          break;
+        }
+
+        if (serviceMessageProvided) {
+          if (patch.service_message !== null && typeof patch.service_message !== "string") {
+            response.statusCode = 400;
+            response.body = JSON.stringify({ error: "service_message must be text or null" });
+            break;
+          }
+          // Control characters (including line breaks) become spaces; one line of text.
+          const cleaned =
+            patch.service_message === null
+              ? ""
+              : patch.service_message
+                  .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+                  .replace(/\s+/g, " ")
+                  .trim();
+          if (cleaned.length > SERVICE_MESSAGE_MAX) {
+            response.statusCode = 400;
+            response.body = JSON.stringify({
+              error: `service_message must be at most ${SERVICE_MESSAGE_MAX} characters`,
+            });
+            break;
+          }
+          patch.service_message = cleaned === "" ? null : cleaned;
+        }
+
         // get admin user ID and confirm role
         const adminRows = await sqlConnection`
           SELECT id, role
@@ -1346,6 +1393,30 @@ exports.handler = async (event) => {
         }
 
         const updatedByUserId = adminRows[0].id;
+
+        // A banner or read-only mode needs something to show. Judge the result of the
+        // patch, so setting the status alone works when a message is already stored and
+        // clearing the message alone is refused while the status still needs one.
+        if (patch.service_status !== undefined || serviceMessageProvided) {
+          const currentStatusRows = await sqlConnection`
+            SELECT service_status, service_message
+            FROM system_settings
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+          `;
+          const currentStatus = currentStatusRows[0] ?? {};
+          const nextStatus = patch.service_status ?? currentStatus.service_status ?? "normal";
+          const nextMessage = serviceMessageProvided
+            ? patch.service_message
+            : currentStatus.service_message ?? null;
+          if (nextStatus !== "normal" && !nextMessage) {
+            response.statusCode = 400;
+            response.body = JSON.stringify({
+              error: "service_message is required when service_status is 'banner' or 'read_only'",
+            });
+            break;
+          }
+        }
 
         // The dynamic-routing floor may not exceed the ceiling. Compare against
         // stored values for whichever side is not in this patch.
@@ -1396,6 +1467,8 @@ exports.handler = async (event) => {
             scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold ?? null}::float8, s.scope_alignment_score_threshold),
             grounded_threshold = COALESCE(${patch.grounded_threshold ?? null}::float8, s.grounded_threshold),
             partially_grounded_threshold = COALESCE(${patch.partially_grounded_threshold ?? null}::float8, s.partially_grounded_threshold),
+            service_status = COALESCE(${patch.service_status ?? null}::varchar, s.service_status),
+            service_message = CASE WHEN ${serviceMessageProvided}::boolean THEN ${patch.service_message ?? null}::text ELSE s.service_message END,
             updated_by = ${updatedByUserId},
             updated_at = NOW()
           WHERE s.id = (SELECT id FROM latest)
@@ -1413,6 +1486,8 @@ exports.handler = async (event) => {
             s.scope_alignment_score_threshold,
             s.grounded_threshold,
             s.partially_grounded_threshold,
+            s.service_status,
+            s.service_message,
             s.updated_by,
             s.updated_at
         `;

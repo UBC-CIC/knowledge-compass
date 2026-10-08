@@ -79,6 +79,7 @@ class RoutingTest(unittest.TestCase):
             ("POST", f"/admin/embedding-spaces/{SPACE_ID}/validate", "/admin/embedding-spaces/{id}/validate"),
             ("POST", f"/admin/embedding-spaces/{SPACE_ID}/activate", "/admin/embedding-spaces/{id}/activate"),
             ("POST", f"/admin/embedding-spaces/{SPACE_ID}/rollback", "/admin/embedding-spaces/{id}/rollback"),
+            ("POST", f"/admin/embedding-spaces/{SPACE_ID}/purge", "/admin/embedding-spaces/{id}/purge"),
             ("GET", f"/admin/embedding-jobs/{JOB_ID}", "/admin/embedding-jobs/{id}"),
         ]
         for method, path, resource in cases:
@@ -100,7 +101,7 @@ class RoutingTest(unittest.TestCase):
                 self.assertFalse(ea.is_embedding_route(event(method, path)))
 
     def test_routes_table_matches_the_documented_shape(self):
-        self.assertEqual(len(ea._ROUTES), 7)
+        self.assertEqual(len(ea._ROUTES), 8)
         for method, resource, pattern in ea._ROUTES:
             self.assertIn(method, ("GET", "POST"))
             self.assertTrue(resource.startswith("/admin/embedding-"))
@@ -114,6 +115,7 @@ class AuthTest(AdminBase):
         ("POST", f"/admin/embedding-spaces/{SPACE_ID}/validate", "/admin/embedding-spaces/{id}/validate", SPACE_ID),
         ("POST", f"/admin/embedding-spaces/{SPACE_ID}/activate", "/admin/embedding-spaces/{id}/activate", SPACE_ID),
         ("POST", f"/admin/embedding-spaces/{SPACE_ID}/rollback", "/admin/embedding-spaces/{id}/rollback", SPACE_ID),
+        ("POST", f"/admin/embedding-spaces/{SPACE_ID}/purge", "/admin/embedding-spaces/{id}/purge", SPACE_ID),
     ]
 
     def test_mutating_routes_refuse_without_the_authorizer_email(self):
@@ -453,9 +455,9 @@ class GetJobTest(AdminBase):
 class ListTest(AdminBase):
     def test_lists_spaces_with_coverage_lock_and_latest_job(self):
         space_row = (SPACE_ID, "new-space", "titan_v2", "m", "t", 1024, "1", "building", None, None, None, None,
-                     {"concurrency": 8}, "a@b.org", NOW, None, None, 60)
+                     {"concurrency": 8}, "a@b.org", NOW, None, None, 60, None)
         active_row = (ACTIVE_ID, "cohere-v3-1024", "cohere_v3", "m", "t", 1024, "1", "active", 0.4, 0.6, None, None,
-                      {}, None, NOW, NOW, None, 100)
+                      {}, None, NOW, NOW, None, 100, None)
         job_row = GetJobTest().row(status="running")
         conn = fakes.ScriptedConnection({
             "SELECT count(*) FROM chunks": [(100,)],

@@ -20,6 +20,11 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
 
 function computeConfigHash(config: object): string {
@@ -1206,8 +1211,8 @@ export class ApiGatewayStack extends cdk.Stack {
     // writes this metric as a CloudWatch Embedded Metric Format log line, so no
     // PutMetricData permission is needed. The metric is referenced by namespace and
     // name only (no token to lambdaTextGen, which would risk a circular dependency).
-    // The alarm action (SNS) is attached once the notification topic exists.
-    new cloudwatch.Alarm(this, 'EmbeddingSpaceCheckFailedAlarm', {
+    // The alarm action (SNS) is attached below, once the lifecycle notification topic exists.
+    const embeddingSpaceCheckFailedAlarm = new cloudwatch.Alarm(this, 'EmbeddingSpaceCheckFailedAlarm', {
       metric: new cloudwatch.Metric({
         namespace: 'KnowledgeCompass/Embeddings',
         metricName: 'EmbeddingSpaceCheckFailed',
@@ -1227,8 +1232,8 @@ export class ApiGatewayStack extends cdk.Stack {
     // The job does NOT roll back by itself: the alarm tells the operator to review and use the
     // Rollback action. Referenced by namespace/name only (no token to lambdaKnowledgeBase, which
     // would recreate the documented circular dependency). The SNS action is attached with the
-    // notification topic.
-    new cloudwatch.Alarm(this, 'PostFlipCheckFailedAlarm', {
+    // notification topic, below.
+    const postFlipCheckFailedAlarm = new cloudwatch.Alarm(this, 'PostFlipCheckFailedAlarm', {
       metric: new cloudwatch.Metric({
         namespace: 'KnowledgeCompass/Embeddings',
         metricName: 'PostFlipCheckFailed',
@@ -1240,6 +1245,106 @@ export class ApiGatewayStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       alarmDescription: 'The golden-set check after an embedding-space cutover failed; the new space is live. Review the job report and use Rollback in the admin Search index page if retrieval quality dropped',
+    });
+
+    // --- Model lifecycle guardrail ---------------------------------------------------
+    // A weekly Lambda (lambda/lifecycleCheck) lists the Bedrock models the system depends on
+    // (non-purged embedding spaces + the /KC/LLM generation parameters) and publishes ONE
+    // message to this topic when a model is not ACTIVE, is missing, or reaches end of life
+    // within 90 days. The same topic is the action of the two embedding alarms above.
+    //
+    // Circular-dependency note: everything here is NEW and self-contained. The function has its
+    // OWN role (not the shared lambdaRole), and the alarms reference the topic only; nothing
+    // takes a token from lambdaKnowledgeBase or lambdaTextGen. No stack output is exported.
+    const lifecycleTopic = new sns.Topic(this, 'ModelLifecycleAlerts', {
+      topicName: `${id}-ModelLifecycleAlerts`,
+      displayName: 'Knowledge Compass model lifecycle alerts',
+    });
+
+    // TODO(CIC): alert channel/endpoint placeholder. No address is hard-coded. Until CIC names
+    // the channel (email list, chat webhook via AWS Chatbot, pager), the topic exists but has no
+    // subscriber, so alerts are only visible in CloudWatch. Subscribe an address with
+    //   cdk deploy -c lifecycleAlertEmail=<address>
+    // or keep it out of the command line with
+    //   cdk deploy -c lifecycleAlertEmailParam=<name of an SSM String parameter holding the address>
+    const lifecycleAlertEmail = this.node.tryGetContext('lifecycleAlertEmail');
+    const lifecycleAlertEmailParam = this.node.tryGetContext('lifecycleAlertEmailParam');
+    if (lifecycleAlertEmail) {
+      lifecycleTopic.addSubscription(new subscriptions.EmailSubscription(String(lifecycleAlertEmail)));
+    } else if (lifecycleAlertEmailParam) {
+      lifecycleTopic.addSubscription(
+        new subscriptions.EmailSubscription(
+          ssm.StringParameter.valueForStringParameter(this, String(lifecycleAlertEmailParam)),
+        ),
+      );
+    }
+
+    embeddingSpaceCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
+    postFlipCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
+
+    // Own role, least privilege. bedrock:ListFoundationModels has no resource-level scoping.
+    // The two SSM parameters are the generation-model names the app already reads
+    // (/KC/LLM/HaikuArn, /KC/LLM/SonnetArn); this is the only SSM access.
+    const lifecycleRole = new iam.Role(this, `${id}-lifecycleCheckRole`, {
+      roleName: `${id}-lifecycleCheckRole`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      // VPC network interfaces plus CloudWatch Logs.
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:ListFoundationModels'],
+      resources: ['*'],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['sns:Publish'],
+      resources: [lifecycleTopic.topicArn],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [db.secretPathUser.secretArn],
+    }));
+    lifecycleRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameters'],
+      resources: [
+        `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
+      ],
+    }));
+
+    // Same VPC (default private-with-egress subnets, like lambdaKnowledgeBase, which the
+    // database security group already admits) and psycopg2 layer. The VPC has a NAT gateway, so
+    // the Bedrock control-plane call is reachable; confirm on first deploy by invoking the
+    // function once and reading its log.
+    const lifecycleCheckFunction = new lambda.Function(this, `${id}-lifecycleCheck`, {
+      functionName: `${id}-lifecycleCheck`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'main.handler',
+      code: lambda.Code.fromAsset('lambda/lifecycleCheck'),
+      timeout: Duration.seconds(120),
+      memorySize: 256,
+      role: lifecycleRole,
+      layers: [psycopgLayer],
+      vpc: vpcStack.vpc,
+      environment: {
+        SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+        RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+        REGION: this.region,
+        SNS_TOPIC_ARN: lifecycleTopic.topicArn,
+        GENERATION_MODEL_PARAMS: '/KC/LLM/HaikuArn,/KC/LLM/SonnetArn',
+      },
+    });
+
+    new events.Rule(this, 'ModelLifecycleWeeklyRule', {
+      ruleName: `${id}-ModelLifecycleWeekly`,
+      description: 'Weekly check of the Bedrock models in use (end of life, status)',
+      schedule: events.Schedule.rate(Duration.days(7)),
+      targets: [new targets.LambdaFunction(lifecycleCheckFunction)],
     });
 
     lambdaTextGen.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);

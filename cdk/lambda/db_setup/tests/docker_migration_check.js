@@ -2,7 +2,7 @@
 /**
  * Manual migration harness (NOT a *.test.js file, so `npm run test:lambda` skips it).
  *
- *   node cdk/lambda/db_setup/tests/docker_migration_check.js
+ *   node cdk/lambda/db_setup/tests/docker_migration_check.js [--deferred]
  *
  * Starts a throwaway pgvector/pgvector:pg16 container (no published port; every
  * statement goes through `docker exec ... psql`), applies migrations 000..031 in
@@ -12,6 +12,12 @@
  * partial HNSW indexes, compatibility trigger, cascade, planner use of the index,
  * and an idempotent down/up round trip). The container is always removed, even on
  * failure or Ctrl-C. Exit code 0 only when every check passed.
+ *
+ * Also checks 033 (embedding_jobs) and 034 (service status). With --deferred it applies
+ * db_setup/deferred/NNN_drop_legacy_embedding_column.js on top of 032/033 and then reverts
+ * it, proving the guard, the data-loss check and that the down path restores the column,
+ * its HNSW index, the mirror function and the trigger. The deferred file is never part of
+ * the normal run: it needs the explicit flag AND its own approval variable.
  *
  * Requires Docker and the pgvector/pgvector:pg16 image (pulled if missing).
  * Uses only synthetic random data; nothing real is read or written.
@@ -31,6 +37,9 @@ const APP_PASS = "harness-app-pw";
 const OTHER_USER = "kc_stranger";
 const OTHER_PASS = "harness-other-pw";
 const MIGRATIONS_DIR = path.join(__dirname, "..", "migrations");
+const DEFERRED_DIR = path.join(__dirname, "..", "deferred");
+const DEFERRED_FILE = "NNN_drop_legacy_embedding_column.js";
+const RUN_DEFERRED = process.argv.includes("--deferred");
 const DUMP_SCRIPT = path.join(__dirname, "dump_writer_sql.py");
 const SEED_ROWS = 2000;
 
@@ -103,8 +112,8 @@ function startContainer() {
 }
 
 /** Load a migration file and collect its SQL via a `pgm` shim. */
-function collect(file, direction) {
-  const migration = require(path.join(MIGRATIONS_DIR, file));
+function collect(file, direction, dir = MIGRATIONS_DIR) {
+  const migration = require(path.join(dir, file));
   const statements = [];
   let transactional = true;
   const pgm = {
@@ -119,8 +128,8 @@ function collect(file, direction) {
   return { sql: statements.join("\n"), transactional };
 }
 
-function applyMigration(file, direction = "up") {
-  const { sql, transactional } = collect(file, direction);
+function applyMigration(file, direction = "up", dir = MIGRATIONS_DIR) {
+  const { sql, transactional } = collect(file, direction, dir);
   mustPsql(sql, { single: transactional });
 }
 
@@ -483,6 +492,9 @@ function runChecks() {
   });
 
   runJobChecks();
+  runServiceStatusChecks();
+  if (RUN_DEFERRED) runDeferredChecks();
+  else skip("deferred cleanup migration", "run with --deferred to apply it on top of 032/033 and revert it");
 }
 
 /** Migration 033 (embedding_jobs) and the re-embed work-list query. Runs on top of 032. */
@@ -697,6 +709,153 @@ function runJobChecks() {
     applyMigration("033_embedding_jobs.js", "up");
     applyMigration("033_embedding_jobs.js", "up"); // a second up is a no-op
     assert(count("SELECT count(*) FROM embedding_jobs") === 0, "fresh table expected after down/up");
+  });
+}
+
+/** Migration 034 (service status columns on system_settings). Runs on top of 033. */
+function runServiceStatusChecks() {
+  const seeded = count("SELECT count(*) FROM system_settings");
+
+  check("034 up applies; existing rows take 'normal' from the default and the message is NULL", () => {
+    applyMigration("034_service_status.js", "up");
+    const rows = mustPsql("SELECT service_status, service_message IS NULL, count(*) FROM system_settings GROUP BY 1, 2");
+    assert(seeded === 0 || rows === `normal|t|${seeded}`, `rows: ${rows} (system_settings had ${seeded})`);
+    const columns = mustPsql("SELECT column_name || ':' || is_nullable FROM information_schema.columns WHERE table_name = 'system_settings' AND column_name IN ('service_status','service_message') ORDER BY 1");
+    assert(columns === "service_message:YES\nservice_status:NO", columns);
+  });
+
+  check("034 CHECK constraints accept the three statuses and reject others and a 501-character message", () => {
+    mustPsql("INSERT INTO system_settings DEFAULT VALUES");
+    const latest = "(SELECT id FROM system_settings ORDER BY updated_at DESC NULLS LAST LIMIT 1)";
+    for (const status of ["normal", "banner", "read_only"]) {
+      mustPsql(`UPDATE system_settings SET service_status = '${status}', service_message = 'Planned work' WHERE id = ${latest}`);
+    }
+    const bad = psql(`UPDATE system_settings SET service_status = 'maintenance' WHERE id = ${latest}`);
+    assert(!bad.ok && /system_settings_service_status_check/.test(bad.err), bad.err || "invalid status accepted");
+    const exact = psql(`UPDATE system_settings SET service_message = repeat('a', 500) WHERE id = ${latest}`);
+    assert(exact.ok, exact.err);
+    const long = psql(`UPDATE system_settings SET service_message = repeat('a', 501) WHERE id = ${latest}`);
+    assert(!long.ok && /system_settings_service_message_check/.test(long.err), long.err || "501 characters accepted");
+    mustPsql(`UPDATE system_settings SET service_status = 'normal', service_message = NULL WHERE id = ${latest}`);
+  });
+
+  check("the app role can read and update the service columns (the GET and PUT queries)", () => {
+    const read = asApp("SELECT service_status, service_message FROM system_settings ORDER BY updated_at DESC NULLS LAST LIMIT 1");
+    assert(read.ok && read.out === "normal|", read.err || read.out);
+    const write = asApp(`UPDATE system_settings s SET service_status = COALESCE('banner'::varchar, s.service_status),
+                            service_message = CASE WHEN true::boolean THEN 'Hello'::text ELSE s.service_message END
+                          WHERE s.id = (SELECT id FROM system_settings ORDER BY updated_at DESC NULLS LAST LIMIT 1)`);
+    assert(write.ok, write.err);
+    mustPsql("UPDATE system_settings SET service_status = 'normal', service_message = NULL");
+  });
+
+  check("034 up is re-appliable, and down removes the constraints and both columns", () => {
+    applyMigration("034_service_status.js", "up");
+    applyMigration("034_service_status.js", "down");
+    assert(count("SELECT count(*) FROM information_schema.columns WHERE table_name = 'system_settings' AND column_name IN ('service_status','service_message')") === 0, "columns left behind");
+    assert(count("SELECT count(*) FROM pg_constraint WHERE conname IN ('system_settings_service_status_check','system_settings_service_message_check')") === 0, "constraints left behind");
+    applyMigration("034_service_status.js", "down");   // a second down is a no-op
+    applyMigration("034_service_status.js", "up");
+    assert(count("SELECT count(*) FROM system_settings WHERE service_status = 'normal'") === count("SELECT count(*) FROM system_settings"), "rows do not default to normal after down/up");
+  });
+}
+
+/** The deferred cleanup (db_setup/deferred). Only with --deferred; needs 032 and 033 applied. */
+function runDeferredChecks() {
+  const APPROVAL = "KC_DEFERRED_MIGRATION_APPROVED";
+  const VALUE = "drop-legacy-embedding-column";
+  const legacy = legacyId();
+  const columnType = () => mustPsql("SELECT coalesce(format_type(atttypid, atttypmod), '') FROM pg_attribute WHERE attrelid = 'chunks'::regclass AND attname = 'embedding' AND NOT attisdropped");
+  const objectCount = () =>
+    count("SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_chunks_mirror_legacy_embedding'") +
+    count("SELECT count(*) FROM pg_proc WHERE proname = 'chunks_mirror_legacy_embedding'") +
+    count("SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_chunks_embedding_hnsw'");
+  const run = (direction, approved) => {
+    if (approved) process.env[APPROVAL] = VALUE; else delete process.env[APPROVAL];
+    try {
+      const { sql, transactional } = collect(DEFERRED_FILE, direction, DEFERRED_DIR);
+      return psql(sql, { single: transactional });
+    } finally {
+      delete process.env[APPROVAL];
+    }
+  };
+
+  check("deferred: up refuses to run without the approval variable (nothing is dropped)", () => {
+    let message = "";
+    try { run("up", false); } catch (error) { message = error.message; }
+    assert(/not approved/.test(message), `expected a refusal, got: ${message || "no error"}`);
+    assert(columnType() === "vector(1024)" && objectCount() === 3, "something was dropped");
+  });
+
+  const before = {
+    withVector: count("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL"),
+    sample: mustPsql("SELECT id FROM chunks WHERE embedding IS NOT NULL ORDER BY id LIMIT 1"),
+    stale: mustPsql("SELECT id FROM chunks WHERE embedding IS NOT NULL ORDER BY id OFFSET 1 LIMIT 1"),
+    vectors: count("SELECT count(*) FROM chunk_embeddings"),
+  };
+
+  check("deferred: up refuses when a legacy vector would be lost; nothing is dropped", () => {
+    mustPsql(`DELETE FROM chunk_embeddings WHERE space_id = '${legacy}' AND chunk_id = '${before.sample}'`);
+    const refused = run("up", true);
+    assert(!refused.ok && /not dropping chunks\.embedding/.test(refused.err), refused.err || "up succeeded");
+    assert(columnType() === "vector(1024)" && objectCount() === 3, "something was dropped");
+    // Re-mirror the row through the trigger so the corpus is whole again.
+    mustPsql(`UPDATE chunks SET embedding = embedding WHERE id = '${before.sample}'`);
+    assert(count(`SELECT count(*) FROM chunk_embeddings WHERE space_id = '${legacy}' AND chunk_id = '${before.sample}'`) === 1, "mirror row not restored");
+  });
+
+  const sampleHash = () => mustPsql(`SELECT md5(embedding::text) FROM chunks WHERE id = '${before.sample}'`);
+  const sampleBefore = sampleHash();
+  // One vector is stale (its chunk text changed): it must NOT be copied back by down.
+  mustPsql(`UPDATE chunks SET embed_text = embed_text || ' changed' WHERE id = '${before.stale}'`);
+
+  check("deferred: up (approved) drops the trigger, function, old index and chunks.embedding; chunk_embeddings is untouched", () => {
+    const result = run("up", true);
+    assert(result.ok, result.err);
+    assert(columnType() === "", "chunks.embedding still exists");
+    assert(objectCount() === 0, `${objectCount()} legacy objects left`);
+    assert(count("SELECT count(*) FROM chunk_embeddings") === before.vectors, "chunk_embeddings changed");
+    assert(count("SELECT count(*) FROM pg_indexes WHERE indexname LIKE 'idx_ce_hnsw_%'") >= 1, "per-space indexes are gone");
+  });
+
+  check("deferred: the writers' path still works without the legacy column (side table only)", () => {
+    const sourceId = mustPsql("SELECT id FROM sources WHERE name = 's20'");
+    const id = mustPsql(`INSERT INTO chunks (source_id, chunk_index, body, embed_text, word_count, content_hash)
+                          VALUES ('${sourceId}', 11, 'b', 'after the drop', 3, 'h') RETURNING id`).split("\n")[0];
+    mustPsql(`INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash)
+              VALUES ('${id}', '${legacy}', '${randomVector(1024)}'::vector, md5('after the drop'))`);
+    mustPsql(`DELETE FROM chunks WHERE id = '${id}'`);
+  });
+
+  check("deferred: down restores the column, the HNSW index, the function and the trigger", () => {
+    const result = run("down", false);   // down needs no approval
+    assert(result.ok, result.err);
+    assert(columnType() === "vector(1024)", `column type: '${columnType()}'`);
+    assert(objectCount() === 3, `expected the trigger, function and index back, found ${objectCount()}`);
+    const index = mustPsql("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_chunks_embedding_hnsw'");
+    assert(/USING hnsw \(embedding vector_cosine_ops\)/.test(index), index);
+  });
+
+  check("deferred: down backfilled current vectors exactly and left the stale one empty", () => {
+    assert(sampleHash() === sampleBefore, "a restored vector differs from the original");
+    assert(count(`SELECT count(*) FROM chunks WHERE id = '${before.stale}' AND embedding IS NULL`) === 1, "a stale vector was copied back");
+    assert(count("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL") === before.withVector - 1, "wrong number of restored vectors");
+  });
+
+  check("deferred: the restored trigger mirrors writes to the legacy space again", () => {
+    const vec = randomVector(1024);
+    mustPsql(`UPDATE chunks SET embedding = '${vec}'::vector(1024) WHERE id = '${before.sample}'`);
+    assert(mustPsql(`SELECT (embedding = '${vec}'::vector) FROM chunk_embeddings WHERE chunk_id = '${before.sample}' AND space_id = '${legacy}'`) === "t", "not mirrored");
+  });
+
+  check("deferred: up and down can be repeated (round trip)", () => {
+    const up = run("up", true);
+    assert(up.ok || /not dropping/.test(up.err), up.err);
+    if (up.ok) {
+      assert(columnType() === "", "column still there after the second up");
+      assert(run("down", false).ok, "second down failed");
+    }
+    assert(columnType() === "vector(1024)" && objectCount() === 3, "not restored after the round trip");
   });
 }
 

@@ -6,6 +6,7 @@ import logging
 import os
 import boto3
 from helpers.chat import get_response
+from helpers.crud import fetch_service_status
 from helpers.embedding_space import EmbeddingSpaceError
 from helpers.db_connection import get_db_connection
 import helpers.config as config
@@ -15,6 +16,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 GENERIC_ERROR_MESSAGE = "Sorry, something went wrong while preparing a response. Please try again."
+READ_ONLY_DEFAULT_MESSAGE = "Chat is temporarily read-only. Please try again later."
 
 
 def _get_ws_client(event):
@@ -128,6 +130,18 @@ def handler(event, context=None):
                 403,
                 'Unauthorized access to chat session',
                 "This chat session couldn't be found. Please start a new chat.",
+            )
+
+        # Read-only fallback (admin "Assistant settings" > service status, migration 034).
+        # Refuses a new turn with the standard `error` event, before `start` is sent and
+        # before any retrieval or model call. A banner does not block. The status read
+        # falls back to normal on error, so it can never take chat down by itself.
+        service = fetch_service_status(conn)
+        if service['status'] == 'read_only':
+            return fail(
+                503,
+                'SERVICE_READ_ONLY',
+                service['message'] or READ_ONLY_DEFAULT_MESSAGE,
             )
 
         # Load dynamic configuration from DB

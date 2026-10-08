@@ -21,6 +21,14 @@ import {
   type DemoFacts,
 } from "@/lib/demo";
 import { API_ENDPOINT } from "@/lib/api";
+import ServiceStatusBanner from "@/components/ChatInterface/ServiceStatusBanner";
+import {
+  NORMAL_SERVICE_STATE,
+  READ_ONLY_ERROR_CODE,
+  SERVICE_POLL_MS,
+  parseServiceStatus,
+  type ServiceState,
+} from "@/lib/serviceStatus";
 
 type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
@@ -109,6 +117,10 @@ export default function AIChatPage({
   // sendMessage, even if a render/effect for a session change happens in
   // between (e.g. when the first message creates a new session).
   const streamingMessageIdRef = useRef<string | null>(null);
+
+  // Maintenance banner / read-only flag set by an administrator. Starts as normal so a
+  // failing status request can never block chat.
+  const [serviceState, setServiceState] = useState<ServiceState>(NORMAL_SERVICE_STATE);
 
   const [isTokenLimitReached, setIsTokenLimitReached] = useState(false);
   const [tokenResetTime, setTokenResetTime] = useState<string | null>(null);
@@ -350,6 +362,10 @@ export default function AIChatPage({
               setTokenResetTime(formatResetTime(message.token_usage.reset_at));
             }
           }
+          if (message.error === READ_ONLY_ERROR_CODE) {
+            // The server refused this turn; show the read-only notice and disable the composer now.
+            setServiceState({ status: "read_only", message: message.message ?? null });
+          }
           if (streamingMessageId) {
             setMessages((prev) =>
               prev.map((msg) =>
@@ -432,6 +448,41 @@ export default function AIChatPage({
     }
     fetchMaxCharactersPerUserMessage();
   }, []);
+
+  // Service status: once on load and then once a minute. It reuses the public-session token
+  // that the streaming connection already refreshes, so polling adds no unauthenticated
+  // requests (the WAF counts those per IP). A failed request keeps the last known state,
+  // which starts as normal, so it can never block chat on its own.
+  useEffect(() => {
+    if (isDemoMode || !API_ENDPOINT || !webSocketToken) {
+      return;
+    }
+    let active = true;
+    const loadServiceStatus = async () => {
+      try {
+        const response = await fetch(`${API_ENDPOINT}/system-settings/service-status`, {
+          headers: { Authorization: `Bearer ${webSocketToken}` },
+        });
+        if (!response.ok) {
+          throw new Error(`Service status request failed with status ${response.status}`);
+        }
+        const next = parseServiceStatus(await response.json());
+        if (active) {
+          setServiceState((prev) =>
+            prev.status === next.status && prev.message === next.message ? prev : next
+          );
+        }
+      } catch (error) {
+        console.error("Failed to fetch service status:", error);
+      }
+    };
+    void loadServiceStatus();
+    const timer = window.setInterval(() => void loadServiceStatus(), SERVICE_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [webSocketToken]);
 
   useEffect(() => {
     // The first message of a new chat creates the session itself. That
@@ -558,7 +609,11 @@ export default function AIChatPage({
     };
   }, [activeChatSessionId, userId, setConversationFacts]);
 
+  // Read-only: new messages are paused (the server refuses them too). Starters and chips share sendMessage.
+  const isReadOnly = serviceState.status === "read_only";
+
   async function sendMessage(textOverride?: string) {
+    if (isReadOnly) return;
     if (isStreaming) return;
 
     const text = (textOverride ?? message).trim();
@@ -726,6 +781,13 @@ export default function AIChatPage({
       );
 
       if (!response.ok) {
+        if (response.status === 503) {
+          const errData = await response.json().catch(() => null);
+          if (errData?.error === READ_ONLY_ERROR_CODE) {
+            // Read-only was switched on since the last status check; the next poll adds the message.
+            setServiceState((prev) => (prev.status === "read_only" ? prev : { status: "read_only", message: null }));
+          }
+        }
         if (response.status === 429) {
           const errData = await response.json();
           if (errData.error === "TOKEN_LIMIT_EXCEEDED") {
@@ -863,6 +925,7 @@ export default function AIChatPage({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
+      <ServiceStatusBanner state={serviceState} />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full px-4 md:px-[34px]">
         <div className="mx-auto w-full max-w-[680px] py-10 pb-6">
           {isWelcome ? (
@@ -944,14 +1007,16 @@ export default function AIChatPage({
             onChange={(val: string) => setMessage(val)}
             maxLength={maxCharactersPerUserMessage}
             placeholder={
-              isTokenLimitReached
+              isReadOnly
+                ? "Sending new messages is paused for now"
+                : isTokenLimitReached
                 ? `Daily limit reached. Resets at ${tokenResetTime || "soon"}`
                 : isStreaming
                 ? "Thinking about what you've told me…"
                 : "Write what's happening in your own words…"
             }
             onSend={() => void sendMessage()}
-            disabled={isTokenLimitReached || isStreaming}
+            disabled={isReadOnly || isTokenLimitReached || isStreaming}
           />
           <p className="mt-2 text-xs leading-normal text-foreground/75">
             {disclaimer}
