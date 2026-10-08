@@ -29,6 +29,109 @@ interface CICDStackProps extends cdk.StackProps {
   pathFilters?: string[];
 }
 
+// ECR vulnerability scan gate, run as the image builders' post_build step.
+// Pushes only the unique candidate tag, waits for the scan-on-push result
+// (fail closed on errors, FAILED/unsupported status, or timeout), blocks on
+// any CRITICAL finding, and only then retags the scanned manifest as
+// `latest` (by digest) and updates the Lambda. A failing image never touches
+// `latest`. Embedded base64-encoded in the buildspec to avoid YAML/quoting
+// issues; exported so tests can run the exact shipped script.
+export const ECR_SCAN_GATE_SCRIPT = `#!/usr/bin/env bash
+set -euo pipefail
+: "\${REPO_NAME:?}" "\${REPOSITORY_URI:?}" "\${IMAGE_TAG:?}" "\${LAMBDA_FUNCTION_NAME:?}"
+
+if [ "\${CODEBUILD_BUILD_SUCCEEDING:-1}" != "1" ]; then
+  echo "Build phase failed; not pushing or promoting the image."
+  exit 1
+fi
+
+MAX_ATTEMPTS="\${SCAN_MAX_ATTEMPTS:-60}"
+INTERVAL="\${SCAN_POLL_INTERVAL:-10}"
+
+echo "Pushing candidate image $REPOSITORY_URI:$IMAGE_TAG"
+docker push "$REPOSITORY_URI:$IMAGE_TAG"
+
+DIGEST=$(aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag="$IMAGE_TAG" \\
+  --query 'imageDetails[0].imageDigest' --output text)
+if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+  echo "Could not resolve digest for $IMAGE_TAG. Blocking deployment."
+  exit 1
+fi
+
+echo "Waiting for vulnerability scan of $IMAGE_TAG ($DIGEST)..."
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  if OUT=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \\
+        --query 'imageScanStatus.status' --output text 2>&1); then
+    STATUS="$OUT"
+  elif printf '%s' "$OUT" | grep -q ScanNotFoundException; then
+    STATUS="NOT_STARTED"
+  else
+    echo "Scan status lookup failed: $OUT. Blocking deployment."
+    exit 1
+  fi
+  case "$STATUS" in
+    COMPLETE|ACTIVE) break ;;
+    IN_PROGRESS|PENDING|NOT_STARTED) ;;
+    *) echo "Scan finished with status $STATUS. Blocking deployment."; exit 1 ;;
+  esac
+  if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+    echo "Timed out waiting for scan (last status: $STATUS). Blocking deployment."
+    exit 1
+  fi
+  sleep "$INTERVAL"
+done
+
+CRITICAL=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \\
+  --no-paginate --query 'imageScanFindings.findingSeverityCounts.CRITICAL' --output text)
+if [ -z "$CRITICAL" ] || [ "$CRITICAL" = "None" ]; then
+  CRITICAL=0
+fi
+if ! [[ "$CRITICAL" =~ ^[0-9]+$ ]]; then
+  echo "Unexpected CRITICAL count '$CRITICAL'. Blocking deployment."
+  exit 1
+fi
+if [ "$CRITICAL" -gt 0 ]; then
+  echo "CRITICAL vulnerabilities found: $CRITICAL. Blocking deployment; latest left unchanged."
+  aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" --no-paginate \\
+    --query "imageScanFindings.findings[?severity=='CRITICAL'].[name, attributes[?key=='package_name'].value | [0], attributes[?key=='package_version'].value | [0]]" \\
+    --output table || true
+  exit 1
+fi
+echo "No critical vulnerabilities found. Promoting $IMAGE_TAG to latest."
+
+CURRENT=$(aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag=latest \\
+  --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo "NONE")
+if [ "$CURRENT" != "$DIGEST" ]; then
+  MEDIA_TYPES="application/vnd.docker.distribution.manifest.v2+json application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.list.v2+json application/vnd.oci.image.index.v1+json"
+  MANIFEST=$(aws ecr batch-get-image --repository-name "$REPO_NAME" --image-ids imageDigest="$DIGEST" \\
+    --accepted-media-types $MEDIA_TYPES --query 'images[0].imageManifest' --output text)
+  MEDIA_TYPE=$(aws ecr batch-get-image --repository-name "$REPO_NAME" --image-ids imageDigest="$DIGEST" \\
+    --accepted-media-types $MEDIA_TYPES --query 'images[0].imageManifestMediaType' --output text)
+  if [ -z "$MANIFEST" ] || [ "$MANIFEST" = "None" ]; then
+    echo "Could not read manifest for $DIGEST. Blocking deployment."
+    exit 1
+  fi
+  aws ecr put-image --repository-name "$REPO_NAME" --image-tag latest --image-manifest "$MANIFEST" \\
+    --image-manifest-media-type "$MEDIA_TYPE" --image-digest "$DIGEST" >/dev/null
+fi
+PROMOTED=$(aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag=latest \\
+  --query 'imageDetails[0].imageDigest' --output text)
+if [ "$PROMOTED" != "$DIGEST" ]; then
+  echo "latest ($PROMOTED) does not match candidate ($DIGEST). Failing."
+  exit 1
+fi
+echo "latest now points to $DIGEST"
+
+if aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
+  echo "Updating Lambda function to use the new image..."
+  aws lambda update-function-code --function-name "$LAMBDA_FUNCTION_NAME" --image-uri "$REPOSITORY_URI@$DIGEST"
+else
+  echo "Lambda function $LAMBDA_FUNCTION_NAME does not exist yet. Skipping update."
+fi
+`;
+
 export class CICDStack extends cdk.Stack {
   public readonly ecrRepositories: { [key: string]: ecr.Repository } = {};
   public readonly buildProjects: { [key: string]: codebuild.IProject } = {};
@@ -64,6 +167,26 @@ export class CICDStack extends cdk.Stack {
           "lambda:UpdateFunctionConfiguration",
         ],
         resources: lambdaUpdateArns,
+      })
+    );
+
+    // The ECR scan gate reads scan results and retags the scanned candidate as
+    // `latest`. AmazonEC2ContainerRegistryPowerUser currently overlaps these on
+    // `*`; this keeps the gate working, scoped to its own repos, if it is removed.
+    const ecrRepoArns = props.lambdaFunctions.map(
+      (fn) => `arn:aws:ecr:${this.region}:${this.account}:repository/${id.toLowerCase()}-${fn.name.toLowerCase()}`
+    );
+
+    codeBuildRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "ecr:DescribeImages",
+          "ecr:DescribeImageScanFindings",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+        ],
+        resources: ecrRepoArns,
       })
     );
 
@@ -187,9 +310,32 @@ export class CICDStack extends cdk.Stack {
       const repoName = `${id.toLowerCase()}-${lambda.name.toLowerCase()}`;
       const ecrRepo = new ecr.Repository(this, `${lambda.name}Repo`, {
         repositoryName: repoName,
+        // MUTABLE is required: the scan gate retags the scanned candidate as latest
         imageTagMutability: ecr.TagMutability.MUTABLE,
         removalPolicy: cdk.RemovalPolicy.RETAIN,
         imageScanOnPush: true,
+        lifecycleRules: [
+          {
+            rulePriority: 1,
+            description: "Keep the promoted latest image",
+            tagStatus: ecr.TagStatus.TAGGED,
+            tagPrefixList: ["latest"],
+            maxImageCount: 1,
+          },
+          {
+            rulePriority: 2,
+            description: "Keep the 30 most recent candidate images",
+            tagStatus: ecr.TagStatus.TAGGED,
+            tagPrefixList: [`${lambda.name}-${envName}-`],
+            maxImageCount: 30,
+          },
+          {
+            rulePriority: 3,
+            description: "Expire untagged images after 14 days",
+            tagStatus: ecr.TagStatus.UNTAGGED,
+            maxImageAge: cdk.Duration.days(14),
+          },
+        ],
       });
 
       ecrRepo.addToResourcePolicy(
@@ -273,7 +419,7 @@ export class CICDStack extends cdk.Stack {
                   'echo "exit 0" >> check_and_build.sh',
                   "chmod +x check_and_build.sh",
                   "COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)",
-                  "IMAGE_TAG=${MODULE_NAME}-${ENVIRONMENT}-${COMMIT_HASH}",
+                  "export IMAGE_TAG=${MODULE_NAME}-${ENVIRONMENT}-${COMMIT_HASH}-${CODEBUILD_BUILD_NUMBER}",
                   "export DOCKER_HOST=unix:///var/run/docker.sock",
                   './check_and_build.sh || { echo "Skipping build due to no changes"; exit 1; }',
                 ],
@@ -286,40 +432,10 @@ export class CICDStack extends cdk.Stack {
               },
               post_build: {
                 commands: [
-                  "docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:latest",
-                  "docker push $REPOSITORY_URI:$IMAGE_TAG",
-                  "docker push $REPOSITORY_URI:latest",
-                  'echo "Waiting for vulnerability scan to complete..."',
-                  "sleep 30",
-                  'echo "Checking vulnerability scan results..."',
-                  // Combine the vulnerability check into a single command using bash script
-                  `bash -c '
-                    SCAN_RESULTS=$(aws ecr describe-image-scan-findings \
-                      --repository-name $REPO_NAME \
-                      --image-id imageTag=latest \
-                      --no-paginate \
-                      --query "imageScanFindings.findingSeverityCounts.CRITICAL" \
-                      --output text 2>/dev/null || echo "0")
-                    
-                    if [[ "$SCAN_RESULTS" != "0" && "$SCAN_RESULTS" != "None" ]]; then
-                      echo "CRITICAL vulnerabilities found: $SCAN_RESULTS. Blocking deployment."
-                      exit 1
-                    else
-                      echo "No critical vulnerabilities found. Proceeding with deployment."
-                    fi
-                  '`,
-                  'echo "Checking if Lambda function exists before updating..."',
-                  // Combine the Lambda update into a single command
-                  `bash -c '
-                    if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME &>/dev/null; then
-                      echo "Updating Lambda function to use the new image..."
-                      aws lambda update-function-code \
-                        --function-name $LAMBDA_FUNCTION_NAME \
-                        --image-uri $REPOSITORY_URI:latest
-                    else
-                      echo "Lambda function $LAMBDA_FUNCTION_NAME does not exist yet. Skipping update."
-                    fi
-                  '`,
+                  // Push candidate tag -> wait for scan -> block on CRITICAL ->
+                  // promote to latest -> update Lambda. See ECR_SCAN_GATE_SCRIPT.
+                  'echo "Running ECR vulnerability scan gate (push candidate -> scan -> promote latest)..."',
+                  `echo ${Buffer.from(ECR_SCAN_GATE_SCRIPT).toString("base64")} | base64 -d > /tmp/ecr-scan-gate.sh && bash /tmp/ecr-scan-gate.sh`,
                 ],
               },
             },
