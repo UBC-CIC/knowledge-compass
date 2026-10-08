@@ -1221,6 +1221,27 @@ export class ApiGatewayStack extends cdk.Stack {
       alarmDescription: 'The active embedding space failed its startup/refresh consistency check; chat returns EMBEDDING_SPACE_UNAVAILABLE until it is fixed or rolled back',
     });
 
+    // The knowledge-base Lambda's cutover job (helpers/cutover.py) writes this metric the same
+    // way (CloudWatch Embedded Metric Format on stdout), so no PutMetricData permission is added
+    // to the shared lambdaRole. It fires when the golden-set check after a pointer flip fails.
+    // The job does NOT roll back by itself: the alarm tells the operator to review and use the
+    // Rollback action. Referenced by namespace/name only (no token to lambdaKnowledgeBase, which
+    // would recreate the documented circular dependency). The SNS action is attached with the
+    // notification topic.
+    new cloudwatch.Alarm(this, 'PostFlipCheckFailedAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'KnowledgeCompass/Embeddings',
+        metricName: 'PostFlipCheckFailed',
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'The golden-set check after an embedding-space cutover failed; the new space is live. Review the job report and use Rollback in the admin Search index page if retrieval quality dropped',
+    });
+
     lambdaTextGen.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,

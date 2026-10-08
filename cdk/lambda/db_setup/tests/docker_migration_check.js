@@ -137,14 +137,19 @@ function randomVector(dims) {
 }
 
 /** Run dump_writer_sql.py (real writer/retrieval code, recording cursor) and return its statements. */
-function dumpSql(request) {
+function dumpList(request) {
   for (const command of [["py", ["-3"]], ["python3", []], ["python", []]]) {
     const result = spawnSync(command[0], [...command[1], DUMP_SCRIPT], { input: JSON.stringify(request), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     if (result.error) continue;
     if (result.status !== 0) throw new Error(`dump_writer_sql.py failed: ${(result.stderr || "").split("\n").slice(-4).join(" | ")}`);
-    return Object.fromEntries(JSON.parse(result.stdout).map((s) => [s.name, s]));
+    return JSON.parse(result.stdout);
   }
   return null;
+}
+
+function dumpSql(request) {
+  const list = dumpList(request);
+  return list && Object.fromEntries(list.map((s) => [s.name, s]));
 }
 
 const sqlLiteral = (v) => {
@@ -475,6 +480,223 @@ function runChecks() {
     applyMigration("032_embedding_spaces.js", "up"); // a second up is also a no-op
     assert(count(`SELECT count(*) FROM chunk_embeddings WHERE space_id = '${again}'`) === actual, "second up changed rows");
     return `${actual} rows`;
+  });
+
+  runJobChecks();
+}
+
+/** Migration 033 (embedding_jobs) and the re-embed work-list query. Runs on top of 032. */
+function runJobChecks() {
+  applyMigration("033_embedding_jobs.js", "up");
+  const legacy = legacyId();
+
+  const newSpace = (name) => mustPsql(`INSERT INTO embedding_spaces (name, provider, model_id, invoke_target, dimensions, status)
+                                        VALUES ('${name}', 'cohere_v3', 'cohere.embed-english-v3', 'cohere.embed-english-v3', 1024, 'building')
+                                        RETURNING id`).split("\n")[0];
+  const spaceA = newSpace("jobs-space-a");
+  const spaceB = newSpace("jobs-space-b");
+  const addJob = (space, mode, status = "queued") => psql(`INSERT INTO embedding_jobs (space_id, mode, status) VALUES ('${space}', '${mode}', '${status}')`);
+
+  check("033 up applies; embedding_jobs, both partial unique indexes and the history index exist", () => {
+    const names = mustPsql("SELECT indexname FROM pg_indexes WHERE tablename = 'embedding_jobs' ORDER BY 1").split("\n");
+    for (const expected of ["embedding_jobs_one_active_cutover", "embedding_jobs_one_active_rebuild", "embedding_jobs_space_created_idx"]) {
+      assert(names.includes(expected), `missing ${expected} (have ${names.join(", ")})`);
+    }
+    // `cursor` is a non-reserved keyword; the column must work unquoted.
+    mustPsql(`SELECT cursor, processed, price_configured, steps FROM embedding_jobs LIMIT 1`);
+  });
+
+  check("CHECK constraints reject an unknown mode and an unknown status", () => {
+    const badMode = addJob(spaceA, "purge");
+    assert(!badMode.ok && /violates check constraint/.test(badMode.err), badMode.err || "accepted");
+    const badStatus = addJob(spaceA, "rebuild", "paused");
+    assert(!badStatus.ok && /violates check constraint/.test(badStatus.err), badStatus.err || "accepted");
+  });
+
+  check("only one queued/running rebuild|delta job per space; other spaces, modes and finished jobs are unaffected", () => {
+    assert(addJob(spaceA, "rebuild").ok, "first rebuild rejected");
+    const dup = addJob(spaceA, "delta", "running");
+    assert(!dup.ok && /embedding_jobs_one_active_rebuild/.test(dup.err), dup.err || "second active rebuild accepted");
+    assert(addJob(spaceB, "rebuild").ok, "another space was blocked");
+    assert(addJob(spaceA, "dry_run").ok, "dry_run should not be limited");
+    assert(addJob(spaceA, "validate").ok, "validate should not be limited");
+    mustPsql(`UPDATE embedding_jobs SET status = 'succeeded' WHERE space_id = '${spaceA}' AND mode = 'rebuild'`);
+    assert(addJob(spaceA, "rebuild").ok, "a finished job still blocks");
+  });
+
+  check("only one queued/running activate|rollback job in total", () => {
+    assert(addJob(spaceA, "activate").ok, "first cutover rejected");
+    const dup = addJob(spaceB, "rollback", "running");
+    assert(!dup.ok && /embedding_jobs_one_active_cutover/.test(dup.err), dup.err || "second cutover accepted");
+    mustPsql("UPDATE embedding_jobs SET status = 'failed' WHERE mode IN ('activate', 'rollback')");
+    assert(addJob(spaceB, "rollback").ok, "a failed cutover still blocks");
+    mustPsql("UPDATE embedding_jobs SET status = 'cancelled' WHERE mode IN ('activate', 'rollback')");
+  });
+
+  check("the app role (readwrite member) can insert, update and read embedding_jobs", () => {
+    const insert = asApp(`INSERT INTO embedding_jobs (space_id, mode) VALUES ('${spaceB}', 'dry_run') RETURNING id`);
+    assert(insert.ok, insert.err);
+    const id = insert.out.split("\n")[0];
+    const update = asApp(`UPDATE embedding_jobs SET status = 'running', processed = processed + 5, cursor = '${legacy}', steps = '[{"name":"lock"}]'::jsonb WHERE id = '${id}'`);
+    assert(update.ok, update.err);
+    assert(asApp(`SELECT processed FROM embedding_jobs WHERE id = '${id}'`).out === "5", "update not visible");
+  });
+
+  // The work-list query from helpers/reembed_space.py, as the code runs it.
+  const source = fs.readFileSync(path.join(__dirname, "..", "..", "knowledgeBase", "helpers", "reembed_space.py"), "utf8");
+  const match = source.match(/_SELECT_BATCH_SQL = """([\s\S]*?)"""/);
+  const selectBatch = (space, cursorId, limit) =>
+    mustPsql(fillParams({ sql: match[1], params: [space, cursorId, limit] })).split("\n").filter(Boolean).map((line) => line.split("|")[0]);
+  const NIL = "00000000-0000-0000-0000-000000000000";
+
+  check("re-embed work-list query returns exactly the missing and stale chunks, in id order, from the cursor", () => {
+    assert(match, "_SELECT_BATCH_SQL not found in reembed_space.py");
+    // 10 current vectors, 1 stale vector, the rest missing.
+    mustPsql(`INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash)
+              SELECT id, '${spaceA}', embedding, md5(embed_text) FROM chunks WHERE embedding IS NOT NULL ORDER BY id LIMIT 10`);
+    mustPsql(`INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash)
+              SELECT id, '${spaceA}', embedding, md5('something else') FROM chunks WHERE embedding IS NOT NULL ORDER BY id OFFSET 10 LIMIT 1`);
+    const expectedAll = mustPsql(`SELECT c.id FROM chunks c LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id AND ce.space_id = '${spaceA}'
+                                  WHERE ce.chunk_id IS NULL OR ce.embed_hash <> md5(c.embed_text) ORDER BY c.id`).split("\n");
+    const total = count("SELECT count(*) FROM chunks");
+    assert(expectedAll.length === total - 10, `expected ${total - 10} remaining, saw ${expectedAll.length}`);
+
+    const first = selectBatch(spaceA, NIL, 5);
+    assert(JSON.stringify(first) === JSON.stringify(expectedAll.slice(0, 5)), "first batch differs from the expected ids");
+    const stale = mustPsql(`SELECT c.id FROM chunks c JOIN chunk_embeddings ce ON ce.chunk_id = c.id AND ce.space_id = '${spaceA}' WHERE ce.embed_hash <> md5(c.embed_text)`);
+    assert(expectedAll.includes(stale), "the stale chunk is not in the work list");
+
+    const next = selectBatch(spaceA, first[4], 5);
+    assert(JSON.stringify(next) === JSON.stringify(expectedAll.slice(5, 10)), "cursor was not honored");
+    assert(selectBatch(spaceA, expectedAll[expectedAll.length - 1], 5).length === 0, "rows after the last id");
+  });
+
+  check("the work list is scoped to the space (legacy space is complete, so nothing is left for it)", () => {
+    assert(selectBatch(legacy, NIL, 10).length === count(`SELECT count(*) FROM chunks c LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id AND ce.space_id = '${legacy}' WHERE ce.chunk_id IS NULL`),
+      "legacy-space work list differs from its missing chunks");
+  });
+
+  check("upserting a vector makes the chunk leave the work list; re-running the upsert is idempotent", () => {
+    const [target] = selectBatch(spaceA, NIL, 1);
+    const upsert = `INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash, embedded_at)
+                    SELECT c.id, '${spaceA}'::uuid, '${randomVector(1024)}'::vector, md5(c.embed_text), now() FROM chunks c WHERE c.id = '${target}'::uuid
+                    ON CONFLICT (chunk_id, space_id) DO UPDATE SET embedding = EXCLUDED.embedding, embed_hash = EXCLUDED.embed_hash, embedded_at = EXCLUDED.embedded_at`;
+    mustPsql(upsert);
+    mustPsql(upsert);
+    assert(count(`SELECT count(*) FROM chunk_embeddings WHERE chunk_id = '${target}' AND space_id = '${spaceA}'`) === 1, "duplicate rows");
+    assert(!selectBatch(spaceA, NIL, 1000000).includes(target), "chunk still in the work list");
+    // Chunk deleted between read and write: the INSERT .. SELECT writes nothing instead of failing the FK.
+    const gone = mustPsql(`INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash, embedded_at)
+                           SELECT c.id, '${spaceA}'::uuid, '${randomVector(1024)}'::vector, 'x', now() FROM chunks c WHERE c.id = '${NIL}'::uuid RETURNING chunk_id`);
+    assert(gone === "", "wrote a vector for a chunk that does not exist");
+  });
+
+  // Cutover, lock, validation and re-embed statements: the real SQL the code builds.
+  const cutoverSpace = newSpace("cutover-new");
+  mustPsql(`UPDATE embedding_spaces SET status = 'validated' WHERE id = '${cutoverSpace}'`);
+  const JOB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const dump = () => dumpList({ mode: "jobs", job_id: JOB, old_space_id: legacy, new_space_id: cutoverSpace, kind: "activate" });
+  const jobsSql = dump();
+  const stmt = (name, nth = 0) => {
+    const found = (jobsSql || []).filter((s) => s.name === name)[nth];
+    assert(found, `statement ${name}#${nth} not produced by the code`);
+    return fillParams(found);
+  };
+  const lockRow = () => mustPsql("SELECT cutover_locked, coalesce(cutover_job_id::text, ''), cutover_locked_at IS NOT NULL FROM embedding_active_space");
+
+  if (jobsSql === null) {
+    skip("cutover / validation / re-embed SQL against Postgres", "no Python interpreter for dump_writer_sql.py");
+  } else {
+    check("lock: acquire is compare-and-swap; a live lock of another job is untouched; an expired one is taken over", () => {
+      mustPsql(stmt("acquire_lock"));
+      assert(lockRow() === `t|${JOB}|t`, `after acquire: ${lockRow()}`);
+      mustPsql(stmt("acquire_lock").replace(new RegExp(JOB, "g"), OTHER));     // another job tries
+      assert(lockRow() === `t|${JOB}|t`, `a live lock was taken over: ${lockRow()}`);
+      mustPsql(stmt("acquire_lock"));                                           // re-entry by the owner
+      assert(lockRow() === `t|${JOB}|t`, "owner re-entry changed the lock");
+      mustPsql("UPDATE embedding_active_space SET cutover_locked_at = now() - interval '2 hours'");
+      mustPsql(stmt("acquire_lock").replace(new RegExp(JOB, "g"), OTHER));     // TTL passed
+      assert(lockRow() === `t|${OTHER}|t`, `expired lock not taken over: ${lockRow()}`);
+      mustPsql(stmt("acquire_lock"));                                           // not locked by us, live: refused
+      assert(lockRow() === `t|${OTHER}|t`, "took a live lock");
+    });
+
+    check("lock: heartbeat only refreshes the owner's lock; release only clears the owner's lock", () => {
+      mustPsql(`UPDATE embedding_active_space SET cutover_locked_at = now() - interval '10 minutes', cutover_job_id = '${JOB}', cutover_locked = true`);
+      mustPsql(stmt("heartbeat", 0));
+      assert(count("SELECT count(*) FROM embedding_active_space WHERE cutover_locked_at > now() - interval '1 minute'") === 1, "heartbeat did not refresh");
+      mustPsql(`UPDATE embedding_active_space SET cutover_job_id = '${OTHER}', cutover_locked_at = now() - interval '10 minutes'`);
+      mustPsql(stmt("heartbeat", 0));
+      assert(count("SELECT count(*) FROM embedding_active_space WHERE cutover_locked_at > now() - interval '1 minute'") === 0, "heartbeat refreshed someone else's lock");
+      mustPsql(stmt("release_lock"));
+      assert(lockRow() === `t|${OTHER}|t`, "released someone else's lock");
+      mustPsql(`UPDATE embedding_active_space SET cutover_job_id = '${JOB}'`);
+      mustPsql(stmt("release_lock"));
+      assert(lockRow() === "f||f", `lock not released: ${lockRow()}`);
+    });
+
+    check("lock_state SQL (used by every ingestion entry point) reports locked, expired and unlocked", () => {
+      const read = () => mustPsql(stmt("lock_state"));
+      assert(read().startsWith("f|"), `unlocked: ${read()}`);
+      mustPsql(`UPDATE embedding_active_space SET cutover_locked = true, cutover_locked_at = now(), cutover_job_id = '${JOB}'`);
+      const live = read().split("|");
+      assert(live[0] === "t" && live[3] === "f", `live lock: ${live}`);
+      mustPsql("UPDATE embedding_active_space SET cutover_locked_at = now() - interval '31 minutes'");
+      assert(read().split("|")[3] === "t", "a lock past 30 minutes was not reported expired");
+      mustPsql("UPDATE embedding_active_space SET cutover_locked = false, cutover_locked_at = NULL, cutover_job_id = NULL");
+    });
+
+    check("ingestion-idle query runs against the ingestion_status enum", () => {
+      assert(Number(mustPsql(stmt("running_ingestion"))) >= 0, "no count");
+    });
+
+    check("flip: one transaction retires the old space, activates the new one and moves the pointer; a second run changes nothing", () => {
+      const flip = [stmt("flip", 0), stmt("flip", 1), stmt("flip", 2)].join(";\n");
+      mustPsql(flip, { single: true });
+      const state = () => mustPsql(`SELECT (SELECT status FROM embedding_spaces WHERE id = '${legacy}'), (SELECT status FROM embedding_spaces WHERE id = '${cutoverSpace}'),
+                                           (SELECT space_id::text FROM embedding_active_space), (SELECT activated_at IS NOT NULL FROM embedding_spaces WHERE id = '${cutoverSpace}'),
+                                           (SELECT retired_at IS NOT NULL FROM embedding_spaces WHERE id = '${legacy}')`);
+      assert(state() === `retired|active|${cutoverSpace}|t|t`, `after flip: ${state()}`);
+      mustPsql(flip, { single: true });
+      assert(state() === `retired|active|${cutoverSpace}|t|t`, `a repeated flip changed state: ${state()}`);
+      // Put things back for the remaining checks.
+      mustPsql(`UPDATE embedding_spaces SET status = 'active' WHERE id = '${legacy}';
+                UPDATE embedding_spaces SET status = 'validated' WHERE id = '${cutoverSpace}';
+                UPDATE embedding_active_space SET space_id = '${legacy}'`);
+    });
+
+    check("validation coverage and per-source-type SQL run; counts agree with an independent query", () => {
+      const missing = Number(mustPsql(stmt("coverage", 0)));
+      const expected = count(`SELECT count(*) FROM chunks c LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id AND ce.space_id = '${cutoverSpace}'
+                              WHERE ce.chunk_id IS NULL OR ce.embed_hash <> md5(c.embed_text)`);
+      assert(missing === expected, `coverage ${missing} vs ${expected}`);
+      const sample = mustPsql(stmt("coverage", 1)).split("\n").filter(Boolean);
+      assert(sample.length === Math.min(20, expected), `sample size ${sample.length}`);
+      const types = mustPsql(stmt("source_types")).split("\n").filter(Boolean).map((l) => l.split("|"));
+      const chunksInTypes = types.reduce((n, row) => n + Number(row[1]), 0);
+      assert(chunksInTypes === count("SELECT count(*) FROM chunks"), "per-type chunk counts do not add up to all chunks");
+      assert(types.every((row) => Number(row[2]) === 0), "empty target space should have no current vectors");
+    });
+
+    check("re-embed counting, stats, sample and price SQL run", () => {
+      const remaining = Number(mustPsql(stmt("count_remaining")));
+      assert(remaining === count("SELECT count(*) FROM chunks"), `remaining ${remaining}`);
+      const [rows, chars] = mustPsql(stmt("remaining_stats")).split("|").map(Number);
+      assert(rows === remaining && chars > 0, `stats ${rows}/${chars}`);
+      assert(mustPsql(stmt("sample_texts")).split("\n").length === 10, "sample should return 10 rows");
+      mustPsql(stmt("price"));
+    });
+  }
+
+  check("033 down removes only embedding_jobs; 032 objects and data stay; up re-applies cleanly", () => {
+    applyMigration("033_embedding_jobs.js", "down");
+    assert(count("SELECT count(*) FROM information_schema.tables WHERE table_name = 'embedding_jobs'") === 0, "embedding_jobs still there");
+    assert(count("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('embedding_spaces','embedding_active_space','chunk_embeddings')") === 3, "a 032 table is gone");
+    assert(count(`SELECT count(*) FROM chunk_embeddings WHERE space_id = '${legacy}'`) > 0, "legacy vectors lost");
+    applyMigration("033_embedding_jobs.js", "up");
+    applyMigration("033_embedding_jobs.js", "up"); // a second up is a no-op
+    assert(count("SELECT count(*) FROM embedding_jobs") === 0, "fresh table expected after down/up");
   });
 }
 

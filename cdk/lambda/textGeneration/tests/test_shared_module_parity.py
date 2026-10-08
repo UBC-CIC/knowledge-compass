@@ -23,13 +23,21 @@ PARITY_GROUPS = [
         "lambda/textGeneration/helpers/retrieval_core.py",
         "lambda/knowledgeBase/helpers/retrieval_core.py",
     ),
+    (
+        "lambda/textGeneration/helpers/eval_scoring.py",
+        "lambda/knowledgeBase/helpers/eval_scoring.py",
+    ),
+    # Synthetic golden set (no personal data); the validate_space task reads the KB copy.
+    (
+        "lambda/textGeneration/tests/eval/golden_queries.json",
+        "lambda/knowledgeBase/helpers/golden_queries.json",
+    ),
 ]
 
 # Mirrors that are registered but not created yet. Their parity check is skipped
-# (with a reason) while the file is absent; remove the entry when it is created.
-PENDING_MIRRORS = {
-    "lambda/knowledgeBase/helpers/retrieval_core.py": "mirror created in task 8",
-}
+# (with a reason) while the file is absent; add an entry here only while a mirror
+# is still to be created. Empty now that every mirror exists.
+PENDING_MIRRORS = {}
 
 
 def _exists(rel_path):

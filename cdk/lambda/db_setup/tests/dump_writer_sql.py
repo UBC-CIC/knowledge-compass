@@ -145,9 +145,65 @@ def run_containers(req):
     return conn.log
 
 
+class JobCursor(Cursor):
+    """Records like Cursor but reports one affected row and one plausible result row."""
+
+    def __init__(self, conn):
+        super().__init__(conn)
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        self.rowcount = 1
+
+    def fetchone(self):
+        return (1, 1, None, False)
+
+
+class JobConn(Conn):
+    def cursor(self):
+        return JobCursor(self)
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
+def run_jobs(req):
+    """The cutover / validation / re-embed statements, driven through the real functions."""
+    sys.path.append(os.path.join(LAMBDA, "knowledgeBase"))
+    os.environ.setdefault("REGION", "us-east-1")
+    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+    from helpers import cutover, ingestion_lock, reembed_space, validate_space
+
+    job_id, old_id, new_id = req["job_id"], req["old_space_id"], req["new_space_id"]
+    ctx = cutover._Context(kind=req.get("kind", "activate"), job={"id": job_id}, old_space_id=old_id,
+                           new_space_id=new_id, skip_quality=False, tolerance=0.05)
+    conn = JobConn()
+    for name, call in (
+        ("acquire_lock", lambda: cutover._acquire_lock(conn, job_id)),
+        ("heartbeat", lambda: cutover._heartbeat(conn, job_id)),
+        ("release_lock", lambda: cutover._release_lock(conn, job_id)),
+        ("lock_state", lambda: ingestion_lock.lock_state(conn)),
+        ("running_ingestion", lambda: cutover._running_ingestion_count(conn)),
+        ("flip", lambda: cutover._flip(conn, ctx)),
+        ("coverage", lambda: validate_space.coverage_report(conn, new_id)),
+        ("source_types", lambda: validate_space.source_type_report(conn, new_id, old_id)),
+        ("count_remaining", lambda: reembed_space.count_remaining(conn, new_id)),
+        ("remaining_stats", lambda: reembed_space._remaining_stats(conn, new_id, 2048)),
+        ("sample_texts", lambda: reembed_space._sample_texts(conn, new_id, 10)),
+        ("price", lambda: reembed_space._price(conn, new_id)),
+    ):
+        conn.next_name = name
+        call()
+    return conn.log
+
+
 def main():
     req = json.load(sys.stdin)
-    out = {"kb": run_kb, "tg": run_tg, "containers": run_containers}[req["mode"]](req)
+    out = {"kb": run_kb, "tg": run_tg, "containers": run_containers, "jobs": run_jobs}[req["mode"]](req)
     sys.stdout.write(json.dumps(out))
 
 

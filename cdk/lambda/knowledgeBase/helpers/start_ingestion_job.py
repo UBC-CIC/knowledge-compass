@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.cors import get_cors_headers
+from helpers.ingestion_lock import reject_if_locked
 from helpers.process_crawler_batch import process_crawler_batch
 from helpers.process_document_batch import trigger_document_batch
 
@@ -81,6 +82,10 @@ def start_ingestion_job(event, body, connection):
     - process_crawler_batch(...)   (website/video, via ECS Fargate)
     - trigger_document_batch(...)  (csv/markdown/json, via async Lambda self-invoke)
     """
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
+
     created_by = admin_email_from_request(event, body)
     if not created_by:
         return _response(event, 400, {"error": "Missing created_by"})
