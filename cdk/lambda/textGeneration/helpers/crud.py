@@ -257,6 +257,72 @@ def fetch_guideline_config(db_connection) -> Dict[str, Any]:
     return result
 
 
+_ACTIVE_SPACE_COLUMNS = """
+    s.id::text, s.name, s.provider, s.model_id, s.invoke_target, s.dimensions,
+    s.version, s.status, s.min_score, s.split_threshold, s.settings"""
+
+
+def fetch_active_space(db_connection, space_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    The embedding space retrieval should use (migration 032), as a dict:
+    id, name, provider, model_id, invoke_target, dimensions, version, status,
+    min_score, split_threshold, settings, cutover_locked.
+
+    Without `space_id` this follows the single-row `embedding_active_space`
+    pointer. With `space_id` it returns that space (any status except
+    `purged`), which is how validation searches a space that is not yet active.
+
+    Unlike fetch_guideline_config this deliberately does NOT fall back to
+    defaults on error: serving answers from a different model than the one the
+    stored vectors were made with silently returns wrong results, so a missing
+    pointer returns None and a SQL error is rolled back and re-raised for the
+    caller to fail loud.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            if space_id is None:
+                cur.execute(
+                    f"""SELECT {_ACTIVE_SPACE_COLUMNS}, a.cutover_locked
+                        FROM embedding_active_space a
+                        JOIN embedding_spaces s ON s.id = a.space_id
+                        WHERE a.id = 1"""
+                )
+            else:
+                cur.execute(
+                    f"""SELECT {_ACTIVE_SPACE_COLUMNS}, COALESCE(a.cutover_locked, false)
+                        FROM embedding_spaces s
+                        LEFT JOIN embedding_active_space a ON a.id = 1
+                        WHERE s.id = %s AND s.status <> 'purged'""",
+                    (str(space_id),),
+                )
+            row = cur.fetchone()
+    except Exception:
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        raise
+    if not row:
+        return None
+    settings = row[10]
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    return {
+        "id": row[0],
+        "name": row[1],
+        "provider": row[2],
+        "model_id": row[3],
+        "invoke_target": row[4],
+        "dimensions": int(row[5]),
+        "version": row[6],
+        "status": row[7],
+        "min_score": float(row[8]) if row[8] is not None else None,
+        "split_threshold": float(row[9]) if row[9] is not None else None,
+        "settings": settings if isinstance(settings, dict) else {},
+        "cutover_locked": bool(row[11]),
+    }
+
+
 def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, Any]]:
     """Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata."""
     try:

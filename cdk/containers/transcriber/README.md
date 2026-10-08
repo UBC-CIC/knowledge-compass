@@ -75,7 +75,7 @@ python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Vid
 | `--overlap` | 2 | Segments carried into next chunk for context overlap (fixed-size mode only) |
 | `--write-db` | false | Embed and write to DB |
 | `--semantic` | false | Embed segments first to detect topic boundaries |
-| `--semantic-threshold` | 0.5 | Cosine similarity threshold (lower than crawler because speech is more rambling) |
+| `--semantic-threshold` | active space's `split_threshold`, else 0.5 | Cosine similarity threshold (the 0.5 fallback is lower than the crawler's because speech is more rambling). Passing it explicitly always wins |
 | `--output` | vtt_output.json | Local JSON preview file |
 
 ---

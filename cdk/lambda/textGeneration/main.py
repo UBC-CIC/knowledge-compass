@@ -6,6 +6,7 @@ import logging
 import os
 import boto3
 from helpers.chat import get_response
+from helpers.embedding_space import EmbeddingSpaceError
 from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import validate_session_ownership, sanitize_session_id
@@ -197,6 +198,16 @@ def handler(event, context=None):
             'body': json.dumps(response_body)
         }
 
+    except EmbeddingSpaceError as e:
+        # The embedding space is missing or inconsistent (already logged with its
+        # code and emitted as a metric). The client gets the standard `error`
+        # event with no internal detail.
+        logger.error("Embedding space unavailable: code=%s", e.code)
+        return fail(
+            503,
+            'EMBEDDING_SPACE_UNAVAILABLE',
+            "The assistant is temporarily unavailable. Please try again shortly.",
+        )
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return fail(500, 'Internal server error')

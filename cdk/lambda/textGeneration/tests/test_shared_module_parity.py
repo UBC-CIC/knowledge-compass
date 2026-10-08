@@ -19,7 +19,21 @@ PARITY_GROUPS = [
         "lambda/textGeneration/helpers/embeddings.py",
         "lambda/knowledgeBase/helpers/embeddings.py",
     ),
+    (
+        "lambda/textGeneration/helpers/retrieval_core.py",
+        "lambda/knowledgeBase/helpers/retrieval_core.py",
+    ),
 ]
+
+# Mirrors that are registered but not created yet. Their parity check is skipped
+# (with a reason) while the file is absent; remove the entry when it is created.
+PENDING_MIRRORS = {
+    "lambda/knowledgeBase/helpers/retrieval_core.py": "mirror created in task 8",
+}
+
+
+def _exists(rel_path):
+    return os.path.isfile(os.path.join(_CDK, *rel_path.split("/")))
 
 
 def _read(rel_path):
@@ -33,6 +47,8 @@ class SharedModuleParityTests(unittest.TestCase):
             expected = _read(canonical)
             for mirror in mirrors:
                 with self.subTest(canonical=canonical, mirror=mirror):
+                    if mirror in PENDING_MIRRORS and not _exists(mirror):
+                        self.skipTest(PENDING_MIRRORS[mirror])
                     self.assertEqual(
                         _read(mirror),
                         expected,
@@ -42,7 +58,10 @@ class SharedModuleParityTests(unittest.TestCase):
     def test_all_paths_exist(self):
         for group in PARITY_GROUPS:
             for rel in group:
-                self.assertTrue(os.path.isfile(os.path.join(_CDK, *rel.split("/"))), rel)
+                with self.subTest(path=rel):
+                    if rel in PENDING_MIRRORS and not _exists(rel):
+                        self.skipTest(PENDING_MIRRORS[rel])
+                    self.assertTrue(_exists(rel), rel)
 
 
 if __name__ == "__main__":

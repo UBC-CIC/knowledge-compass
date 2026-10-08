@@ -1202,6 +1202,25 @@ export class ApiGatewayStack extends cdk.Stack {
       alarmDescription: 'Text Generation Lambda approaching concurrency limit',
     });
 
+    // The embedding-space consistency check in textGeneration (helpers/embedding_space.py)
+    // writes this metric as a CloudWatch Embedded Metric Format log line, so no
+    // PutMetricData permission is needed. The metric is referenced by namespace and
+    // name only (no token to lambdaTextGen, which would risk a circular dependency).
+    // The alarm action (SNS) is attached once the notification topic exists.
+    new cloudwatch.Alarm(this, 'EmbeddingSpaceCheckFailedAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'KnowledgeCompass/Embeddings',
+        metricName: 'EmbeddingSpaceCheckFailed',
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'The active embedding space failed its startup/refresh consistency check; chat returns EMBEDDING_SPACE_UNAVAILABLE until it is fixed or rolled back',
+    });
+
     lambdaTextGen.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,

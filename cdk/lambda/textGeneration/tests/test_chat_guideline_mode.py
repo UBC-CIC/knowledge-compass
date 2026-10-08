@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from helpers import chat, config  # noqa: E402
+from helpers.embedding_space import EmbeddingSpaceError  # noqa: E402
 
 SECTIONS = [
     {
@@ -118,6 +119,8 @@ class ChatModeTestBase(unittest.TestCase):
             "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "sonnet")),
             "retrieve_from_pgvector": mock.Mock(return_value=list(RESOURCES)),
             "retrieve_guideline_sections": mock.Mock(return_value=SECTIONS),
+            # The active embedding space's min_score (migration 032); 0.40 = DEFAULT_MIN_SCORE.
+            "effective_min_score": mock.Mock(return_value=0.40),
             "assess_response": mock.Mock(return_value={"warning_text": None}),
             "invoke_guardrail": mock.Mock(side_effect=lambda q, r: {"action": "NONE", "text": q}),
         }
@@ -313,12 +316,36 @@ class GuidelineGuideOnlyNoLinkTest(ChatModeTestBase):
         self.assert_resources_shown(result, ["Better PDF", "Keeping a school log"])
         self.assertLessEqual(len(result["sources_used"]), chat.GUIDELINE_FALLBACK_RESOURCE_COUNT)
 
+    def test_fallback_uses_the_active_spaces_min_score(self):
+        mid = dict(RESOURCES[1], title="Mid score PDF", score=0.5)
+        self.patches["retrieve_from_pgvector"].return_value = [RESOURCES[0], mid]
+        self.patches["effective_min_score"].return_value = 0.6
+        result, _ = self.respond("guideline")
+        # RESOURCES[0] scores above 0.6; the 0.5 PDF is below this space's cutoff.
+        self.assert_resources_shown(result, ["Keeping a school log"])
+        self.patches["effective_min_score"].assert_called()
+
     def test_only_low_scores_shows_nothing(self):
         low = dict(RESOURCES[1], score=0.1)
         self.patches["retrieve_from_pgvector"].return_value = [low]
         result, _ = self.respond("guideline")
         self.assertEqual(result["sources_used"], [])
         self.assertEqual(self._saved_ai_sources(), [])
+
+
+class EmbeddingSpaceFailureTest(ChatModeTestBase):
+    """A missing/inconsistent embedding space must reach main.py, not become a generic reply."""
+    reply = "<answer>x</answer><cited_indices>[]</cited_indices>"
+
+    def test_standard_mode_reraises_embedding_space_error(self):
+        self.patches["retrieve_from_pgvector"].side_effect = EmbeddingSpaceError("INDEX_MISSING")
+        with self.assertRaises(EmbeddingSpaceError):
+            self.respond("standard")
+
+    def test_guideline_mode_reraises_embedding_space_error(self):
+        self.patches["retrieve_guideline_sections"].side_effect = EmbeddingSpaceError("PROBE_FAILED")
+        with self.assertRaises(EmbeddingSpaceError):
+            self.respond("guideline")
 
 
 class GuidelineMissingCitationsTest(ChatModeTestBase):

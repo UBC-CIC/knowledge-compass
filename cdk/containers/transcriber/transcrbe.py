@@ -63,12 +63,15 @@ except ImportError:
 # ── Config (environment-driven) ───────────────────────────────────────────────
 
 REGION = db_config.get_region()
+# DEPRECATED fallbacks (db_config): the embedding model comes from the active
+# embedding space in the database. These are used only when that lookup is
+# unavailable, for example a standalone parse-only run without database access.
 EMBED_MODEL_ID = db_config.get_embed_model_id()
 EMBED_BATCH_SIZE = db_config.get_embed_batch_size()
 
 MAX_WORDS_PER_CHUNK    = 400   # ~1600 chars, well within Cohere 2048 char limit
 OVERLAP_SEGMENTS       = 2     # segments carried into next chunk (fixed-size mode)
-SEMANTIC_THRESHOLD_VTT = 0.5   # lower threshold for conversational speech
+SEMANTIC_THRESHOLD_VTT = 0.5   # fallback when the space has no split_threshold (conversational speech)
 
 
 # ── Transcribe JSON Parser ────────────────────────────────────────────────────
@@ -293,14 +296,71 @@ def chunk_segments(segments: list, video_name: str, video_url: str,
     return chunks
 
 
+# ── Active embedding space ────────────────────────────────────────────────────
+# Set once per run by load_active_space(); embed_texts and the DB writer use it.
+ACTIVE_SPACE = None   # registry row (dict) of the space ingestion writes to
+ACTIVE_SPEC = None    # its ModelSpec
+
+
+def load_active_space(conn) -> dict:
+    """Resolve the active embedding space from the database (never from task env)."""
+    global ACTIVE_SPACE, ACTIVE_SPEC
+    row = db_config.get_active_embedding_space(conn)
+    ACTIVE_SPEC = db_config.spec_from_space(row)
+    ACTIVE_SPACE = row
+    return row
+
+
+def init_active_space(needed: bool, write_db: bool):
+    """
+    Resolve the space at startup. A run that writes to the database must have
+    one (the error propagates). A parse-only run without database access may
+    continue on the deprecated env fallback.
+    """
+    if not needed:
+        return None
+    try:
+        conn = get_db_connection()
+        try:
+            row = load_active_space(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        if write_db:
+            raise
+        print(
+            f"[space] could not read the active embedding space ({type(exc).__name__}); "
+            "using the deprecated EMBED_* fallback",
+            file=sys.stderr,
+        )
+        return None
+    print(f"[space] embedding with space '{row['name']}' ({row['dimensions']} dims)", file=sys.stderr)
+    return row
+
+
+def resolve_semantic_threshold(cli_value, space) -> float:
+    """Precedence: explicit --semantic-threshold, then the space's split_threshold, then 0.5 (speech)."""
+    if cli_value is not None:
+        return cli_value
+    if space and space.get("split_threshold") is not None:
+        return space["split_threshold"]
+    return SEMANTIC_THRESHOLD_VTT
+
+
+def current_spec():
+    """The active space's spec, or the deprecated env fallback when none was loaded."""
+    if ACTIVE_SPEC is not None:
+        return ACTIVE_SPEC
+    return dataclasses.replace(
+        shared_embeddings.DEFAULT_SPEC, invoke_target=EMBED_MODEL_ID, batch_size=EMBED_BATCH_SIZE
+    )
+
+
 # ── Embeddings ────────────────────────────────────────────────────────────────
 
 def embed_texts(texts: list, input_type: str = "search_document") -> list:
-    """Embed texts via the shared embeddings module (Amazon Bedrock)."""
-    spec = dataclasses.replace(
-        shared_embeddings.DEFAULT_SPEC, invoke_target=EMBED_MODEL_ID, batch_size=EMBED_BATCH_SIZE
-    )
-    return shared_embeddings.embed_texts(texts, spec, input_type, REGION)
+    """Embed texts via the shared embeddings module (Amazon Bedrock) with the active space's model."""
+    return shared_embeddings.embed_texts(texts, current_spec(), input_type, REGION)
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -328,16 +388,40 @@ def upsert_source(conn, video_url: str, name: str) -> str:
         return str(cur.fetchone()[0])
 
 
-def get_existing_chunk_hashes(conn, source_id: str) -> dict:
+def get_existing_chunk_hashes(conn, source_id: str, space_id: str) -> dict:
+    """
+    Returns {chunk_index: (content_hash, has_current_vector)} for the stored
+    chunks of this source. has_current_vector is True when the active space
+    holds a vector whose embed_hash matches the chunk's current embed_text.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT chunk_index, content_hash FROM chunks WHERE source_id = %s",
-            (source_id,),
+            """
+            SELECT c.chunk_index, c.content_hash,
+                   (ce.chunk_id IS NOT NULL AND ce.embed_hash = md5(c.embed_text)) AS has_current_vector
+            FROM chunks c
+            LEFT JOIN chunk_embeddings ce
+              ON ce.chunk_id = c.id AND ce.space_id = %s::uuid
+            WHERE c.source_id = %s
+            """,
+            (space_id, source_id),
         )
-        return {row[0]: row[1] for row in cur.fetchall()}
+        return {row[0]: (row[1], bool(row[2])) for row in cur.fetchall()}
 
 
-def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list) -> None:
+def needs_embedding(chunk: dict, existing: dict) -> bool:
+    """A chunk is (re)embedded when its content changed or the active space has no current vector for it."""
+    stored = existing.get(chunk["chunk_index"])
+    return stored is None or stored[0] != chunk["content_hash"] or not stored[1]
+
+
+def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list, space_id: str) -> None:
+    """
+    Write the chunk row WITHOUT an embedding (chunks.embedding is legacy and
+    left alone) and its vector in the active space, in one statement. The value
+    stored as embed_text is chunk["embed_text"], the same string passed to
+    embed_texts, and embed_hash is md5(embed_text) computed by Postgres.
+    """
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
     metadata = json.dumps({
         "chunk_start": chunk["chunk_start"],
@@ -346,22 +430,31 @@ def upsert_chunk(conn, source_id: str, chunk: dict, embedding: list) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chunks (
-              source_id, chunk_index, body, embed_text,
-              word_count, content_hash, embedding, metadata, updated_at
+            WITH upserted AS (
+              INSERT INTO chunks (
+                source_id, chunk_index, body, embed_text,
+                word_count, content_hash, metadata, updated_at
+              )
+              VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, now())
+              ON CONFLICT (source_id, chunk_index) DO UPDATE SET
+                body         = EXCLUDED.body,
+                embed_text   = EXCLUDED.embed_text,
+                word_count   = EXCLUDED.word_count,
+                content_hash = EXCLUDED.content_hash,
+                metadata     = EXCLUDED.metadata,
+                updated_at   = now()
+              RETURNING id, embed_text
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s::jsonb, now())
-            ON CONFLICT (source_id, chunk_index) DO UPDATE SET
-              body         = EXCLUDED.body,
-              embed_text   = EXCLUDED.embed_text,
-              word_count   = EXCLUDED.word_count,
-              content_hash = EXCLUDED.content_hash,
-              embedding    = EXCLUDED.embedding,
-              metadata     = EXCLUDED.metadata,
-              updated_at   = now()
+            INSERT INTO chunk_embeddings (chunk_id, space_id, embedding, embed_hash, embedded_at)
+            SELECT id, %s::uuid, %s::vector, md5(embed_text), now()
+            FROM upserted
+            ON CONFLICT (chunk_id, space_id) DO UPDATE SET
+              embedding   = EXCLUDED.embedding,
+              embed_hash  = EXCLUDED.embed_hash,
+              embedded_at = EXCLUDED.embedded_at
             """,
             (source_id, chunk["chunk_index"], chunk["body"], chunk["embed_text"],
-             chunk["word_count"], chunk["content_hash"], embedding_str, metadata),
+             chunk["word_count"], chunk["content_hash"], metadata, space_id, embedding_str),
         )
 
 
@@ -456,20 +549,24 @@ def write_to_db(chunks: list, video_url: str, name: str, job_id: str = None) -> 
     stats = {"chunks_upserted": 0, "chunks_deleted": 0}
     run_id = None
     try:
+        # The space was resolved once at startup (main); resolve here only when
+        # write_to_db is called on its own.
+        space_id = (ACTIVE_SPACE or load_active_space(conn))["id"]
+
         source_id = upsert_source(conn, video_url, name)
         conn.commit()
 
         run_id = start_ingestion_run(conn, source_id, job_id=job_id)
         conn.commit()
 
-        existing  = get_existing_chunk_hashes(conn, source_id)
-        to_embed  = [c for c in chunks if existing.get(c["chunk_index"]) != c["content_hash"]]
+        existing  = get_existing_chunk_hashes(conn, source_id, space_id)
+        to_embed  = [c for c in chunks if needs_embedding(c, existing)]
         unchanged = len(chunks) - len(to_embed)
 
         if to_embed:
             embeddings = embed_texts([c["embed_text"] for c in to_embed])
             for chunk, embedding in zip(to_embed, embeddings):
-                upsert_chunk(conn, source_id, chunk, embedding)
+                upsert_chunk(conn, source_id, chunk, embedding, space_id)
             stats["chunks_upserted"] = len(to_embed)
 
         deleted = delete_stale_chunks(conn, source_id, [c["chunk_index"] for c in chunks])
@@ -520,8 +617,9 @@ def main() -> None:
                         help="Segments to carry into next chunk for overlap (fixed-size mode only)")
     parser.add_argument("--semantic",      action="store_true", default=env_semantic,
                         help="Use semantic chunking — embed segments to detect topic boundaries")
-    parser.add_argument("--semantic-threshold", type=float, default=SEMANTIC_THRESHOLD_VTT,
-                        help="Cosine similarity threshold for topic splits (default 0.5)")
+    parser.add_argument("--semantic-threshold", type=float, default=None,
+                        help="Cosine similarity threshold for topic splits "
+                             "(default: the active embedding space's split_threshold, else 0.5)")
     # /tmp: the ECS image runs as a non-root user with a read-only $CWD (/app),
     # so a relative default here would crash every containerized run.
     parser.add_argument("--output",        default="/tmp/vtt_output.json")
@@ -536,12 +634,17 @@ def main() -> None:
 
     name = args.name or args.transcript_json
 
+    # Resolve the embedding space once, before chunking: semantic splitting
+    # embeds segments and needs the space's model and split_threshold.
+    space = init_active_space(needed=args.write_db or args.semantic, write_db=args.write_db)
+    semantic_threshold = resolve_semantic_threshold(args.semantic_threshold, space)
+
     print(f"Parsing {args.transcript_json}...", file=sys.stderr)
     transcript_path = resolve_transcript_path(args.transcript_json)
     segments = parse_transcribe_json(transcript_path)
 
     if args.semantic:
-        print(f"Semantic chunking enabled (threshold={args.semantic_threshold})",
+        print(f"Semantic chunking enabled (threshold={semantic_threshold})",
               file=sys.stderr)
 
     chunks = chunk_segments(
@@ -551,7 +654,7 @@ def main() -> None:
         max_words=args.max_words,
         overlap=args.overlap,
         use_semantic=args.semantic,
-        semantic_threshold=args.semantic_threshold,
+        semantic_threshold=semantic_threshold,
     )
 
     word_counts = [c["word_count"] for c in chunks]

@@ -23,7 +23,9 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from helpers.retrieval import EMBED_MODEL_ID, _rollback_quietly, _vector_literal, embed_query
+from helpers.embedding_space import get_active_space
+from helpers.retrieval import EMBED_MODEL_ID, _rollback_quietly, _space_spec, _vector_literal, embed_query
+from helpers.retrieval_core import space_literals
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -34,23 +36,36 @@ DEFAULT_MAX_WORDS = 2500
 CANDIDATE_LIMIT = 40
 _WINDOW_RE = re.compile(r"^window-(\d+)$")
 
-_CANDIDATE_SQL = """
+def build_candidate_sql(space) -> str:
+    """
+    Candidate query over the guideline chunks' vectors in `space`. The space id
+    is inlined as a validated literal and the dimension cast matches the space's
+    index expression (see retrieval_core.build_standard_sql). A vector only
+    counts when its embed_hash matches the chunk's current embed_text.
+    Parameters: query vector (score), query vector (ORDER BY), LIMIT.
+    """
+    space_uuid, dims = space_literals(space)
+    return f"""
     WITH g AS MATERIALIZED (
         SELECT s.metadata->>'guideline_document_id' AS document_id,
                c.metadata->>'section_key'          AS section_key,
-               c.embedding
+               ce.embedding::vector({dims})        AS embedding
         FROM chunks c
+        JOIN chunk_embeddings ce
+          ON ce.chunk_id = c.id
+         AND ce.space_id = '{space_uuid}'
+         AND ce.embed_hash = md5(c.embed_text)
         JOIN sources s ON s.id = c.source_id
         JOIN guideline_documents d ON d.id::text = s.metadata->>'guideline_document_id'
         WHERE s.metadata->>'kb_role' = 'guideline'
           AND d.status = 'ready'
-          AND c.embedding IS NOT NULL
     )
     SELECT document_id, section_key, 1 - (embedding <=> %s::vector) AS score
     FROM g
     ORDER BY embedding <=> %s::vector
     LIMIT %s
 """
+
 
 _SECTION_SQL = """
     SELECT s.metadata->>'guideline_document_id' AS document_id,
@@ -148,11 +163,16 @@ def retrieve_guideline_sections(
     capped at `max_words` words in total. The previous turn's section is kept
     (first) while it still exists, so follow-ups like "what next?" stay on it.
 
-    Returns [] on any failure so the model falls back to asking a clarifying
-    question instead of the turn failing.
+    Returns [] on a transient failure so the model falls back to asking a
+    clarifying question instead of the turn failing. A missing or inconsistent
+    embedding space raises EmbeddingSpaceError instead; it is not swallowed.
     """
+    space = get_active_space(db_connection, region=region)
     try:
-        embedding = embed_query(_search_text(query, previous_section), region, embed_model_id)
+        embedding = embed_query(
+            _search_text(query, previous_section), region, embed_model_id,
+            spec=_space_spec(space, embed_model_id),
+        )
     except Exception as e:  # noqa: BLE001
         logger.error("Guideline query embedding failed: %s", type(e).__name__)
         return []
@@ -160,7 +180,7 @@ def retrieve_guideline_sections(
     vector = _vector_literal(embedding)
     try:
         with db_connection.cursor() as cur:
-            cur.execute(_CANDIDATE_SQL, (vector, vector, CANDIDATE_LIMIT))
+            cur.execute(build_candidate_sql(space), (vector, vector, CANDIDATE_LIMIT))
             candidates = cur.fetchall()
 
             top = _rank_sections(candidates, previous_section, max_sections)
