@@ -8,7 +8,7 @@ import boto3
 from helpers.chat import get_response
 from helpers.db_connection import get_db_connection
 import helpers.config as config
-from helpers.session_security import validate_session_ownership, sanitize_session_id
+from helpers.session_security import resolve_caller_user_id, validate_session_ownership, sanitize_session_id
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -95,11 +95,17 @@ def handler(event, context=None):
     if not chat_session_id and 'pathParameters' in event and event['pathParameters']:
         chat_session_id = event['pathParameters'].get('chat_session_id') or event['pathParameters'].get('id')
 
-    user_id = body.get('user_id')
+    # The acting user comes only from the verified token: API Gateway's user
+    # authorizer on the REST route, or websocket/default.js on the stream path.
+    # A body user_id (older clients) must match it.
+    user_id, caller_error = resolve_caller_user_id(event, body.get('user_id'))
+    if caller_error:
+        status_code, error = caller_error
+        return fail(status_code, error, "Your session has expired. Please refresh the page and try again.")
 
     # Presence/type check must come before the length check (len(None) raises).
-    if not isinstance(query, str) or not query.strip() or not chat_session_id or not user_id:
-        return fail(400, 'Missing query, chat_session_id, or user_id')
+    if not isinstance(query, str) or not query.strip() or not chat_session_id:
+        return fail(400, 'Missing query or chat_session_id')
 
     # Perform Query Length Validation
     if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:

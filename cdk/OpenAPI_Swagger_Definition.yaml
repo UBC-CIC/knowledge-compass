@@ -2759,8 +2759,21 @@ paths:
     get:
       tags:
         - Public
-      summary: Get a JWT token for non-authenticated user
+      summary: Get a 15-minute access token for an anonymous user
+      description: >
+        Without an Authorization header the token is anonymous: it can create a
+        user (POST /user) and read public settings only. With
+        `Authorization: Bearer <credential>` (the credential POST /user
+        returned) the token is bound to that user, which user and chat session
+        routes require.
       operationId: get_public_token
+      parameters:
+        - name: Authorization
+          in: header
+          required: false
+          description: "Optional `Bearer <credential>` from POST /user"
+          schema:
+            type: string
       responses:
         "200":
           description: JWT token
@@ -2772,6 +2785,8 @@ paths:
                   token:
                     type: string
                     example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        "401":
+          description: The credential is invalid or expired; create a new user
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -2821,6 +2836,12 @@ paths:
                   userId:
                     type: string
                     format: uuid
+                  credential:
+                    type: string
+                    description: >
+                      Long-lived secret for this user, returned only here. Keep
+                      it with userId and send it to GET /user/publicToken to get
+                      access tokens bound to this user.
                   role:
                     type: string
                     enum: ["student", "admin"]

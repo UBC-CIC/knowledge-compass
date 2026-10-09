@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demo";
+import { getPublicToken } from "@/lib/publicToken";
 
 export type FeedbackRating = "up" | "down";
 
@@ -12,15 +13,6 @@ export const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
 
 // Demo mode keeps feedback in memory only, keyed by session id.
 const demoFeedbackStore = new Map<string, SessionFeedback>();
-
-async function getPublicToken(): Promise<string> {
-  const response = await fetch(
-    `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-  );
-  if (!response.ok) throw new Error("Failed to get public token");
-  const { token } = (await response.json()) as { token: string };
-  return token;
-}
 
 function feedbackUrl(sessionId: string, userId: string): string {
   const url = new URL(

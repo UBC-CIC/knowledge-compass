@@ -21,6 +21,33 @@ def sanitize_session_id(session_id: str) -> str:
     
     return session_id
 
+def _is_uuid(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def resolve_caller_user_id(event, claimed_user_id=None):
+    """
+    The acting user's id from requestContext.authorizer.userId, which only the
+    REST user authorizer and websocket/default.js set from a verified access
+    token. Returns (user_id, None) or (None, (status_code, error)).
+    A client-supplied `claimed_user_id` must match it when present.
+    """
+    authorizer = (event.get('requestContext') or {}).get('authorizer') or {}
+    user_id = authorizer.get('userId')
+    if not _is_uuid(user_id):
+        return None, (401, 'A user session token is required')
+    if claimed_user_id not in (None, '') and claimed_user_id != user_id:
+        logger.warning("Rejected request whose user_id does not match the session token")
+        return None, (403, 'user_id does not match the session token')
+    return user_id, None
+
+
 def validate_session_ownership(db_connection, session_id: str, user_id: str) -> bool:
     """
     Returns True when the session either doesn't exist yet (chat.py's
@@ -41,7 +68,8 @@ def validate_session_ownership(db_connection, session_id: str, user_id: str) -> 
                 # Session doesn't exist yet; it will be created for this user_id.
                 return True
 
-            is_owner = (result[0] == user_id)
+            # user_id may come back as uuid.UUID depending on the driver.
+            is_owner = (str(result[0]) == str(user_id))
 
             if not is_owner:
                 logger.warning(f"User {user_id} does not own chat session: {session_id}")

@@ -26,7 +26,13 @@ exports.handler = async (event) => {
       cacheExpiry = Date.now() + CACHE_TTL_MS;
     }
 
-    const decoded = jwt.verify(token, cachedSecret);
+    const decoded = jwt.verify(token, cachedSecret, { algorithms: ["HS256"] });
+
+    // The long-lived per-user credential only buys access tokens from
+    // /user/publicToken; it must never authorize API calls itself.
+    if (decoded.typ === "credential") {
+      throw new Error("credential tokens are not access tokens");
+    }
 
     // Extract API Gateway ARN parts to create wildcard resource
     // methodArn format: arn:aws:execute-api:region:account:apiId/stage/method/resource
@@ -35,13 +41,17 @@ exports.handler = async (event) => {
     const wildcardResource = `${apiGatewayArnPrefix}/*/*`; // Allow all methods and resources
 
     const policy = generatePolicy(
-      decoded.sub || "user",
+      decoded.sub || "anonymous",
       "Allow",
       wildcardResource
     );
+    // userId is the only caller identity handlers may trust. Anonymous tokens
+    // (issued without a credential) carry none, so user and session routes
+    // reject them. Only known scalar claims are forwarded.
     policy.context = {
-      userId: decoded.sub || "user",
-      ...decoded,
+      userId: typeof decoded.sub === "string" ? decoded.sub : "",
+      role: typeof decoded.role === "string" ? decoded.role : "user",
+      jti: typeof decoded.jti === "string" ? decoded.jti : "",
     };
     return policy;
   } catch (err) {

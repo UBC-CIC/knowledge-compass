@@ -12,7 +12,6 @@ import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
 import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
 import GroundingWarningBanner from "@/components/ChatInterface/GroundingWarningBanner";
-import { isResourceSource } from "@/lib/sources";
 import { useSessionFeedback } from "@/hooks/useSessionFeedback";
 import {
   applyDemoFact,
@@ -22,6 +21,7 @@ import {
   setDemoSessionState,
   type DemoFacts,
 } from "@/lib/demo";
+import { getPublicToken } from "@/lib/publicToken";
 
 type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
@@ -234,14 +234,7 @@ export default function AIChatPage({
       }
 
       try {
-        const response = await fetch(`${apiEndpoint}/user/publicToken`);
-        if (!response.ok) {
-          throw new Error(
-            `Token request failed with status ${response.status}`
-          );
-        }
-
-        const { token } = await response.json();
+        const token = await getPublicToken();
         if (!isActive) {
           return;
         }
@@ -403,14 +396,7 @@ export default function AIChatPage({
 
   const fetchMaxCharactersPerUserMessage = async () => {
     try {
-      const tokenResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-      );
-      if (!tokenResponse.ok) {
-        throw new Error("Failed to get public token");
-      }
-
-      const { token } = await tokenResponse.json();
+      const token = await getPublicToken();
 
       const response = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT}/system-settings/max-characters-per-user-message`,
@@ -490,12 +476,7 @@ export default function AIChatPage({
     const loadChatHistory = async () => {
       setIsLoadingHistory(true);
       try {
-        // Get public token
-        const tokenResponse = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-        );
-        if (!tokenResponse.ok) throw new Error("Failed to get public token");
-        const { token } = await tokenResponse.json();
+        const token = await getPublicToken();
 
         const response = await fetch(
           `${import.meta.env.VITE_API_ENDPOINT}/user/${userId}/chat_sessions/${activeChatSessionId}/chat_history`,
@@ -682,13 +663,24 @@ export default function AIChatPage({
     setMessage("");
 
     // Try WebSocket streaming first, fallback to HTTP if not connected
+    // The stream route verifies a user-bound access token on every message.
+    let streamToken: string | null = null;
     if (isConnected) {
+      try {
+        streamToken = await getPublicToken();
+      } catch (error) {
+        console.warn("[WebSocket] Could not get a streaming token:", error);
+      }
+    }
+
+    if (isConnected && streamToken) {
       
       const success = sendWebSocketMessage({
         action: "generate_text",
         query: text,
         chat_session_id: sessionId,
         user_id: userId,
+        token: streamToken,
       });
 
       if (success) {
@@ -717,11 +709,7 @@ export default function AIChatPage({
     );
 
     try {
-      // Get fresh token for the request
-      const tokenResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-      );
-      const { token } = await tokenResponse.json();
+      const token = await getPublicToken();
       const response = await fetch(
         `${import.meta.env.VITE_API_ENDPOINT
         }/chat_sessions/${sessionId}/text_generation`,
@@ -845,8 +833,9 @@ export default function AIChatPage({
     !isStreaming &&
     !sessionFeedback.isLoading &&
     Boolean(lastBotMessage && !lastBotMessage.isTyping && lastBotMessage.text.trim());
-  // The grounding warning is about the cited resources, so it only shows
-  // for the latest finished reply that actually returned resources.
+  // The grounding warning shows for the latest finished reply whenever it has
+  // one. Replies with no usable resources carry the strongest warning ("may
+  // not be reliably grounded"), so it must not depend on cited sources.
   const lastBotWarning = lastBotMessage?.warning?.trim();
   const latestWarning =
     !isWelcome &&
@@ -855,7 +844,6 @@ export default function AIChatPage({
     lastBotMessage &&
     !lastBotMessage.isTyping &&
     lastBotWarning &&
-    (lastBotMessage.sources_used ?? []).some(isResourceSource) &&
     lastBotMessage.id !== dismissedWarningMessageId
       ? { id: lastBotMessage.id, text: lastBotWarning }
       : null;

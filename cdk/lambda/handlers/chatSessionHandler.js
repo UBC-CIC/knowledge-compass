@@ -5,6 +5,7 @@ const {
   validateEnum,
   sanitizeString,
 } = require("./utils/validation.js");
+const { resolveCaller } = require("./utils/callerIdentity.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -59,14 +60,17 @@ const parseBody = (body) => {
 const FEEDBACK_RATINGS = ["up", "down"];
 const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
 
-// Validates path/query ids and confirms the caller's user_id owns the session.
+// The acting user always comes from the verified token (resolveCaller). A
+// user_id the client still sends (query or body, for older clients) must match
+// it; it is never trusted on its own.
+const queryUserId = (event) =>
+  event.queryStringParameters?.user_id || event.queryStringParameters?.user_session_id;
+
+// Validates the session id and confirms `userId` (the token's user) owns it.
 // Returns null on success, or { statusCode, error } to send back.
-const checkFeedbackSessionOwnership = async (chatSessionId, userId) => {
+const checkSessionOwnership = async (chatSessionId, userId, forbiddenMessage) => {
   const sessionCheck = validateUUID(chatSessionId, "chat_session_id");
   if (!sessionCheck.valid) return { statusCode: 400, error: sessionCheck.error };
-
-  const userCheck = validateUUID(userId, "user_id");
-  if (!userCheck.valid) return { statusCode: 400, error: userCheck.error };
 
   const chatSession = await sqlConnection`
     SELECT id, user_id
@@ -79,10 +83,15 @@ const checkFeedbackSessionOwnership = async (chatSessionId, userId) => {
   }
 
   if (chatSession[0].user_id !== userId) {
-    return { statusCode: 403, error: "You can only give feedback on your own chat sessions" };
+    return { statusCode: 403, error: forbiddenMessage };
   }
 
   return null;
+};
+
+const reject = (response, failure) => {
+  response.statusCode = failure.statusCode;
+  response.body = JSON.stringify({ error: failure.error });
 };
 
 const handleError = (error, response) => {
@@ -101,11 +110,9 @@ exports.handler = async (event) => {
 
     switch (pathData) {
       case "GET /chat_sessions/user/{user_id}": {
-        const userId = event.pathParameters?.user_id;
-
-        if (!userId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "user_id is required" });
+        const caller = resolveCaller(event, event.pathParameters?.user_id);
+        if (caller.error) {
+          reject(response, caller);
           break;
         }
 
@@ -114,7 +121,7 @@ exports.handler = async (event) => {
           SELECT id, user_id, title, created_at, last_active_at,
                  metadata - 'guide_state' AS metadata
           FROM chat_sessions
-          WHERE user_id = ${userId}
+          WHERE user_id = ${caller.userId}
           ORDER BY created_at DESC
         `;
 
@@ -125,13 +132,13 @@ exports.handler = async (event) => {
 
       case "POST /chat_sessions": {
         const body = parseBody(event.body);
-        const userId = body.user_id || body.userId || body.user_sessions_session_id;
-
-        if (!userId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "user_id is required" });
+        const claimedUserId = body.user_id || body.userId || body.user_sessions_session_id;
+        const caller = resolveCaller(event, claimedUserId);
+        if (caller.error) {
+          reject(response, caller);
           break;
         }
+        const userId = caller.userId;
 
         const title = body.title || null;
         const metadata = body.metadata || {};
@@ -170,20 +177,15 @@ exports.handler = async (event) => {
       case "PUT /chat_sessions/{chat_session_id}": {
         const chatSessionId = event.pathParameters?.chat_session_id;
 
-        // Accept both names for compatibility while you transition
-        const userId =
-          event.queryStringParameters?.user_id ||
-          event.queryStringParameters?.user_session_id;
-
         if (!chatSessionId) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: "chat_session_id is required" });
           break;
         }
 
-        if (!userId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "user_id is required" });
+        const caller = resolveCaller(event, queryUserId(event));
+        if (caller.error) {
+          reject(response, caller);
           break;
         }
 
@@ -196,21 +198,11 @@ exports.handler = async (event) => {
           break;
         }
 
-        const chatSession = await sqlConnection`
-          SELECT id, user_id
-          FROM chat_sessions
-          WHERE id = ${chatSessionId}
-        `;
-
-        if (chatSession.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Chat session not found" });
-          break;
-        }
-
-        if (chatSession[0].user_id !== userId) {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "You can only rename your own chat sessions" });
+        const ownershipError = await checkSessionOwnership(
+          chatSessionId, caller.userId, "You can only rename your own chat sessions"
+        );
+        if (ownershipError) {
+          reject(response, ownershipError);
           break;
         }
 
@@ -231,39 +223,23 @@ exports.handler = async (event) => {
       case "DELETE /chat_sessions/{chat_session_id}": {
         const chatSessionId = event.pathParameters?.chat_session_id;
 
-        // Accept both names for compatibility while you transition
-        const userId =
-          event.queryStringParameters?.user_id ||
-          event.queryStringParameters?.user_session_id;
-
         if (!chatSessionId) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: "chat_session_id is required" });
           break;
         }
 
-        if (!userId) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "user_id is required" });
+        const caller = resolveCaller(event, queryUserId(event));
+        if (caller.error) {
+          reject(response, caller);
           break;
         }
 
-        // Verify the chat session exists and belongs to the user
-        const chatSession = await sqlConnection`
-          SELECT id, user_id
-          FROM chat_sessions
-          WHERE id = ${chatSessionId}
-        `;
-
-        if (chatSession.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Chat session not found" });
-          break;
-        }
-
-        if (chatSession[0].user_id !== userId) {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "You can only delete your own chat sessions" });
+        const ownershipError = await checkSessionOwnership(
+          chatSessionId, caller.userId, "You can only delete your own chat sessions"
+        );
+        if (ownershipError) {
+          reject(response, ownershipError);
           break;
         }
 
@@ -286,12 +262,18 @@ exports.handler = async (event) => {
 
       case "GET /chat_sessions/{chat_session_id}/feedback": {
         const chatSessionId = event.pathParameters?.chat_session_id;
-        const userId = event.queryStringParameters?.user_id;
 
-        const ownershipError = await checkFeedbackSessionOwnership(chatSessionId, userId);
+        const caller = resolveCaller(event, queryUserId(event));
+        if (caller.error) {
+          reject(response, caller);
+          break;
+        }
+
+        const ownershipError = await checkSessionOwnership(
+          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
+        );
         if (ownershipError) {
-          response.statusCode = ownershipError.statusCode;
-          response.body = JSON.stringify({ error: ownershipError.error });
+          reject(response, ownershipError);
           break;
         }
 
@@ -308,7 +290,12 @@ exports.handler = async (event) => {
 
       case "PUT /chat_sessions/{chat_session_id}/feedback": {
         const chatSessionId = event.pathParameters?.chat_session_id;
-        const userId = event.queryStringParameters?.user_id;
+
+        const caller = resolveCaller(event, queryUserId(event));
+        if (caller.error) {
+          reject(response, caller);
+          break;
+        }
 
         let body;
         try {
@@ -333,10 +320,11 @@ exports.handler = async (event) => {
         }
         const comment = sanitizeString(body.comment, FEEDBACK_COMMENT_MAX_LENGTH);
 
-        const ownershipError = await checkFeedbackSessionOwnership(chatSessionId, userId);
+        const ownershipError = await checkSessionOwnership(
+          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
+        );
         if (ownershipError) {
-          response.statusCode = ownershipError.statusCode;
-          response.body = JSON.stringify({ error: ownershipError.error });
+          reject(response, ownershipError);
           break;
         }
 

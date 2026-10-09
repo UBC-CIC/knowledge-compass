@@ -1345,14 +1345,17 @@ export class ApiGatewayStack extends cdk.Stack {
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         USER_POOL: this.userPool.userPoolId,
+        // POST /user signs each anonymous user's credential with this secret.
+        JWT_SECRET: jwtSecret.secretArn,
       },
       functionName: `${id}-userFunction`,
       memorySize: 512,
       // reservedConcurrentExecutions: 50,
-      layers: [postgres],
+      layers: [postgres, jwt],
       role: lambdaRole,
       tracing: lambda.Tracing.ACTIVE,
     });
+    jwtSecret.grantRead(lambdaUserFunction);
 
     lambdaUserFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaUserFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -1589,9 +1592,13 @@ export class ApiGatewayStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         TEXT_GEN_FUNCTION_NAME: lambdaTextGen.functionName,
+        // Each generate_text message's access token is verified here.
+        JWT_SECRET: jwtSecret.secretArn,
       },
+      layers: [jwt],
       functionName: `${id}-DefaultFunction`,
     });
+    jwtSecret.grantRead(defaultFunction);
 
     new cloudwatch.Alarm(this, 'DefaultFunctionConcurrencyAlarm', {
       metric: defaultFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),

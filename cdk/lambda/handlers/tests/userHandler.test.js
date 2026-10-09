@@ -15,9 +15,12 @@ const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 const HISTORY_ROUTE = "/user/{user_id}/chat_sessions/{chat_session_id}/chat_history";
 
+// What the user authorizer sets for a token bound to `userId` ("" = anonymous).
+const as = (userId) => ({ authorizer: { userId, role: "user", jti: "j" } });
+
 async function invoke(sql, event) {
   const { handler } = loadHandler("userHandler", sql);
-  const res = await quietly(() => handler(event));
+  const res = await quietly(() => handler({ requestContext: as(USER), ...event }));
   return { statusCode: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
 
@@ -116,6 +119,60 @@ test("PUT /user maps a unique violation to 409", async () => {
     body: JSON.stringify({ email: "taken@example.com" }),
   });
   assert.equal(res.statusCode, 409);
+});
+
+test("user routes require the token's own user", async () => {
+  const routes = [
+    { httpMethod: "GET", resource: "/user/{user_id}", pathParameters: { user_id: USER } },
+    { httpMethod: "PUT", resource: "/user/{user_id}", pathParameters: { user_id: USER }, body: JSON.stringify({ email: "a@example.com" }) },
+    historyEvent(),
+  ];
+  for (const route of routes) {
+    for (const requestContext of [undefined, as(""), as("user")]) {
+      const sql = historySql();
+      const res = await invoke(sql, { ...route, requestContext });
+      assert.equal(res.statusCode, 401, `${route.httpMethod} ${route.resource}`);
+      assert.equal(sql.queries().length, 0);
+    }
+    const sql = historySql();
+    const res = await invoke(sql, { ...route, requestContext: as(OTHER_USER) });
+    assert.equal(res.statusCode, 403, `${route.httpMethod} ${route.resource}`);
+    assert.equal(sql.queries().length, 0);
+  }
+});
+
+test("POST /user works with an anonymous token and returns a credential for the new user", async () => {
+  const sql = fakeSql((text, values) =>
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student" }] : [],
+  );
+  const res = await invoke(sql, {
+    httpMethod: "POST",
+    resource: "/user",
+    requestContext: as(""),
+    body: JSON.stringify({ role: "admin", display_name: "Anonymous" }),
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.role, "student");
+  const signed = JSON.parse(res.body.credential.replace(/^signed:/, ""));
+  assert.deepEqual(signed.payload, { typ: "credential", sub: res.body.userId });
+  assert.equal(signed.secret, "test-jwt-secret");
+  assert.equal(signed.options.algorithm, "HS256");
+});
+
+test("responses are not logged", async () => {
+  const sql = fakeSql((text, values) =>
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student" }] : [],
+  );
+  const { handler } = loadHandler("userHandler", sql);
+  const logged = [];
+  const saved = console.log;
+  console.log = (...args) => logged.push(JSON.stringify(args));
+  try {
+    await handler({ httpMethod: "POST", resource: "/user", requestContext: as(""), body: "{}" });
+  } finally {
+    console.log = saved;
+  }
+  assert.ok(!logged.some((line) => line.includes("signed:")), "credential must not be logged");
 });
 
 test("removed and unknown routes fail without leaking details", async () => {

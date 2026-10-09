@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useView } from "@/providers/view";
 import { isDemoMode } from "@/lib/demo";
+import { getPublicToken } from "@/lib/publicToken";
 
 type ChatSessionActionsMenuProps = {
   chatSessionId: string;
@@ -122,13 +123,7 @@ export default function ChatSessionActionsMenu({
         return;
       }
 
-      const tokenResp = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`);
-      if (!tokenResp.ok) {
-        throw new Error("Failed to acquire public token");
-      }
-
-      const tokenData = await tokenResp.json();
-      const token = tokenData.token as string;
+      const token = await getPublicToken();
 
       const url = new URL(`${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/${chatSessionId}`);
       url.searchParams.set("user_id", userId);

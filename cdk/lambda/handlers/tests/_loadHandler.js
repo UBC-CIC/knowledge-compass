@@ -40,11 +40,18 @@ function stubs(sql) {
       SecretsManagerClient: class {
         async send() {
           return {
-            SecretString: JSON.stringify({ port: 5432, username: "test", password: "test", dbname: "test" }),
+            SecretString: JSON.stringify({
+              port: 5432, username: "test", password: "test", dbname: "test", jwtSecret: "test-jwt-secret",
+            }),
           };
         }
       },
       GetSecretValueCommand: FakeCommand,
+    },
+    // jsonwebtoken comes from the Lambda layer; a readable fake lets tests
+    // assert what was signed.
+    jsonwebtoken: {
+      sign: (payload, secret, options) => `signed:${JSON.stringify({ payload, secret, options })}`,
     },
     "@aws-sdk/client-ssm": {
       SSMClient: class {

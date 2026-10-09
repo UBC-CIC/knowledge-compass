@@ -34,7 +34,11 @@ exports.handler = async (event) => {
       cachedSecret = JSON.parse(response.SecretString).jwtSecret;
     }
 
-    const decoded = jwt.verify(token, cachedSecret);
+    const decoded = jwt.verify(token, cachedSecret, { algorithms: ["HS256"] });
+    // The long-lived per-user credential is not an access token.
+    if (decoded?.typ === "credential") {
+      throw new Error("credential tokens are not access tokens");
+    }
 
     console.log("WebSocket connection authorized", {
       connectionId,

@@ -7,6 +7,14 @@ const {
 const crypto = require("crypto");
 const { validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
+const { resolveCaller } = require("./utils/callerIdentity.js");
+const { issueUserCredential } = require("./utils/userCredential.js");
+
+// Reply with a resolveCaller() failure.
+const rejectCaller = (response, caller) => {
+  response.statusCode = caller.statusCode;
+  response.body = JSON.stringify({ error: caller.error });
+};
 
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
@@ -102,6 +110,9 @@ exports.handler = async (event) => {
 
         data = {
           userId: row.id,
+          // Returned once; the browser stores it and exchanges it at
+          // /user/publicToken for access tokens bound to this user.
+          credential: await issueUserCredential(row.id),
           email: row.email,
           display_name: row.display_name,
           role: row.role,
@@ -120,6 +131,11 @@ exports.handler = async (event) => {
         if (!userIdValidation.valid) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: userIdValidation.error });
+          break;
+        }
+        const caller = resolveCaller(event, userId);
+        if (caller.error) {
+          rejectCaller(response, caller);
           break;
         }
 
@@ -152,6 +168,11 @@ exports.handler = async (event) => {
         if (!userIdValidation.valid) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: userIdValidation.error });
+          break;
+        }
+        const caller = resolveCaller(event, userId);
+        if (caller.error) {
+          rejectCaller(response, caller);
           break;
         }
 
@@ -249,6 +270,11 @@ exports.handler = async (event) => {
           response.body = JSON.stringify({ error: sessionIdValidation.error });
           break;
         }
+        const caller = resolveCaller(event, userId);
+        if (caller.error) {
+          rejectCaller(response, caller);
+          break;
+        }
 
         // Validate user exists (optional but nice)
         const userExists = await sqlConnection`
@@ -323,6 +349,7 @@ exports.handler = async (event) => {
     handleError(error, response);
   }
 
-  console.log(response);
+  // Bodies hold the user's credential, email or chat history; log status only.
+  console.log({ statusCode: response.statusCode, resource: event.resource });
   return response;
 };

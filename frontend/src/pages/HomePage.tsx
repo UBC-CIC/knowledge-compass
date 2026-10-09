@@ -14,6 +14,7 @@ import {
   seedDemoHistory,
   setDemoSessionState,
 } from "@/lib/demo";
+import { getPublicToken as getUserToken } from "@/lib/publicToken";
 
 const DEFAULT_WELCOME_MESSAGE =
   "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
@@ -43,13 +44,8 @@ export default function HomePage() {
     Record<string, string>
   >({});
 
-  const getPublicToken = async () => {
-    const tokenResponse = await fetch(
-      `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-    );
-    if (!tokenResponse.ok) throw new Error("Failed to get public token");
-    return tokenResponse.json() as Promise<{ token: string }>;
-  };
+  // Access token bound to this browser's user (see lib/publicToken).
+  const getPublicToken = async () => ({ token: await getUserToken() });
 
 // Shape returned by the chat session endpoints (title is the DB column name).
 type ChatSessionRow = Omit<ChatSession, "name"> & {

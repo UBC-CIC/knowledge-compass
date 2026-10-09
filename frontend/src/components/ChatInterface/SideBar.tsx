@@ -7,6 +7,7 @@ import ChatSessionActionsMenu from "./ChatSessionActionsMenu";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demo";
+import { getPublicToken } from "@/lib/publicToken";
 
 type UserProfile = {
   id: string;
@@ -53,11 +54,7 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
       }
 
       try {
-        const tokenResponse = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-        );
-        if (!tokenResponse.ok) return;
-        const { token } = await tokenResponse.json();
+        const token = await getPublicToken();
         const response = await fetch(
           `${import.meta.env.VITE_API_ENDPOINT}/user/${userId}`,
           {
