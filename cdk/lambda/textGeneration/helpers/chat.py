@@ -14,7 +14,12 @@ from helpers.logic import get_current_prompt
 from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
 from helpers.retrieval import DEFAULT_MIN_SCORE, public_http_url, retrieve_from_pgvector, to_public_source
-from helpers.citations import parse_cited_indices, select_cited_sources, strip_internal_links
+from helpers.citations import (
+    parse_cited_indices,
+    select_cited_sources,
+    stream_settled_length,
+    strip_internal_links,
+)
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import check_limit, record_message_sent
@@ -506,10 +511,18 @@ def get_response(
                     else:
                         safe_text = target_text
                         
-                    # 4. Stream only the newly added text
-                    if len(safe_text) > len(yielded_text):
-                        new_text = safe_text[len(yielded_text):]
-                        yielded_text += new_text
+                    # 4. Strip internal storage URIs before anything reaches the
+                    # client. A URI or link may be split across deltas, so only
+                    # the settled prefix is sanitized and streamed; the held-back
+                    # tail arrives with the next delta or the 'complete' event.
+                    settled = safe_text if stop_found else safe_text[:stream_settled_length(safe_text)]
+                    visible = strip_internal_links(settled)
+
+                    # 5. Stream only the newly added text. If sanitizing changed
+                    # text already sent, pause; 'complete' carries the clean reply.
+                    if len(visible) > len(yielded_text) and visible.startswith(yielded_text):
+                        new_text = visible[len(yielded_text):]
+                        yielded_text = visible
                         if stream_callback and new_text:
                             stream_callback(new_text)
 

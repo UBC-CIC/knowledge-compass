@@ -70,6 +70,14 @@ class NormalizeUrlTests(unittest.TestCase):
         with self.assertRaises(InvalidURL):
             normalize_url("https://example.com:99999/")
 
+    def test_rejects_non_web_ports(self):
+        for url in ("http://example.com:22/", "https://example.com:25/", "http://example.com:6379/x",
+                    "https://example.com:0/"):
+            with self.subTest(url=url), self.assertRaises(InvalidURL):
+                normalize_url(url)
+        self.assertEqual(normalize_url("https://example.com:8443/x"), "https://example.com:8443/x")
+        self.assertEqual(normalize_url("http://example.com:80/x"), "http://example.com/x")
+
     def test_idna_host(self):
         self.assertEqual(normalize_url("https://bücher.example/"), "https://xn--bcher-kva.example/")
 

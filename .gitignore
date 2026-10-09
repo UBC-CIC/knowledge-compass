@@ -18,6 +18,7 @@ cdk.context.json
 
 
 .kiro
+.vscode
 
 # ── Ingestion containers (cdk/containers) ───────────────────────────────────
 # Local crawl/transcribe outputs — never commit scraped content dumps
@@ -37,8 +38,8 @@ cdk/containers/**/global-bundle.pem
 
 new frontend
 
-
 __pycache__/
 *.py[cod]
 
+.agents\tasks
 .agents

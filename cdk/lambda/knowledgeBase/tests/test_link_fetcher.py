@@ -154,10 +154,19 @@ class SsrfTests(unittest.TestCase):
     def test_ip_literal_metadata_endpoint_blocked(self):
         fetcher, web, _ = make_fetcher({})
         for url in ("http://169.254.169.254/latest/meta-data/", "http://169.254.170.2/v2/credentials",
-                    "http://127.0.0.1:9001/2018-06-01/runtime/invocation/next", "http://[::1]/"):
+                    "http://127.0.0.1:8080/2018-06-01/runtime/invocation/next", "http://[::1]/"):
             with self.subTest(url=url), self.assertRaises(FetchError) as ctx:
                 fetcher.fetch(url)
             self.assertIn("blocked", ctx.exception.reason)
+        self.assertEqual(web.requests, [])
+
+    def test_non_web_ports_refused_before_connecting(self):
+        fetcher, web, _ = make_fetcher({})
+        for url in ("http://127.0.0.1:9001/2018-06-01/runtime/invocation/next", "http://example.com:22/"):
+            with self.subTest(url=url), self.assertRaises(FetchError) as ctx:
+                fetcher.fetch(url)
+            self.assertTrue(ctx.exception.permanent)
+            self.assertIn("not crawled", ctx.exception.reason)
         self.assertEqual(web.requests, [])
 
     def test_redirect_to_private_address_blocked(self):

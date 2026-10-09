@@ -6,24 +6,8 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import TypingIndicator from "./TypingIndicator";
 import { displayGuideText, isSuggestionPhase } from "@/lib/guideMessage";
+import { isResourceSource, isSafeUrl, sourceLabel } from "@/lib/sources";
 import type { MessageSource, SourceItem } from "@/types/Chat";
-
-const isSafeUrl = (url: string) => {
-  try {
-    const parsed = new URL(url);
-    return ["http:", "https:"].includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-};
-
-const PREVIEW_MAX_CHARS = 320;
-
-function truncatePreview(text: string) {
-  const clean = text.trim();
-  if (clean.length <= PREVIEW_MAX_CHARS) return clean;
-  return `${clean.slice(0, PREVIEW_MAX_CHARS).trimEnd()}…`;
-}
 
 function getVideoTimestamp(source: SourceItem | string) {
   if (typeof source === "string") return null;
@@ -59,7 +43,6 @@ type AIChatMessageProps = {
   text: string;
   question?: string;
   sources?: MessageSource[];
-  warning?: string | null;
   isTyping?: boolean;
   phase?: "DETECTIVE" | "SUGGESTION" | null;
   /** Rendered inside the message, below its content (e.g. feedback controls). */
@@ -124,42 +107,10 @@ function GuideMarkdown({ text }: { text: string }) {
   );
 }
 
-function sourceLabel(source: SourceItem | string) {
-  if (typeof source === "string") {
-    const urlMatch = source.match(/(https?:\/\/[^\s]+)/);
-    return {
-      title: source.replace(urlMatch?.[0] ?? "", "").trim() || source,
-      url: urlMatch?.[0] ?? "",
-      type: "",
-      preview: "",
-    };
-  }
-  const url = source.url || source.uri || "";
-  const title = source.title || url || "Source";
-  const type = (source.source_type || source.type || "").toLowerCase();
-  const preview = source.content ? truncatePreview(source.content) : "";
-  return { title, url, type, preview };
-}
-
-function isHttpSource(source: SourceItem | string) {
-  const { url } = sourceLabel(source);
-  return isSafeUrl(url);
-}
-
-// Uploaded documents and CSV row resources still get cards without public
-// URLs. Guideline-mode guide sections are never shown: the server already
-// drops them, and this is a fallback in case one ever arrives.
-function isResourceSource(source: SourceItem | string) {
-  const type = sourceLabel(source).type;
-  if (type === "guideline") return false;
-  return isHttpSource(source) || type === "document" || type === "csv_row";
-}
-
 export default function AIChatMessage({
   text,
   question,
   sources = [],
-  warning = null,
   isTyping = false,
   phase = null,
   footer = null,
@@ -239,13 +190,6 @@ export default function AIChatMessage({
       </div>
     ) : null;
 
-  const warningBlock =
-    !isTyping && warning ? (
-      <div className="mt-4 rounded-[10px] bg-[oklch(0.97_0.015_268)] px-4 py-3.5 text-sm text-secondary-foreground">
-        {warning}
-      </div>
-    ) : null;
-
   if (isTyping && !body) {
     return (
       <div className="flex justify-start">
@@ -269,7 +213,6 @@ export default function AIChatMessage({
         </>
       )}
       {sourcesBlock}
-      {warningBlock}
     </>
   );
 

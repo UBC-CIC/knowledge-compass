@@ -11,6 +11,8 @@ import type { Message, MessageSource } from "@/types/Chat";
 import { useUser } from "@/providers/user";
 import DemoGuidanceCard from "@/components/ChatInterface/DemoGuidanceCard";
 import ConversationFeedback from "@/components/ChatInterface/ConversationFeedback";
+import GroundingWarningBanner from "@/components/ChatInterface/GroundingWarningBanner";
+import { isResourceSource } from "@/lib/sources";
 import { useSessionFeedback } from "@/hooks/useSessionFeedback";
 import {
   applyDemoFact,
@@ -103,6 +105,10 @@ export default function AIChatPage({
   } = useView();
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  // Id of the bot message whose grounding warning the user dismissed.
+  const [dismissedWarningMessageId, setDismissedWarningMessageId] = useState<
+    string | null
+  >(null);
   // Id of the bot placeholder currently receiving streamed output. Kept in a
   // ref (not state) so WebSocket events always see the value set by
   // sendMessage, even if a render/effect for a session change happens in
@@ -433,6 +439,9 @@ export default function AIChatPage({
   }, []);
 
   useEffect(() => {
+    // A dismissed warning belongs to the previous session's reply.
+    setDismissedWarningMessageId(null);
+
     // The first message of a new chat creates the session itself. That
     // session change must not wipe the stream that sendMessage just started,
     // and there is no history to load yet.
@@ -805,7 +814,6 @@ export default function AIChatPage({
         text={message.text}
         question={message.question}
         sources={message.sources_used}
-        warning={message.warning}
         isTyping={message.isTyping}
         phase={message.phase}
         footer={
@@ -831,6 +839,20 @@ export default function AIChatPage({
     !isStreaming &&
     !sessionFeedback.isLoading &&
     Boolean(lastBotMessage && !lastBotMessage.isTyping && lastBotMessage.text.trim());
+  // The grounding warning is about the cited resources, so it only shows
+  // for the latest finished reply that actually returned resources.
+  const lastBotWarning = lastBotMessage?.warning?.trim();
+  const latestWarning =
+    !isWelcome &&
+    !isStreaming &&
+    !isLoadingHistory &&
+    lastBotMessage &&
+    !lastBotMessage.isTyping &&
+    lastBotWarning &&
+    (lastBotMessage.sources_used ?? []).some(isResourceSource) &&
+    lastBotMessage.id !== dismissedWarningMessageId
+      ? { id: lastBotMessage.id, text: lastBotWarning }
+      : null;
   const demoChips =
     isDemoMode && !isStreaming && lastBotMessage?.chips?.length
       ? lastBotMessage.chips
@@ -938,6 +960,12 @@ export default function AIChatPage({
 
       <div className="shrink-0 px-4 pb-[18px] pt-3 md:px-[34px]">
         <div className="mx-auto w-full max-w-[680px]">
+          {latestWarning ? (
+            <GroundingWarningBanner
+              warning={latestWarning.text}
+              onDismiss={() => setDismissedWarningMessageId(latestWarning.id)}
+            />
+          ) : null}
           <AiChatInput
             value={message}
             onChange={(val: string) => setMessage(val)}

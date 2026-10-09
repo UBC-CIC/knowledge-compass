@@ -7,6 +7,8 @@ Proxy and the VPC endpoints, so a CSV must never be able to make it fetch an
 internal address:
 
 - only http/https URLs, with no embedded credentials, are accepted;
+- only common web ports are accepted, so a CSV row or redirect cannot make the
+  Lambda probe arbitrary TCP services (SSH, SMTP, ...) on public hosts;
 - every address a host resolves to must be publicly routable, otherwise the
   URL is rejected (a host resolving to both a public and a private address is
   rejected too);
@@ -23,6 +25,9 @@ from urllib.parse import quote, urlsplit, urlunsplit
 MAX_URL_LENGTH = 2000
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+# Destination ports a link may use. Every fetch and redirect hop is normalized
+# here, so this bounds where the in-VPC fetcher can open connections.
+ALLOWED_PORTS = frozenset({80, 443, 8080, 8443})
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 # Characters left as-is when percent-encoding a path / query (RFC 3986 reserved + unreserved + '%').
 _PATH_SAFE = "/%:@!$&'()*+,;=-._~"
@@ -57,6 +62,8 @@ def normalize_url(raw: str) -> str:
         raise InvalidURL("only http and https URLs are crawled")
     if parts.username is not None or parts.password is not None:
         raise InvalidURL("URLs with embedded credentials are not crawled")
+    if port is not None and port not in ALLOWED_PORTS:
+        raise InvalidURL(f"port {port} is not crawled (allowed: {', '.join(map(str, sorted(ALLOWED_PORTS)))})")
 
     host = parts.hostname
     if not host:

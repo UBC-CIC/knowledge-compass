@@ -89,14 +89,31 @@ function isGuidelineSource(source) {
   );
 }
 
-// Markdown links whose target is not http(s), e.g. [Handbook](s3://bucket/key).
+// Internal storage identities (s3://, upload://, csvlink://, ...) must never
+// reach public users, in any markdown form. Mirrors textGeneration
+// helpers/citations.py strip_internal_links; keep the two in sync.
+// Inline link, e.g. [Handbook](s3://bucket/key) -> "Handbook".
 const NON_HTTP_MARKDOWN_LINK =
   /\[([^\]]*)\]\(\s*<?(?!https?:\/\/)[a-z][a-z0-9+.-]*:\/\/[^)\s>]*>?(?:\s+"[^"]*")?\s*\)/gi;
+// Reference definition, e.g. "[1]: upload://doc.pdf" -> removed.
+const NON_HTTP_REFERENCE_DEF =
+  /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*<?(?!https?:\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s>]*>?/gim;
+// Autolink, e.g. <s3://bucket/key> -> removed.
+const NON_HTTP_AUTOLINK = /<(?!https?:\/\/)[a-z][a-z0-9+.-]*:\/\/[^>\s]*>/gi;
+// Bare URI anywhere, e.g. "see **s3://bucket/my_key**" -> "see **". The
+// lookbehind only stops a match from starting mid-scheme (so "https://"
+// is never read as "ttps://"); any other preceding character is fine.
+const NON_HTTP_BARE_URI =
+  /(?<![a-z0-9])(?!https?:\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s)\]>"'`|]*/gi;
 
-/** Replace markdown links to internal identities with their link text. */
+/** Remove internal identities: inline links keep their text; definitions, autolinks and bare URIs are dropped. */
 function stripInternalLinks(text) {
   if (typeof text !== "string") return text;
-  return text.replace(NON_HTTP_MARKDOWN_LINK, "$1");
+  return text
+    .replace(NON_HTTP_MARKDOWN_LINK, "$1")
+    .replace(NON_HTTP_REFERENCE_DEF, "")
+    .replace(NON_HTTP_AUTOLINK, "")
+    .replace(NON_HTTP_BARE_URI, "");
 }
 
 /** Sanitize one chat_messages row for a public history response. */
