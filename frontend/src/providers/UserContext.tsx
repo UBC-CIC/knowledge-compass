@@ -2,36 +2,31 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { UserContext } from "./user";
 import { DEMO_USER_ID, isDemoMode } from "@/lib/demo";
+import {
+  clearUserSession,
+  getPublicToken,
+  readUserSession,
+  saveUserSession,
+} from "@/lib/publicToken";
 
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(isDemoMode ? DEMO_USER_ID : null);
   const [isLoading, setIsLoading] = useState(!isDemoMode);
   const [error, setError] = useState<Error | null>(null);
-  const LOCAL_KEY = "knowledgeCompass_user_session";
 
   useEffect(() => {
     if (isDemoMode) {
       return;
     }
-    const validateUser = async (stored: {
-      userId: string;
-      createdAt?: string;
-    }) => {
-      try {
-        // get public token
-        const tokenResp = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-        );
-        if (!tokenResp.ok) {
-          console.error("Failed to get public token");
-          return false;
-        };
-        const { token } = await tokenResp.json();
 
-        // Validate user exists
+    // The stored credential must still buy a token for this user, and the
+    // user must still exist.
+    const validateUser = async (storedUserId: string) => {
+      try {
+        const token = await getPublicToken();
         const validateResp = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/${stored.userId}`,
+          `${import.meta.env.VITE_API_ENDPOINT}/user/${storedUserId}`,
           {
             method: "GET",
             headers: {
@@ -49,12 +44,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     const createUser = async () => {
       try {
-        // First get a public token
-        const tokenResponse = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`
-        );
-        if (!tokenResponse.ok) throw new Error("Failed to get public token");
-        const { token } = await tokenResponse.json();
+        // Without a stored credential this is an anonymous token, which may
+        // only create a user.
+        clearUserSession();
+        const token = await getPublicToken();
 
         // Create an anonymous session user — guardians do not sign in.
         const response = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user`, {
@@ -75,23 +68,19 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
         const data = await response.json();
 
-        const id = data.userId
-        if (!id) {
-          throw new Error("Create user response missing user id");
+        const id = data.userId;
+        const credential = data.credential;
+        if (!id || !credential) {
+          throw new Error("Create user response missing user id or credential");
         }
 
-        const payload = {
+        saveUserSession({
           userId: id,
+          credential,
           createdAt: new Date().toISOString(),
-        };
+        });
 
-        try {
-          localStorage.setItem(LOCAL_KEY, JSON.stringify(payload));
-        } catch {
-          console.warn("Failed to store user in localStorage");
-        }
-
-        setUserId(payload.userId);
+        setUserId(id);
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to create user"));
       } finally {
@@ -101,26 +90,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     const bootstrap = async () => {
       try {
-        const raw = localStorage.getItem(LOCAL_KEY);
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw) as {
-              userId: string;
-              createdAt?: string;
-            };
-
-            if (parsed.userId) {
-              const ok = await validateUser(parsed);
-              if (ok) {
-                setUserId(parsed.userId);
-                setIsLoading(false);
-                return;
-              }
-            }
-          } catch (e) {
-            console.error("Error parsing stored user:", e);
-            // parsing error — treat as missing
-          }
+        // Sessions saved before credentials existed read as null here, so
+        // those browsers start a new anonymous user.
+        const stored = readUserSession();
+        if (stored && (await validateUser(stored.userId))) {
+          setUserId(stored.userId);
+          setIsLoading(false);
+          return;
         }
 
         // create a new user only if none valid

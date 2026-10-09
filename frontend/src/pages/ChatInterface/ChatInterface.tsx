@@ -59,9 +59,15 @@ const WELCOME_STARTERS = [
 ];
 
 const WELCOME_HEADING =
-  "Hi, I'm here to help you navigate your child's education.";
+  "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.";
 const WELCOME_ASK =
-  "Tell me what's been happening. What's going on with your child's schooling right now?";
+  "Type in information about what's happening. Is there something happening with your child's schooling right now?";
+// Earlier heading/ask wording. Still stripped from the stored welcome message
+// so admin-edited copies that kept it don't render it twice.
+const LEGACY_WELCOME_CHROME = [
+  "Hi, I'm here to help you navigate your child's education.",
+  "Tell me what's been happening. What's going on with your child's schooling right now?",
+];
 const DEFAULT_WELCOME_MESSAGE =
   "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
 const DEFAULT_DISCLAIMER =
@@ -69,7 +75,7 @@ const DEFAULT_DISCLAIMER =
 
 function welcomeBody(message: string): string {
   let text = message.trim();
-  for (const chrome of [WELCOME_HEADING, WELCOME_ASK]) {
+  for (const chrome of [WELCOME_HEADING, WELCOME_ASK, ...LEGACY_WELCOME_CHROME]) {
     text = text.split(chrome).join("");
   }
   return text.replace(/\n{3,}/g, "\n\n").trim();
