@@ -219,9 +219,6 @@ export default function AIChatMessage({
   if (suggestion && !isTyping) {
     return (
       <div className="overflow-hidden rounded-[12px] border border-foreground/14">
-        <div className="bg-primary px-[22px] py-3.5 text-[13.5px] font-semibold tracking-[0.01em] text-white">
-          Where you are, and what to do next
-        </div>
         <div className="px-[22px] py-[22px] text-[16.5px] leading-[1.65] text-pretty">
           {content}
         </div>

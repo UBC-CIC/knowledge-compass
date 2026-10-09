@@ -1,14 +1,19 @@
 /**
  * Anonymous user identity and API access tokens.
  *
- * POST /user returns a user id plus a long-lived credential. Both are kept in
+ * POST /user returns a user id plus a 30-day credential. Both are kept in
  * localStorage; the credential is exchanged at /user/publicToken for 15-minute
  * access tokens bound to that user, which user and session routes require.
- * Without a credential, /user/publicToken returns an anonymous token that can
- * only create a user and read public settings.
+ * The server rotates the credential about daily (the response then carries the
+ * replacement) and revokes it if a superseded copy is reused. Without a
+ * credential, /user/publicToken returns an anonymous token that can only
+ * create a user and read public settings.
  */
 
 const STORAGE_KEY = "knowledgeCompass_user_session";
+
+/** Dispatched on window when the stored credential stops working. */
+export const CREDENTIAL_REJECTED_EVENT = "knowledgeCompass:credential-rejected";
 // Access tokens live 15 minutes; refresh well before that.
 const TOKEN_REUSE_MS = 10 * 60 * 1000;
 
@@ -66,11 +71,22 @@ async function requestToken(credential: string | null): Promise<string> {
   });
   if (response.status === 401 && credential) {
     clearUserSession();
+    window.dispatchEvent(new Event(CREDENTIAL_REJECTED_EVENT));
     throw new CredentialRejectedError();
   }
   if (!response.ok) throw new Error("Failed to get public token");
-  const { token } = (await response.json()) as { token?: string };
+  const { token, credential: rotated } = (await response.json()) as {
+    token?: string;
+    credential?: string;
+  };
   if (!token) throw new Error("Public token response missing token");
+  // Credentials rotate daily; the old one stops working, so replace it now.
+  if (credential && rotated) {
+    const session = readUserSession();
+    if (session && session.credential === credential) {
+      saveUserSession({ ...session, credential: rotated });
+    }
+  }
   return token;
 }
 
@@ -88,7 +104,8 @@ export async function getPublicToken(): Promise<string> {
 
   const promise = requestToken(credential)
     .then((token) => {
-      cached = { credential, token, fetchedAt: Date.now() };
+      // Key by the credential stored now, which a rotation may have replaced.
+      cached = { credential: readUserSession()?.credential ?? null, token, fetchedAt: Date.now() };
       return token;
     })
     .finally(() => {

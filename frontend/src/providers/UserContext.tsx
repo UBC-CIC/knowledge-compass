@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { UserContext } from "./user";
 import { DEMO_USER_ID, isDemoMode } from "@/lib/demo";
 import {
+  CREDENTIAL_REJECTED_EVENT,
   clearUserSession,
   getPublicToken,
   readUserSession,
@@ -42,7 +43,17 @@ export function UserProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    const createUser = async () => {
+    // Bootstrap and the credential-rejected listener can both ask for a new
+    // user at once; share one creation.
+    let creating: Promise<void> | null = null;
+    const createUser = () => {
+      creating ??= createUserOnce().finally(() => {
+        creating = null;
+      });
+      return creating;
+    };
+
+    const createUserOnce = async () => {
       try {
         // Without a stored credential this is an anonymous token, which may
         // only create a user.
@@ -108,6 +119,16 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
 
     bootstrap();
+
+    // An expired or revoked credential can no longer act as this user; start
+    // a new anonymous user rather than leaving every request failing.
+    const onCredentialRejected = () => {
+      setUserId(null);
+      setIsLoading(true);
+      void createUser();
+    };
+    window.addEventListener(CREDENTIAL_REJECTED_EVENT, onCredentialRejected);
+    return () => window.removeEventListener(CREDENTIAL_REJECTED_EVENT, onCredentialRejected);
   }, []); // Only run once when the app starts
 
   return (
