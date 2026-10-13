@@ -8,7 +8,19 @@ const crypto = require("crypto");
 const { validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
-const { issueUserCredential } = require("./utils/userCredential.js");
+const {
+  exchangeCredential,
+  issueAccessToken,
+  issueUserCredential,
+} = require("./utils/userCredential.js");
+
+/** Bearer value of the Authorization header, or null. */
+const bearerToken = (event) => {
+  const headers = event?.headers || {};
+  const value = headers.Authorization || headers.authorization;
+  if (typeof value !== "string" || !value.startsWith("Bearer ")) return null;
+  return value.slice("Bearer ".length).trim() || null;
+};
 
 // Reply with a resolveCaller() failure.
 const rejectCaller = (response, caller) => {
@@ -72,9 +84,30 @@ exports.handler = async (event) => {
   let data;
 
   try {
+    const pathData = event.httpMethod + " " + event.resource;
+
+    // Unauthenticated: anyone may get an anonymous token; a credential from
+    // POST /user gets a token bound to its user (see utils/userCredential.js).
+    if (pathData === "GET /user/publicToken") {
+      const credential = bearerToken(event);
+      if (!credential) {
+        response.body = JSON.stringify({ token: await issueAccessToken(null) });
+      } else {
+        await initConnection();
+        const exchanged = await exchangeCredential(sqlConnection, credential);
+        if (exchanged) {
+          response.body = JSON.stringify(exchanged);
+        } else {
+          response.statusCode = 401;
+          response.body = JSON.stringify({ error: "invalid_credential" });
+        }
+      }
+      console.log({ statusCode: response.statusCode, resource: event.resource });
+      return response;
+    }
+
     // Ensure connection is initialized before proceeding
     await initConnection();
-    const pathData = event.httpMethod + " " + event.resource;
 
     switch (pathData) {
       case "POST /user": {
@@ -103,16 +136,16 @@ exports.handler = async (event) => {
           )
           RETURNING
             id, email, display_name, role,
-            created_at, last_seen_at, metadata
+            created_at, last_seen_at, metadata, credential_version
         `;
 
         const row = result[0];
 
         data = {
           userId: row.id,
-          // Returned once; the browser stores it and exchanges it at
-          // /user/publicToken for access tokens bound to this user.
-          credential: await issueUserCredential(row.id),
+          // The browser stores this and exchanges it at /user/publicToken
+          // for access tokens bound to this user.
+          credential: await issueUserCredential(row.id, row.credential_version),
           email: row.email,
           display_name: row.display_name,
           role: row.role,

@@ -33,8 +33,8 @@ describe("flow presets", () => {
 
 describe("validation", () => {
   it("mirrors the API ranges", () => {
-    const errors = validateSettings({ ...RECOMMENDED, max_messages_per_day: 0, temperature: 2.5, top_p: Number.NaN, max_characters_per_user_message: 1.5 });
-    expect(Object.keys(errors).sort()).toEqual(["max_characters_per_user_message", "max_messages_per_day", "temperature", "top_p"]);
+    const errors = validateSettings({ ...RECOMMENDED, max_messages_per_day: 0, temperature: 2.5, top_p: Number.NaN, max_characters_per_user_message: 1.5, max_characters_per_day: 0 });
+    expect(Object.keys(errors).sort()).toEqual(["max_characters_per_day", "max_characters_per_user_message", "max_messages_per_day", "temperature", "top_p"]);
   });
 
   it("checks the floor against the ceiling in dynamic mode only", () => {
@@ -69,6 +69,7 @@ describe("recommended values stay in sync with the backend", () => {
     expect(num("MIN_EXCHANGES_BEFORE_SUGGEST")).toBe(RECOMMENDED.min_messages_before_suggest);
     expect(num("MIN_EXCHANGES_BEFORE_ANSWER")).toBe(RECOMMENDED.min_exchanges_before_answer);
     expect(num("MAX_CHARACTERS_PER_USER_MESSAGE")).toBe(RECOMMENDED.max_characters_per_user_message);
+    expect(num("MAX_CHARACTERS_PER_DAY")).toBe(RECOMMENDED.max_characters_per_day);
     expect(num("MAX_CHARACTERS_PER_AI_MESSAGE")).toBe(RECOMMENDED.max_characters_per_ai_message);
     expect(num("SUPPORT_SCORE_THRESHOLD")).toBe(RECOMMENDED.support_score_threshold);
     expect(num("SCOPE_ALIGNMENT_SCORE_THRESHOLD")).toBe(RECOMMENDED.scope_alignment_score_threshold);

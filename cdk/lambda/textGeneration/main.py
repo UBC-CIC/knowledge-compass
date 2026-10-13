@@ -9,11 +9,26 @@ from helpers.chat import get_response
 from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import resolve_caller_user_id, validate_session_ownership, sanitize_session_id
+from helpers.message_limits import reserve_daily_characters
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 GENERIC_ERROR_MESSAGE = "Sorry, something went wrong while preparing a response. Please try again."
+DAILY_LIMIT_ERROR = "DAILY_CHARACTER_LIMIT_EXCEEDED"
+DAILY_LIMIT_MESSAGE = "You've reached today's message limit. Please come back tomorrow."
+# Used when some allowance is left but this message doesn't fit in it.
+DAILY_LIMIT_PARTIAL_MESSAGE = (
+    "This message is longer than the {remaining:,} characters you have left today. "
+    "Please try a shorter message."
+)
+
+
+def _daily_limit_message(char_usage):
+    remaining = (char_usage or {}).get('remaining') or 0
+    if remaining > 0:
+        return DAILY_LIMIT_PARTIAL_MESSAGE.format(remaining=remaining)
+    return DAILY_LIMIT_MESSAGE
 
 
 def _get_ws_client(event):
@@ -60,16 +75,17 @@ def handler(event, context=None):
     # event; otherwise the client waits on its typing indicator forever.
     apigw_management, connection_id = _get_ws_client(event)
 
-    def fail(status_code, error, message=GENERIC_ERROR_MESSAGE):
+    def fail(status_code, error, message=GENERIC_ERROR_MESSAGE, extra=None):
         _post_ws(apigw_management, connection_id, {
             'type': 'error',
             'error': error,
             'message': message,
+            **(extra or {}),
         })
         return {
             'statusCode': status_code,
             'headers': {'Content-Type': 'application/json', **get_cors_headers(event)},
-            'body': json.dumps({'error': error}),
+            'body': json.dumps({'error': error, **(extra or {})}),
         }
 
     body = {}
@@ -137,6 +153,22 @@ def handler(event, context=None):
 
         # Load dynamic configuration from DB
         config.load_config(conn)
+
+        # Daily character allowance (per user, per UTC day, across all of the
+        # user's sessions). Counted on receipt, before the guardrail, retrieval
+        # and any Bedrock call; an over-limit message is rejected whole. A DB
+        # error here raises into the generic 500 below (fail closed). The Lambda
+        # request id stays the same across async retries, so a retried
+        # invocation is not counted twice.
+        allowed, char_usage = reserve_daily_characters(
+            user_id, len(query), conn, config.MAX_CHARACTERS_PER_DAY,
+            request_id=getattr(context, 'aws_request_id', None),
+        )
+        if not allowed:
+            logger.info("Daily character limit reached")
+            limit_message = _daily_limit_message(char_usage)
+            return fail(429, DAILY_LIMIT_ERROR, limit_message,
+                        extra={'message': limit_message, 'character_usage': char_usage})
 
         # Send start message
         _post_ws(apigw_management, connection_id, {'type': 'start'})

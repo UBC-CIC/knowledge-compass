@@ -36,6 +36,45 @@ test("admin can list users", async () => {
   assert.ok(sql.queries().some((q) => q.text.includes("FROM users")));
 });
 
+test("system settings rejects an out-of-range daily character limit", async () => {
+  const sql = fakeSql();
+  const res = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: adminContext,
+    body: JSON.stringify({ max_characters_per_day: 0 }),
+  });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /max_characters_per_day/);
+  assert.ok(!sql.queries().some((q) => q.text.includes("UPDATE system_settings")));
+});
+
+test("system settings saves the daily character limit", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1", max_characters_per_day: 10000 }];
+    if (text.includes("FROM users")) return [{ id: "a1", role: "admin" }];
+    return [];
+  });
+  const res = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: adminContext,
+    body: JSON.stringify({ max_characters_per_day: 10000 }),
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.max_characters_per_day, 10000);
+  const update = sql.queries().find((q) => q.text.includes("UPDATE system_settings"));
+  assert.ok(update, "UPDATE query issued");
+  assert.ok(update.text.includes("max_characters_per_day = COALESCE"));
+  assert.ok(update.values.includes(10000));
+});
+
+test("system settings GET falls back to the default daily character limit", async () => {
+  const res = await invoke(fakeSql(), { httpMethod: "GET", resource: "/admin/system-settings", requestContext: adminContext });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.max_characters_per_day, 10000);
+});
+
 test("removed example endpoint and unknown routes are not served", async () => {
   for (const resource of ["/admin/exampleEndpoint", "/admin/does-not-exist"]) {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource, requestContext: adminContext });

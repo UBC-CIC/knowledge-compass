@@ -911,44 +911,9 @@ export class ApiGatewayStack extends cdk.Stack {
       .defaultChild as lambda.CfnFunction;
     apiGW_userauthorizationFunction.overrideLogicalId("userLambdaAuthorizer");
 
-    const publicTokenLambda = new lambda.Function(
-      this,
-      `${id}-PublicTokenFunction`,
-      {
-        runtime: lambda.Runtime.NODEJS_22_X,
-        handler: "publicTokenFunction.handler",
-        layers: [jwt],
-        // reservedConcurrentExecutions: 50,
-        code: lambda.Code.fromAsset("lambda/publicTokenFunction"),
-        environment: {
-          JWT_SECRET: jwtSecret.secretArn,
-        },
-        timeout: Duration.seconds(30),
-        memorySize: 128,
-        role: lambdaRole,
-      }
-    );
-
-    jwtSecret.grantRead(publicTokenLambda);
-
-    // Add the permission to the Lambda function's policy to allow API Gateway access
-    publicTokenLambda.grantInvoke(
-      new iam.ServicePrincipal("apigateway.amazonaws.com")
-    );
-
-    new cloudwatch.Alarm(this, 'PublicTokenConcurrencyAlarm', {
-      metric: publicTokenLambda.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 40,
-      evaluationPeriods: 2,
-      datapointsToAlarm: 2,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      alarmDescription: 'Public Token Lambda approaching concurrency limit',
-    });
-
-    // Change Logical ID to match the one decleared in YAML file of Open API
-    const apiGW_publicTokenFunction = publicTokenLambda.node
-      .defaultChild as lambda.CfnFunction;
-    apiGW_publicTokenFunction.overrideLogicalId("PublicTokenFunction");
+    // GET /user/publicToken is served by userFunction (handlers/userHandler.js):
+    // exchanging a credential checks its version against the users table, so
+    // it needs the database. See handlers/utils/userCredential.js.
 
     const preSignupLambda = new lambda.Function(this, `preSignupLambda`, {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -966,14 +931,6 @@ export class ApiGatewayStack extends cdk.Stack {
 
     preSignupLambda.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     preSignupLambda.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ["ssm:GetParameter", "ssm:GetParameters"],
-      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
-    }));
-
-
-    publicTokenLambda.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
-    publicTokenLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
@@ -1345,7 +1302,8 @@ export class ApiGatewayStack extends cdk.Stack {
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         USER_POOL: this.userPool.userPoolId,
-        // POST /user signs each anonymous user's credential with this secret.
+        // Signs anonymous users' credentials (POST /user) and access tokens
+        // (GET /user/publicToken).
         JWT_SECRET: jwtSecret.secretArn,
       },
       functionName: `${id}-userFunction`,
@@ -1356,6 +1314,17 @@ export class ApiGatewayStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE,
     });
     jwtSecret.grantRead(lambdaUserFunction);
+
+    // userFunction also serves the unauthenticated GET /user/publicToken
+    // (stage-throttled and WAF rate-limited); watch for floods.
+    new cloudwatch.Alarm(this, 'UserFunctionConcurrencyAlarm', {
+      metric: lambdaUserFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
+      threshold: 40,
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      alarmDescription: 'User Lambda (incl. public token exchange) approaching concurrency limit',
+    });
 
     lambdaUserFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaUserFunction.addToRolePolicy(new iam.PolicyStatement({

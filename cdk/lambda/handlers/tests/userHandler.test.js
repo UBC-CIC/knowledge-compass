@@ -141,9 +141,18 @@ test("user routes require the token's own user", async () => {
   }
 });
 
-test("POST /user works with an anonymous token and returns a credential for the new user", async () => {
+test("POST /user fails closed when the credential version column is missing", async () => {
   const sql = fakeSql((text, values) =>
     text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student" }] : [],
+  );
+  const res = await invoke(sql, { httpMethod: "POST", resource: "/user", requestContext: as(""), body: "{}" });
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.credential, undefined);
+});
+
+test("POST /user works with an anonymous token and returns a credential for the new user", async () => {
+  const sql = fakeSql((text, values) =>
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student", credential_version: 0 }] : [],
   );
   const res = await invoke(sql, {
     httpMethod: "POST",
@@ -154,14 +163,17 @@ test("POST /user works with an anonymous token and returns a credential for the 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.role, "student");
   const signed = JSON.parse(res.body.credential.replace(/^signed:/, ""));
-  assert.deepEqual(signed.payload, { typ: "credential", sub: res.body.userId });
+  const { iat, ...claims } = signed.payload;
+  assert.deepEqual(claims, { typ: "credential", sub: res.body.userId, ver: 0 });
+  assert.ok(Number.isInteger(iat));
   assert.equal(signed.secret, "test-jwt-secret");
   assert.equal(signed.options.algorithm, "HS256");
+  assert.equal(signed.options.expiresIn, "30d");
 });
 
 test("responses are not logged", async () => {
   const sql = fakeSql((text, values) =>
-    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student" }] : [],
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student", credential_version: 0 }] : [],
   );
   const { handler } = loadHandler("userHandler", sql);
   const logged = [];

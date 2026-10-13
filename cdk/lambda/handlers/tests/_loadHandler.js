@@ -28,6 +28,34 @@ function fakeSql(respond = () => []) {
   return sql;
 }
 
+// Readable stand-in for jsonwebtoken: tokens are "signed:<json>" so tests can
+// inspect what was signed and forge tokens (see fakeToken). Like the real
+// library, sign() adds iat and verify() checks the secret.
+const fakeJwt = {
+  sign: (payload, secret, options) =>
+    `signed:${JSON.stringify({
+      payload: { iat: Math.floor(Date.now() / 1000), ...payload },
+      secret,
+      options,
+    })}`,
+  verify: (token, secret, options) => {
+    if (typeof token !== "string" || !token.startsWith("signed:")) throw new Error("jwt malformed");
+    const { payload, secret: signedWith } = JSON.parse(token.slice("signed:".length));
+    if (signedWith !== secret) throw new Error("invalid signature");
+    if (!options?.algorithms || options.algorithms.join() !== "HS256") {
+      throw new Error("algorithms must be pinned to HS256");
+    }
+    return payload;
+  },
+};
+
+/** A token the fake verifies, as if signed with `secret`. */
+const fakeToken = (payload, secret = "test-jwt-secret") =>
+  `signed:${JSON.stringify({ payload, secret, options: {} })}`;
+
+/** Claims of a fake-signed token. */
+const decodeFakeToken = (token) => JSON.parse(token.slice("signed:".length));
+
 function stubs(sql) {
   class FakeCommand {
     constructor(input) {
@@ -50,9 +78,7 @@ function stubs(sql) {
     },
     // jsonwebtoken comes from the Lambda layer; a readable fake lets tests
     // assert what was signed.
-    jsonwebtoken: {
-      sign: (payload, secret, options) => `signed:${JSON.stringify({ payload, secret, options })}`,
-    },
+    jsonwebtoken: fakeJwt,
     "@aws-sdk/client-ssm": {
       SSMClient: class {
         async send() {
@@ -101,4 +127,4 @@ async function quietly(fn) {
   }
 }
 
-module.exports = { fakeSql, loadHandler, quietly };
+module.exports = { fakeSql, loadHandler, quietly, fakeToken, decodeFakeToken };

@@ -1306,6 +1306,7 @@ paths:
                   routing_mode: { type: string, enum: [fixed, dynamic] }
                   min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
+                  max_characters_per_day: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
                   top_p: { type: number }
@@ -1349,6 +1350,9 @@ paths:
                   type: integer
                   description: Dynamic mode floor (questions before guidance, urgent turns bypass it). Must be <= min_messages_before_suggest.
                 max_characters_per_user_message: { type: integer }
+                max_characters_per_day:
+                  type: integer
+                  description: Characters a user can send per UTC day
                 max_characters_per_ai_message: { type: integer }
                 temperature: { type: number }
                 top_p: { type: number }
@@ -1370,6 +1374,7 @@ paths:
                   routing_mode: { type: string, enum: [fixed, dynamic] }
                   min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
+                  max_characters_per_day: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
                   top_p: { type: number }
@@ -2723,6 +2728,8 @@ paths:
           description: Invalid request
         "404":
           description: Chat session not found
+        "429":
+          description: Daily character limit reached (error DAILY_CHARACTER_LIMIT_EXCEEDED, with message and character_usage) or daily message limit reached
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -2765,7 +2772,9 @@ paths:
         user (POST /user) and read public settings only. With
         `Authorization: Bearer <credential>` (the credential POST /user
         returned) the token is bound to that user, which user and chat session
-        routes require.
+        routes require. Credentials last 30 days, are rotated daily, and are
+        revoked if a superseded one is reused; when the response includes a
+        new `credential`, the client must replace its stored one.
       operationId: get_public_token
       parameters:
         - name: Authorization
@@ -2785,13 +2794,16 @@ paths:
                   token:
                     type: string
                     example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  credential:
+                    type: string
+                    description: Present when the credential was rotated; replaces the stored one
         "401":
-          description: The credential is invalid or expired; create a new user
+          description: The credential is invalid, expired, revoked or its user no longer exists; create a new user
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PublicTokenFunction.Arn}/invocations
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${userFunction.Arn}/invocations
         passthroughBehavior: "when_no_match"
         httpMethod: POST
         type: aws_proxy
@@ -2839,9 +2851,9 @@ paths:
                   credential:
                     type: string
                     description: >
-                      Long-lived secret for this user, returned only here. Keep
-                      it with userId and send it to GET /user/publicToken to get
-                      access tokens bound to this user.
+                      30-day secret for this user. Keep it with userId and send
+                      it to GET /user/publicToken to get access tokens bound to
+                      this user; that endpoint may return a rotated replacement.
                   role:
                     type: string
                     enum: ["student", "admin"]

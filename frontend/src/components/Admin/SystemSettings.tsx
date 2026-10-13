@@ -284,6 +284,15 @@ export default function SystemSettings() {
                 onChange={set("max_characters_per_user_message")}
                 error={errors.max_characters_per_user_message}
               />
+              <NumberField
+                label="Characters a person can send per day"
+                help="Counted for each person from midnight UTC. 10,000 characters is about five long messages."
+                min={1}
+                max={1000000}
+                value={draft.max_characters_per_day}
+                onChange={set("max_characters_per_day")}
+                error={errors.max_characters_per_day}
+              />
             </div>
           </SettingsCard>
 

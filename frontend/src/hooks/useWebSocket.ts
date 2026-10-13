@@ -16,6 +16,13 @@ export interface WebSocketMessage {
     remaining?: number;
     reset_at?: string;
   };
+  // Sent with error DAILY_CHARACTER_LIMIT_EXCEEDED (per user, per UTC day).
+  character_usage?: {
+    used?: number;
+    limit?: number;
+    remaining?: number;
+    reset_at?: string;
+  };
 }
 
 interface UseWebSocketOptions {

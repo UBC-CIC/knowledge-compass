@@ -1,6 +1,5 @@
 /**
  * Unit tests for the anonymous-user token flow:
- *   publicTokenFunction  - anonymous vs credential-bound access tokens
  *   userAuthorizer       - refuses credentials, exposes only the bound userId
  *   websocket/default.js - binds text generation to the message token's user
  *
@@ -114,48 +113,6 @@ async function quietly(fn) {
     Object.assign(console, saved);
   }
 }
-
-const bearer = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
-
-// ---------- publicTokenFunction ----------
-
-test("publicToken: no credential gives an anonymous access token", async () => {
-  const { mod, jwt } = load("publicTokenFunction/publicTokenFunction.js");
-  const res = await quietly(() => mod.handler({ headers: {} }));
-  assert.equal(res.statusCode, 200);
-  const { token } = JSON.parse(res.body);
-  const { payload, options } = jwt.issued.get(token);
-  assert.equal(payload.sub, undefined);
-  assert.equal(payload.typ, "access");
-  assert.equal(options.expiresIn, "15m");
-  assert.equal(options.algorithm, "HS256");
-});
-
-test("publicToken: a valid credential gives an access token bound to its user", async () => {
-  const { mod, jwt } = load("publicTokenFunction/publicTokenFunction.js");
-  const credential = jwt.sign({ typ: "credential", sub: USER }, SECRET, {});
-  const res = await quietly(() => mod.handler(bearer(credential)));
-  assert.equal(res.statusCode, 200);
-  assert.equal(jwt.issued.get(JSON.parse(res.body).token).payload.sub, USER);
-});
-
-test("publicToken: forged, wrong-type or malformed credentials are refused", async () => {
-  const { mod, jwt } = load("publicTokenFunction/publicTokenFunction.js");
-  const cases = [
-    "not-a-token",
-    jwt.sign({ typ: "credential", sub: USER }, "other-secret", {}), // wrong key
-    jwt.sign({ typ: "access", sub: USER }, SECRET, {}), // an access token is not a credential
-    jwt.sign({ typ: "credential", sub: "user" }, SECRET, {}),
-    jwt.sign({ typ: "credential" }, SECRET, {}),
-  ];
-  for (const credential of cases) {
-    const before = jwt.issued.size;
-    const res = await quietly(() => mod.handler(bearer(credential)));
-    assert.equal(res.statusCode, 401, credential);
-    assert.deepEqual(JSON.parse(res.body), { error: "invalid_credential" });
-    assert.equal(jwt.issued.size, before, "no token issued");
-  }
-});
 
 // ---------- userAuthorizerFunction ----------
 

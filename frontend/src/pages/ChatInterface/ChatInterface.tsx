@@ -354,6 +354,17 @@ export default function AIChatPage({
               setTokenResetTime(formatResetTime(message.token_usage.reset_at));
             }
           }
+          // Lock input only when nothing is left today; if some allowance
+          // remains, the server's message asks for a shorter message instead.
+          if (
+            message.error === "DAILY_CHARACTER_LIMIT_EXCEEDED" &&
+            (message.character_usage?.remaining ?? 0) <= 0
+          ) {
+            setIsTokenLimitReached(true);
+            if (message.character_usage?.reset_at) {
+              setTokenResetTime(formatResetTime(message.character_usage.reset_at));
+            }
+          }
           if (streamingMessageId) {
             setMessages((prev) =>
               prev.map((msg) =>
@@ -736,6 +747,30 @@ export default function AIChatPage({
               setTokenResetTime(formatResetTime(errData.token_usage.reset_at));
             }
             throw new Error(errData.message || "Token limit exceeded");
+          }
+          if (errData.error === "DAILY_CHARACTER_LIMIT_EXCEEDED") {
+            // Lock input only when nothing is left today (see the WS handler).
+            if ((errData.character_usage?.remaining ?? 0) <= 0) {
+              setIsTokenLimitReached(true);
+              if (errData.character_usage?.reset_at) {
+                setTokenResetTime(formatResetTime(errData.character_usage.reset_at));
+              }
+            }
+            // Show the server's friendly message rather than the generic error.
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === botMsg.id
+                  ? {
+                      ...msg,
+                      text:
+                        errData.message ||
+                        "You've reached today's message limit. Please come back tomorrow.",
+                      isTyping: false,
+                    }
+                  : msg
+              )
+            );
+            return;
           }
         }
         throw new Error("Failed to generate response");
