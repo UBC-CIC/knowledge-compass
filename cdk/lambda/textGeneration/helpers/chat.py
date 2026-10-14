@@ -339,7 +339,6 @@ def get_response(
     db_connection,
     save_user_message: bool = True,
     stream_callback=None,
-    is_intro_message: bool = False,
 ) -> Dict[str, Any]:
     
     usage_info = {}
@@ -361,45 +360,46 @@ def get_response(
                     "phase": None,
                 }
 
-        if not is_intro_message:
+        # Every message goes through the input guardrail; no request field can
+        # skip it.
+        try:
+            guardrail_result = invoke_guardrail(query, config.REGION)
+        except Exception as e:
+            logger.error(f"Guardrail invocation failed: {e}")
+            return {
+                "response": "An error occurred processing your request.",
+                "sources_used": [],
+                "warning": None,
+                "intervention": None,
+                "phase": None,
+            }
+
+        if guardrail_result['action'] == ACTION_BLOCKED:
+            denial_text = guardrail_result['text']
             try:
-                guardrail_result = invoke_guardrail(query, config.REGION)
-            except Exception as e:
-                logger.error(f"Guardrail invocation failed: {e}")
-                return {
-                    "response": "An error occurred processing your request.",
-                    "sources_used": [],
-                    "warning": None,
-                    "intervention": None,
-                    "phase": None,
-                }
+                ensure_session_exists(db_connection, chat_session_id, user_id)
+                insert_message(db_connection, chat_session_id, 'user', query, sources=None, warning=None)
+                update_last_active_session(db_connection, chat_session_id)
+                db_connection.commit()
+            except Exception as db_err:
+                db_connection.rollback()
+                logger.error(f"DB error saving user message on intervention: {db_err}")
+            _save_ai_response(db_connection, chat_session_id, denial_text, sources=[], warning_text=None)
+            if stream_callback:
+                stream_callback(denial_text)
+            return {
+                "response": denial_text,
+                "sources_used": [],
+                "sessionId": chat_session_id,
+                "is_first_message": False,
+                "message_usage": {},
+                "warning": None,
+                "intervention": None,
+                "phase": None,
+            }
 
-            if guardrail_result['action'] == ACTION_BLOCKED:
-                denial_text = guardrail_result['text']
-                try:
-                    ensure_session_exists(db_connection, chat_session_id, user_id)
-                    insert_message(db_connection, chat_session_id, 'user', query, sources=None, warning=None)
-                    update_last_active_session(db_connection, chat_session_id)
-                    db_connection.commit()
-                except Exception as db_err:
-                    db_connection.rollback()
-                    logger.error(f"DB error saving user message on intervention: {db_err}")
-                _save_ai_response(db_connection, chat_session_id, denial_text, sources=[], warning_text=None)
-                if stream_callback:
-                    stream_callback(denial_text)
-                return {
-                    "response": denial_text,
-                    "sources_used": [],
-                    "sessionId": chat_session_id,
-                    "is_first_message": False,
-                    "message_usage": {},
-                    "warning": None,
-                    "intervention": None,
-                    "phase": None,
-                }
-
-            if guardrail_result['action'] == ACTION_ANONYMIZED:
-                query = guardrail_result['text']
+        if guardrail_result['action'] == ACTION_ANONYMIZED:
+            query = guardrail_result['text']
 
         bedrock_messages, static_system_prompt, dynamic_prompt, sources, phase_name, model_arn, routing_ctx = _prepare_conversation(
             query,

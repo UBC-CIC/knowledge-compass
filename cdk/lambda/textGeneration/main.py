@@ -106,7 +106,6 @@ def handler(event, context=None):
         return fail(400, 'Invalid JSON body')
 
     query = body.get('query')
-    is_intro_message = body.get('is_intro_message', False)
 
     chat_session_id = body.get('chat_session_id')
 
@@ -193,7 +192,6 @@ def handler(event, context=None):
             user_id=user_id,
             db_connection=conn,
             stream_callback=stream_chunk,
-            is_intro_message=is_intro_message
         )
         
         # Format response to match API contract

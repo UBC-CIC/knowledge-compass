@@ -85,7 +85,8 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body);
-    const { action, query, chat_session_id, user_id, is_intro_message, token } = body;
+    // Any client-sent is_intro_message is ignored: the guardrail always runs.
+    const { action, query, chat_session_id, user_id, token } = body;
 
     if (action === "generate_text") {
       // Validate inputs before invoking text generation Lambda
@@ -119,7 +120,6 @@ exports.handler = async (event) => {
         },
         body: JSON.stringify({
           query: sanitizedQuery,
-          is_intro_message: is_intro_message
         }),
         requestContext: {
           connectionId: event.requestContext.connectionId,
