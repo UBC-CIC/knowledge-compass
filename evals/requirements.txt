@@ -1,0 +1,6 @@
+# Evaluation harness (evals/). Exact pins; install into a virtualenv:
+#   py -m venv evals/.venv
+#   evals/.venv/Scripts/python -m pip install -r evals/requirements.txt
+boto3==1.43.42
+websockets==16.0
+PyYAML==6.0.3

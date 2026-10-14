@@ -1,0 +1,43 @@
+# Synthetic example scenario (not from the Inclusion Canada documents).
+# Used by the unit tests and as a reference for the scenario format.
+story_id: X01
+reviewed: true
+testable: true
+modes:
+- standard
+- guideline
+journey_number: 9
+journey_name: Example journey
+feature_number: 1
+feature: Example feature
+story_text: As a parent, I want to understand why my child is sent home early so I can respond.
+situation_summary: A parent's child is regularly sent home before lunch by the school.
+opening_message: My daughter keeps getting sent home before lunch and I don't know why.
+persona: A parent of a Grade 3 student; works mornings; polite but worried.
+hidden_facts:
+- It has happened three times this month.
+- The school said there is no educational assistant after 11am.
+- Nothing has been put in writing.
+reference_flow:
+- step: Acknowledge the situation.
+  text: "“It sounds like your child is being sent home early.”"
+- step: Offer the next step.
+  text: "“Let's start by understanding why.”"
+acceptance_criteria:
+- recognize the reduced schedule
+- avoid legal conclusions
+testing_checks:
+- encourage documentation
+guiding_question: What can I do next?
+avoid_framing: Who is at fault?
+content_required:
+- definition of reduced schedules
+variants:
+- description: attending only mornings
+  message: My son only goes to school in the mornings now because the school says they can't manage afternoons.
+negative_cases:
+- description: illness-related absences
+  message: My son has been off school for a week with the flu. How do I catch him up?
+notes: []
+source:
+  file: synthetic

@@ -41,5 +41,10 @@ new frontend
 __pycache__/
 *.py[cod]
 
+# Evaluation harness: run output (transcripts, judge rationales) and its venv.
+# Scenarios in evals/scenarios/ ARE committed.
+evals/results/
+evals/.venv/
+
 .agents\tasks
 .agents

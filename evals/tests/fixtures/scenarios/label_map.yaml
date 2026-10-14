@@ -1,0 +1,10 @@
+reviewed: true
+journeys:
+  9:
+    name: Example journey
+    journey_key: J1
+stories:
+  X01:
+    clusters:
+    - A
+    - B
