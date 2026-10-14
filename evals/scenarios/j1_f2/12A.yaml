@@ -1,5 +1,5 @@
 story_id: 12A
-reviewed: false
+reviewed: true
 testable: true
 modes:
 - standard
