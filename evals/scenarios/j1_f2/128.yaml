@@ -1,0 +1,90 @@
+story_id: '128'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know the benefits of inclusive ed so that I can advocate for that for
+  my child.
+situation_summary: A parent is hearing recommendations and making decisions about their child’s education,
+  supports, and participation. They understand the concept of inclusive education but want to understand
+  how it can positively impact their child’s learning, relationships, independence, and future opportunities.
+opening_message: I understand what inclusive education is, but why is it considered so important?
+persona: A parent of a child with a developmental disability, likely in the early elementary grades, who
+  is actively engaged in school planning meetings and wants to make informed decisions. They have some
+  familiarity with education terminology but prefer straightforward, jargon-free explanations. They write
+  in a calm, thoughtful tone and ask focused questions.
+hidden_facts:
+- Their child is in Grade 2 and has an intellectual disability with some communication delays.
+- The school has suggested a part-time placement in a special education classroom with limited time in
+  the general classroom.
+- The parent has heard the term 'inclusive education' from another parent in a support group and wants
+  to understand it better before the next IEP meeting.
+- The parent's main concern is whether their child will make friends and develop social skills.
+- The parent also worries about whether their child will fall behind academically if placed in a general
+  classroom.
+- The school has not yet provided a clear rationale for the part-time special education recommendation.
+- The parent wants to feel confident advocating for the option that gives their child the best long-term
+  outcomes.
+- The next IEP meeting is scheduled for two weeks from now.
+reference_flow:
+- step: Acknowledge the question.
+  text: “That’s a great question. Understanding the benefits can help families make informed decisions
+    about supports and educational planning.”
+- step: Explain the educational benefits.
+  text: “Inclusive education gives students opportunities to learn alongside their peers and access the
+    same curriculum, experiences, and expectations whenever appropriate.”
+- step: Explain the social benefits.
+  text: “Students often have greater opportunities to develop friendships, social connections, and a sense
+    of belonging within their school community.”
+- step: Explain the personal benefits.
+  text: “Inclusion can help students build confidence, self-advocacy skills, independence, and a stronger
+    sense of identity.”
+- step: Explain long-term benefits.
+  text: “Experiences of participation and belonging during school can help prepare students for community
+    involvement, employment, post-secondary education, and adult life.”
+- step: Reinforce the broader goal.
+  text: “The goal of inclusive education is not simply academic success. It is helping students participate
+    meaningfully in the same opportunities available to their peers.”
+- step: Suggest next step.
+  text: “Let’s explore how these benefits relate to your child’s current situation.”
+acceptance_criteria:
+- explain the benefits of inclusive education in plain language
+- describe academic, social, emotional, and long-term benefits
+- provide examples of positive outcomes associated with inclusive education
+- explain how inclusion can support belonging, friendships, and participation
+- explain how inclusion can contribute to independence and future opportunities
+- acknowledge that supports are often needed to make inclusion successful
+- avoid presenting inclusion as a guarantee of success
+- provide balanced, evidence-informed information
+- connect benefits to everyday school experiences
+testing_checks:
+- explains multiple categories of benefits
+- uses plain language
+- provides practical examples
+- connects benefits to real-world experiences
+- avoids oversimplification or unrealistic promises
+- reinforces participation and belonging as key outcomes
+guiding_question: Why should I be advocating for inclusion?
+avoid_framing: What does inclusion mean?
+content_required:
+- evidence-informed benefits of inclusive education
+- academic benefits
+- social and relationship benefits
+- emotional and developmental benefits
+- independence and self-advocacy benefits
+- long-term life outcomes associated with participation and belonging
+- examples of inclusive educational practices
+- plain-language explanations suitable for families
+- trusted inclusive education references and research summaries
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 128
+  extracted_at: '2026-10-14'

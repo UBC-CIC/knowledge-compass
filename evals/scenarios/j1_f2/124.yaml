@@ -1,0 +1,110 @@
+story_id: '124'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know if my child is experiencing PDA (not formalized) which results
+  in exclusion so that I can take action.
+situation_summary: A parent notices that their child is regularly missing parts of the school experience,
+  even though they are technically enrolled and attending school. Activities, classes, field trips, or
+  other opportunities are being reduced or restricted, and the parent is unsure whether these exclusions
+  are becoming a form of informal partial day attendance.
+opening_message: My daughter attends school every day, but she keeps missing field trips, assemblies,
+  and certain activities. I’m starting to wonder if something else is going on.
+persona: A mother of a 10-year-old daughter in Grade 5 who has a learning disability and some behavioural
+  supports in place. She works part-time and is engaged but not yet familiar with education rights terminology.
+  She writes in short, plain sentences and tends to understate her worry at first.
+hidden_facts:
+- Her daughter has been excluded from at least four field trips this school year, always with a different
+  short explanation from the teacher.
+- The school has twice called her to pick her daughter up early after assemblies or special events, saying
+  she was 'too dysregulated' to stay.
+- Her daughter is pulled out of gym class about twice a week and sent to sit in the office or a quiet
+  room instead.
+- She was told her daughter cannot join the after-school drama club because staff 'can't supervise her
+  safely' in that setting.
+- The classroom teacher sometimes removes her daughter from group activities and has her do worksheets
+  alone in the hall.
+- Her daughter comes home upset and says she feels left out, but the school keeps saying she is 'doing
+  fine' and 'fully included'.
+- There is an IEP in place but the parent has not seen it updated in over a year and was not invited to
+  a recent review meeting.
+- The parent has not yet put any concerns in writing and has only spoken to the teacher informally by
+  phone.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It’s understandable to be concerned when your child is technically attending school but is not
+    participating in the same experiences as their peers.”
+- step: Explain the concept.
+  text: “Sometimes participation can be reduced without a formal attendance change.”
+- step: Provide examples.
+  text: '“Examples may include: repeated exclusion from field trips; being removed from activities; shortened
+    participation in specific parts of the day; missing classes, events, or opportunities that peers attend”'
+- step: Encourage pattern recognition.
+  text: “A single event may not be significant, but recurring exclusions can affect a student’s educational
+    and social experience.”
+- step: Support reflection.
+  text: '“You may wish to consider: How often is this occurring?; What reasons are being provided?; Are
+    the same opportunities being missed repeatedly?”'
+- step: Encourage documentation.
+  text: “Keeping track of these situations can help identify whether a broader pattern is developing.”
+- step: Suggest next step.
+  text: “Let’s look at the specific situations your child is experiencing and determine whether further
+    questions may be appropriate.”
+acceptance_criteria:
+- help parents recognize forms of exclusion that may resemble partial day attendance
+- explain that participation and attendance are not always the same thing
+- provide examples of common exclusion patterns
+- help parents identify whether exclusions are isolated events or recurring patterns
+- explain how repeated exclusions can impact educational participation
+- encourage parents to document attendance and participation concerns
+- help parents determine whether further clarification from the school may be appropriate
+- avoid assuming all exclusions are intentional or inappropriate
+testing_checks:
+- distinguish attendance from participation
+- help identify patterns
+- encourage documentation
+- avoid jumping to conclusions
+- support informed action
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of participation-based exclusion
+- indicators of informal partial day attendance
+- examples of recurring exclusion patterns
+- impacts of exclusion on learning and belonging
+- participation versus attendance concepts
+- documentation and tracking guidance
+- examples of questions families can ask
+- inclusive education principles related to participation
+- plain-language explanations suitable for parents
+variants:
+- description: field trip exclusions
+  message: My daughter keeps getting left behind when her class goes on field trips. The school always
+    has a reason but it keeps happening. Is this normal?
+- description: repeated early pickups
+  message: The school keeps calling me to pick up my daughter early, maybe once or twice a week. They
+    say she's having a hard time but she's always fine when she gets home. I'm not sure what to think.
+- description: exclusion from specific classes
+  message: My son gets taken out of science and gym pretty regularly. The teacher says it's to help him
+    but he's missing the same classes over and over. Should I be worried?
+- description: exclusion from extracurricular activities
+  message: My daughter wants to join the school's soccer team but the principal said it wouldn't be a
+    good fit for her. She's the only one who wasn't allowed to try out. That doesn't seem right.
+- description: repeated removal from activities
+  message: My son gets removed from activities a lot during the day, like art or group projects, and ends
+    up sitting alone or doing something else. It happens almost every day now.
+- description: attendance without meaningful participation
+  message: My daughter is at school every single day but when I ask her what she did she says she just
+    sat at a table by herself or watched. She's there but it doesn't sound like she's really part of anything.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 124
+  extracted_at: '2026-10-14'

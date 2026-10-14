@@ -1,0 +1,88 @@
+story_id: '212'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to make sure my child is getting credits so they can graduate.
+situation_summary: A student is progressing through school and participating in courses or programs, but
+  the parent is unsure whether their child is earning the credits needed to graduate. They want to understand
+  how graduation requirements work and whether current educational decisions could affect future graduation
+  opportunities.
+opening_message: My daughter is doing well in school, but I’m not sure if the courses she’s taking count
+  toward graduation.
+persona: A mother of a 16-year-old daughter in Grade 11 with a learning disability and an IEP. She is
+  engaged and proactive about her daughter's education but finds the credit and graduation system confusing.
+  She writes in a warm, conversational tone and often second-guesses whether she is asking the right questions.
+hidden_facts:
+- Her daughter has an IEP and some courses are modified, not just accommodated.
+- The school has not clearly explained the difference between modified and regular credits.
+- Her daughter is currently taking four courses, but the parent isn't sure which ones count toward the
+  Ontario Secondary School Diploma.
+- The parent recently heard from another parent that modified courses may not count as compulsory credits.
+- Her daughter wants to attend college after high school.
+- The parent has never been told about the Ontario Secondary School Diploma requirements or the 30-credit
+  threshold.
+- The school's last IEP meeting did not include any discussion of a graduation pathway or transition plan.
+- The parent is worried that if she waits too long to ask, her daughter will miss the chance to switch
+  to courses that do count.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many parents are surprised to learn that not all educational pathways lead to the same graduation
+    outcomes.”
+- step: Explain the concept.
+  text: “Graduation requirements are typically based on earning specific credits and completing required
+    courses.”
+- step: Explain why it matters.
+  text: “Understanding how credits are earned can help families ensure that future options remain available.”
+- step: Encourage clarification.
+  text: '“You may wish to ask: Is my child earning graduation credits?; Which graduation pathway are they
+    currently following?; Are there any courses or requirements we should be aware of?; How will current
+    decisions affect future graduation options?”'
+- step: Connect to planning.
+  text: “Regularly reviewing graduation progress can help identify concerns early, before important opportunities
+    are lost.”
+- step: Reinforce the bigger picture.
+  text: “Graduation planning is not just about finishing school. It can also influence access to future
+    education, training, employment, and community opportunities.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s current courses and what graduation requirements may apply.”
+acceptance_criteria:
+- explain how credits contribute to graduation requirements
+- help parents understand the difference between courses that earn credits and those that may not
+- explain common graduation pathways
+- help parents identify questions they can ask about their child’s progress toward graduation
+- explain how modifications, alternate programs, or pathway changes may affect credit accumulation
+- encourage regular review of graduation progress
+- help parents understand how course selection decisions connect to graduation goals
+- avoid making graduation determinations without sufficient information
+testing_checks:
+- explains credits and graduation requirements clearly
+- connects credits to future opportunities
+- encourages proactive graduation planning
+- identifies useful questions for families
+- avoids making assumptions about a student’s graduation status
+- helps parents understand the impact of educational pathway decisions
+guiding_question: Is my child on track to graduate and keep future options available?
+avoid_framing: Will my child graduate?
+content_required:
+- graduation requirements and pathways
+- credit accumulation concepts
+- required and elective course structures
+- modified and alternate program information
+- course-to-credit relationships
+- transition planning concepts
+- post-secondary and employment pathway considerations
+- questions families can ask about graduation planning
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 212
+  extracted_at: '2026-10-14'

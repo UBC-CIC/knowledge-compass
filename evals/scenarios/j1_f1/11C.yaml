@@ -1,0 +1,110 @@
+story_id: 11C
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know what to do based on the school’s response (e.g. partial compliance,
+  vague response, delays) so I can continue moving forward.
+situation_summary: A parent receives a response from the school, but the issue remains unresolved. The
+  response may be vague, incomplete, delayed, or only partially address the parent’s concerns, leaving
+  them uncertain about what to do next.
+opening_message: The principal said they would review the situation and get back to me, but that was three
+  weeks ago.
+persona: A single mother of a 9-year-old son in Grade 4 who has autism and an IEP. She works part-time
+  and finds the school system confusing and hard to navigate. She writes in short, direct sentences and
+  sometimes sounds frustrated but stays polite.
+hidden_facts:
+- Her son has been sent home after lunch every day for the past six weeks due to what the school calls
+  'behavioural concerns in the afternoon.'
+- She first emailed the principal three weeks ago asking for a meeting and a written explanation of the
+  reduced schedule.
+- The principal replied once by phone saying they would 'look into it and follow up,' but has not contacted
+  her since.
+- Her son's IEP includes afternoon programming goals that are not being worked on because he is not there.
+- She has kept a personal log of every early pickup with dates and times.
+- A resource teacher told her informally that there simply isn't enough EA support in the afternoons,
+  but nothing was put in writing.
+- She has not yet contacted the school board or any outside advocate.
+- She wants her son back in school full days and wants a clear written plan for how that will happen.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like the school has responded, but the issue has not yet been resolved.”
+- step: Clarify the response.
+  text: “Did they provide a timeline or explain what would happen next?”
+- step: Categorize the response.
+  text: “This may be an example of a delayed response, where some action was promised but no follow-up
+    has occurred.”
+- step: Explain the implication.
+  text: “While the school has not denied your request, you may still need additional information before
+    you know whether progress is being made.”
+- step: Suggest follow-up questions.
+  text: '“You may wish to ask: Has a decision been made?; What is the current status?; When can I expect
+    an update?; Is there anything further you need from me?”'
+- step: Encourage documentation.
+  text: “Keep a record of commitments, timelines, and follow-up conversations.”
+- step: Recommend next step.
+  text: “A reasonable next step would be to follow up on the commitment and request a specific update.”
+acceptance_criteria:
+- 'recognize when a school response does not fully resolve the issue help the parent interpret different
+  types of responses distinguish between:'
+- o partial compliance
+- o vague responses
+- o delayed actions
+- o requests for additional information
+- o commitments without timelines
+- explain what information may still be missing suggest appropriate follow-up questions
+- help the parent determine whether progress is being made recommend logical next steps based on the type
+  of response received encourage documentation and ongoing follow-up
+- avoid assuming bad intent by the school
+testing_checks:
+- identify the response type
+- explain what it means
+- identify gaps or unanswered questions
+- suggest constructive next steps
+- support continued progress without escalating prematurely
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of common school responses
+- examples of partial compliance scenarios
+- examples of vague or ambiguous responses
+- examples of delayed responses
+- examples of commitments without timelines
+- guidance on evaluating progress
+- examples of effective follow-up questions
+- communication and documentation best practices
+- indicators that escalation may eventually be required
+variants:
+- description: partially fulfills a request
+  message: The school said they'll let my son stay for part of the afternoon now, until 2pm instead of
+    noon. But his day still ends an hour before everyone else and no one has explained why that's okay.
+- description: provides an unclear answer
+  message: I finally heard back from the principal but her email just said they are 'committed to supporting
+    all learners' and are 'exploring options.' I have no idea what that actually means for my son.
+- description: promises future action
+  message: The vice principal called and said they're putting together a plan and will have something
+    for me by the end of the month. That's still two weeks away. What am I supposed to do in the meantime?
+- description: requests more information
+  message: The school asked me to fill out a questionnaire about my son's routines and triggers at home.
+    I don't mind helping but I'm not sure why that's needed before they let him stay the full day.
+- description: delays a decision
+  message: I emailed the principal two weeks ago asking why my son keeps getting sent home early. She
+    replied saying she needs more time to consult with the team before she can give me an answer.
+- description: offers an alternative solution
+  message: The school is suggesting my son attend a different program across town that runs shorter hours
+    and is 'designed for kids like him.' I don't want to change schools. I just want him supported where
+    he is.
+- description: implements only part of a support plan
+  message: They finally shared an updated plan but it only covers the morning. There's nothing in it about
+    what happens after lunch, which is exactly when the problems are occurring.
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11C
+  extracted_at: '2026-10-14'

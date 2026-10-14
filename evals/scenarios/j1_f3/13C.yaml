@@ -1,0 +1,87 @@
+story_id: 13C
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know what to bring to a school meeting so that I am prepared for the
+  meeting.
+situation_summary: A parent has an upcoming meeting with the school regarding their child’s education,
+  supports, accommodations, participation, or inclusion. They want to feel prepared and organized but
+  are unsure what information, documents, questions, or notes they should bring to help make the meeting
+  productive.
+opening_message: I have a meeting with the school next week. What should I bring?
+persona: A mother of a 9-year-old son in Grade 4 who has autism and an IEP. She is organized but unfamiliar
+  with education law and tends to write in short, direct sentences. She wants to do the right thing for
+  her son but feels out of her depth when dealing with the school system.
+hidden_facts:
+- The meeting was requested by the school after her son was sent home early three times in the past month.
+- The school has suggested reducing her son's school day to a half-day schedule going forward.
+- Her son currently has an IEP that includes a behaviour support plan and one-on-one EA support.
+- She is not sure whether the EA has been consistently present — she suspects not.
+- The school told her verbally that the reduced schedule is 'temporary' but has not put anything in writing.
+- She has been keeping informal notes on her phone about each early pickup but has not organized them.
+- She wants the school to keep her son on a full-day schedule with proper supports in place.
+- She has not yet spoken to anyone outside the school about her rights or options.
+reference_flow:
+- step: Clarify the meeting purpose.
+  text: '“What is the meeting about? For example: supports and accommodations; behaviour concerns; partial
+    day attendance; transition planning; course selection; IEP review”'
+- step: Suggest common items.
+  text: '“Many parents find it helpful to bring: recent school communications; notes or concerns; questions
+    they want answered; relevant assessments or reports; support plans or IEP documents; a notebook or
+    device for taking notes”'
+- step: Encourage goal-setting.
+  text: '“Before the meeting, it can help to identify: what outcome you hope to achieve; decisions that
+    need clarification; concerns you want addressed”'
+- step: Discuss support people.
+  text: “You may also wish to consider whether someone should attend with you to provide support or take
+    notes.”
+- step: Suggest documentation.
+  text: “Bringing a timeline of important events or previous conversations can also be helpful.”
+- step: Reinforce preparation.
+  text: “Preparation often helps parents feel more confident and ensures important topics are not forgotten.”
+- step: Generate a custom checklist.
+  text: “Based on the purpose of your meeting, here’s a personalized preparation checklist.”
+acceptance_criteria:
+- help parents identify information that may be useful for a meeting
+- explain how preparation can support productive discussions
+- provide a checklist of commonly useful documents and materials
+- help parents identify questions they may wish to ask
+- encourage parents to clarify their goals before the meeting
+- suggest ways to organize notes and documentation
+- help parents determine whether additional support people should attend
+- tailor recommendations based on the purpose of the meeting when possible
+- present information in a simple, easy-to-follow format
+testing_checks:
+- asks about the purpose of the meeting
+- generates relevant preparation suggestions
+- provides practical checklists
+- encourages goal-setting
+- suggests documentation and note-taking
+- supports involving additional attendees
+- adapts recommendations to different meeting types
+guiding_question: Am I ready for this meeting?
+avoid_framing: What should I do during the meeting?
+content_required:
+- common school meeting types
+- IEP and support-planning documents
+- accommodation and inclusion planning materials
+- examples of meeting preparation checklists
+- documentation and note-taking practices
+- examples of meeting goals and questions
+- guidance on involving support people
+- examples of relevant reports and records
+- meeting follow-up practices
+- plain-language preparation guidance
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13C
+  extracted_at: '2026-10-14'

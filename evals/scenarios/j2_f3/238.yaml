@@ -1,0 +1,99 @@
+story_id: '238'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what the roadblocks that I might face so that I can be prepared
+  to ask the right questions.
+situation_summary: A parent is preparing for an educational transition and wants to understand the practical
+  obstacles, barriers, and process-related issues that families commonly encounter. They want to anticipate
+  these roadblocks so they can ask informed questions, participate effectively, and avoid being caught
+  off guard by decisions or delays.
+opening_message: What kinds of obstacles should I expect during this transition?
+persona: A mother of a 12-year-old daughter with an intellectual disability and anxiety who is moving
+  from an elementary resource program into middle school. She is thoughtful and organized, types in short
+  practical sentences, and wants to feel prepared rather than reactive at meetings.
+hidden_facts:
+- Her daughter's current school has not yet scheduled a formal transition meeting, even though the move
+  to middle school is less than four months away.
+- The receiving middle school has a different model for in-class support than the elementary school, and
+  the mother has heard it relies more heavily on EAs than on resource teachers.
+- Her daughter's current IEP goals have not been updated in over a year and the mother is worried they
+  won't reflect her daughter's current needs.
+- The mother attended one transition meeting for an older child years ago and felt the decisions had already
+  been made before she arrived.
+- She has heard from another parent that the middle school sometimes places students with disabilities
+  in a self-contained class without fully explaining the alternative options.
+- She is unsure whether her daughter's anxiety diagnosis is documented in a way that will follow her to
+  the new school.
+- She wants to know if she has the right to request a placement review if she disagrees with where her
+  daughter is placed.
+- She is worried about timing — she doesn't know when decisions get locked in and whether she will have
+  enough time to push back if needed.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families encounter similar challenges during transitions. Knowing what to look for can help
+    you identify concerns early.”
+- step: Explain the purpose.
+  text: “Roadblocks are not always intentional. They often result from communication gaps, unclear responsibilities,
+    competing priorities, or lack of planning.”
+- step: Provide examples.
+  text: Common Transition Roadblocks transition planning starts too late; important stakeholders are not
+    involved; information is not shared between schools; expectations are lowered without discussion;
+    pathway decisions are made before alternatives are explored; support discussions focus only on logistics
+    rather than future opportunities; families are unaware of important timelines; responsibilities are
+    unclear between current and future educators
+- step: Identify questions.
+  text: '“You may wish to ask: o Who is responsible for coordinating this transition? o What decisions
+    will be made and when? o Who needs to be involved? o What information is being shared? o What opportunities
+    might be affected by these decisions?”'
+- step: Explain warning signs.
+  text: “If decisions appear to be occurring without discussion, if planning is delayed, or if future
+    opportunities are not being considered, additional questions may be helpful.”
+- step: Reinforce preparation.
+  text: “Most roadblocks are easier to address when they are identified early rather than after decisions
+    have already been made.”
+- step: Suggest next step.
+  text: “Let’s look at your upcoming transition and identify the roadblocks families commonly encounter.”
+acceptance_criteria:
+- identify common process-related roadblocks families encounter during transitions
+- explain how those roadblocks can affect educational opportunities and planning
+- help parents recognize early warning signs
+- provide examples of questions that can help uncover potential issues
+- explain strategies families commonly use to address roadblocks
+- distinguish between normal transition activities and situations that may require follow-up
+- encourage proactive participation in planning
+- present information in a practical, family-friendly format
+testing_checks:
+- identifies realistic roadblocks
+- distinguishes roadblocks from educational challenges
+- provides practical questions families can ask
+- encourages proactive planning
+- explains warning signs clearly
+- avoids creating unnecessary concern
+- focuses on preparation and navigation
+guiding_question: What obstacles might prevent this transition from going smoothly?
+avoid_framing: Who is causing the problem?
+content_required:
+- transition-planning frameworks
+- common transition barriers and failure points
+- communication and coordination challenges
+- educational pathway decision points
+- inclusive education principles
+- transition meeting practices
+- roles and responsibilities during transitions
+- examples of successful transition planning
+- warning signs and risk indicators
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 238
+  extracted_at: '2026-10-14'

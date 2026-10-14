@@ -1,0 +1,109 @@
+story_id: 11D
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know how to appeal the school’s decision so I can advocate for my child
+  to attend full time.
+situation_summary: A parent has tried to work collaboratively with the school, sought clarification, and
+  explored possible solutions, but the issue remains unresolved. They believe the school’s decision is
+  negatively impacting their child and want to understand what options are available to formally challenge
+  or review the decision.
+opening_message: I’ve met with the school several times and they still won’t return my son to full-time
+  attendance. What do I do now?
+persona: A mother of a 10-year-old son in Grade 5 who has a developmental disability and an IEP. She has
+  been dealing with the school for several months and is frustrated but composed. She writes in short,
+  direct sentences and occasionally uses informal phrasing.
+hidden_facts:
+- The school began sending her son home after lunch about four months ago, citing staffing shortages and
+  behaviour concerns.
+- She has had at least four formal meetings with the principal and vice-principal, plus several informal
+  conversations with the classroom teacher.
+- The school provided a written letter two months ago stating the reduced schedule is a 'temporary measure'
+  but has not reversed it.
+- She has kept a personal log of dates and times her son was sent home, and saved all emails with the
+  school.
+- Her son's IEP does not mention a reduced schedule or authorize partial-day attendance.
+- A school board consultant attended one meeting but offered no concrete resolution.
+- She has not yet contacted the school board directly or filed any formal complaint.
+- She wants her son back in school full time and is willing to escalate but does not know what the formal
+  process looks like.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like you’ve made several attempts to resolve the issue and still have significant concerns
+    about the decision.”
+- step: Assess readiness.
+  text: “Have you received the school’s decision and rationale in writing, and have you had an opportunity
+    to discuss your concerns with the school team?”
+- step: Explain the purpose of an appeal.
+  text: “An appeal or review process is typically used when a parent believes a decision should be reconsidered
+    and normal discussions have not resolved the issue.”
+- step: Identify preparation steps.
+  text: '“Before proceeding, it may be helpful to organize: meeting notes; written decisions; emails and
+    correspondence; support plans and relevant documentation”'
+- step: Explain the process.
+  text: “Appeal processes vary, but often involve a review by another level within the education system.”
+- step: Encourage informed action.
+  text: “Understanding the process and preparing your information can help you advocate more effectively.”
+- step: Suggest next step.
+  text: “Let’s identify what documentation you already have and what information may still be missing.”
+acceptance_criteria:
+- help the parent understand what an appeal or review process is
+- explain common situations where an appeal may be appropriate
+- help the parent determine whether reasonable attempts at resolution have already been made
+- identify information and documentation that may support an appeal
+- explain the typical stages of a review or appeal process
+- help parents understand who may be involved at different levels of review
+- suggest questions parents may wish to ask before initiating an appeal
+- encourage organized documentation and evidence gathering
+- explain that appeal processes may vary by jurisdiction
+- avoid providing legal advice or guaranteeing outcomes
+testing_checks:
+- explain appeals in plain language
+- help parents assess readiness
+- identify supporting documentation
+- encourage preparation and organization
+- avoid legal advice
+- avoid positioning appeals as adversarial
+guiding_question: null
+avoid_framing: null
+content_required:
+- plain-language explanation of appeals and reviews
+- common reasons families seek appeals
+- examples of attendance-related disputes
+- examples of documentation that may support an appeal
+- escalation pathways within education systems
+- examples of evidence and records families may gather
+- communication templates and preparation guidance
+- jurisdiction-specific appeal information where available
+- guidance on organizing information and timelines
+variants:
+- description: the parent has attempted multiple discussions
+  message: I've talked to the principal at least four times now and nothing changes. My son is still only
+    going to school half days. Is there a next step I can take?
+- description: written decisions have been received
+  message: The school sent me a letter saying the reduced hours are temporary, but that was two months
+    ago and nothing has changed. What can I do to formally challenge this?
+- description: documentation exists
+  message: I have a log of every day my son was sent home early and all the emails I saved. The school
+    still won't budge. Where do I go from here?
+- description: documentation is incomplete
+  message: I've been keeping some notes but I don't have everything written down perfectly. The school
+    is still refusing full-time attendance. Can I still appeal or do something formal?
+- description: the parent is considering escalation for the first time
+  message: I haven't done anything official yet but I'm starting to think I need to. The school just keeps
+    saying the same things. Is there a way to formally push back?
+- description: the parent is unsure whether appeal is appropriate
+  message: I'm not sure if I even have the right to appeal this or if that's even the right word for it.
+    I just know the school won't change anything and I need to do something more.
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11D
+  extracted_at: '2026-10-14'

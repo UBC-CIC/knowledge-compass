@@ -1,0 +1,89 @@
+story_id: '129'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know the supporting research for inclusive ed so that I can be more
+  informed.
+situation_summary: A parent has learned about inclusive education and understands its potential benefits
+  but wants to know whether these ideas are supported by evidence. They want confidence that the recommendations
+  being made are based on research and proven practices rather than personal opinions or educational trends.
+opening_message: People keep telling me inclusion is important. Is there actually research that supports
+  it?
+persona: A parent of a child with a developmental disability in Grade 3 who has recently started learning
+  about inclusive education after their child's school suggested a segregated placement. They ask questions
+  thoughtfully and want to understand the "why" behind recommendations before acting on them. They write
+  in clear, measured sentences.
+hidden_facts:
+- Their child has an autism diagnosis and mild intellectual disability.
+- The school proposed moving the child to a self-contained special education class full-time.
+- A friend and a community advocate both told the parent that inclusion is better, but neither cited specific
+  studies.
+- The parent has not yet responded to the school's proposal and wants to feel informed before the next
+  meeting.
+- They are worried that inclusion might just be an ideology or a trend rather than something backed by
+  data.
+- They would feel more confident pushing back on the school's proposal if they knew research supported
+  their position.
+- They have a meeting with the school principal and resource teacher scheduled in about two weeks.
+- They have not yet consulted an advocate or special education lawyer.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Yes. Inclusive education has been studied extensively around the world for several decades.”
+- step: Summarize the evidence.
+  text: “Research generally shows that inclusive education can support academic achievement, social participation,
+    belonging, and long-term outcomes when appropriate supports are in place.”
+- step: Highlight key findings.
+  text: '“Common themes found in the research include: improved opportunities for participation; stronger
+    social connections; increased access to learning opportunities; better long-term community inclusion”'
+- step: Explain nuance.
+  text: “Research also shows that successful inclusion requires planning, supports, and ongoing collaboration.”
+- step: Provide trusted sources.
+  text: “Organizations such as UNESCO, the United Nations, and many educational researchers have contributed
+    to the evidence base supporting inclusive education.”
+- step: Offer deeper exploration.
+  text: “If you’re interested, I can provide summaries of specific studies or sources.”
+- step: Suggest next step.
+  text: “Let’s explore which aspects of inclusive education are most relevant to your child’s situation.”
+acceptance_criteria:
+- explain that inclusive education is supported by decades of research and practice
+- summarize research findings in plain language
+- present evidence in a way that is understandable to non-experts
+- identify key themes and conclusions rather than overwhelming parents with academic detail
+- provide references to credible sources and research organizations
+- explain where research findings are broadly consistent
+- distinguish evidence from opinion
+- allow parents to explore more detailed sources if desired
+- avoid presenting research in a biased or adversarial manner
+testing_checks:
+- explains research in plain language
+- provides balanced summaries
+- cites credible sources
+- distinguishes evidence from opinion
+- avoids academic jargon
+- allows users to explore additional detail if desired
+guiding_question: How do we know inclusive education works?
+avoid_framing: What does a research paper say?
+content_required:
+- major research findings related to inclusive education
+- plain-language summaries of research
+- UNESCO guidance and reports
+- CRPD Article 24 context and supporting resources
+- Canadian and international inclusive education research
+- evidence related to academic outcomes
+- evidence related to social participation and belonging
+- evidence related to long-term outcomes
+- references and citations to trusted sources
+- summaries suitable for families rather than researchers
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 129
+  extracted_at: '2026-10-14'

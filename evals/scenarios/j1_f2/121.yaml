@@ -1,0 +1,87 @@
+story_id: '121'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want the system to recognize and clearly explain my situation (e.g., partial
+  day attendance) so I understand what is happening.
+situation_summary: A parent has been told their child can only attend school for part of the day, but
+  they are unfamiliar with the term “partial day attendance” and are unsure whether what is happening
+  is normal, appropriate, temporary, or something they should be concerned about.
+opening_message: The school says my daughter can only attend mornings. Is this partial day attendance?
+persona: A mother of a 7-year-old daughter in Grade 2 who has recently started at a new school. She is
+  soft-spoken and polite but clearly anxious, and tends to ask short, direct questions. Her daughter has
+  some sensory sensitivities but no formal diagnosis yet.
+hidden_facts:
+- The school told her verbally — no written notice — that her daughter should only come in for mornings,
+  starting this week.
+- The school's stated reason is that her daughter gets 'overwhelmed' in the afternoons and it is 'better
+  for everyone.'
+- This schedule was not requested by the parent and was not discussed in advance.
+- There is no IEP or formal support plan in place for her daughter.
+- The parent was not told how long this arrangement is supposed to last.
+- The parent has not yet asked for anything in writing.
+- She has accepted the arrangement so far because she did not want to seem difficult.
+- She is unsure whether this is something all schools do or whether it is specific to her daughter's situation.
+reference_flow:
+- step: Define the concept.
+  text: “Partial day attendance occurs when a student attends school for less than the full school day.”
+- step: Clarify the context.
+  text: “Sometimes reduced attendance is requested by families. In other situations, the school initiates
+    the reduced schedule.”
+- step: Explain the situation.
+  text: “When the school limits attendance because it believes it cannot currently support full participation,
+    this is often referred to as involuntary partial day attendance.”
+- step: Provide examples.
+  text: '“Examples may include: attending mornings only; attending afternoons only; attending certain
+    days of the week; being sent home regularly before the end of the day”'
+- step: Explain why it matters.
+  text: “Understanding partial day attendance can help you ask informed questions about supports, accommodations,
+    and plans for returning to full-time participation.”
+- step: Reinforce learning.
+  text: “Knowing what the situation is called can make it easier to understand your options and advocate
+    effectively.”
+- step: Suggest next step.
+  text: “Let’s explore why your child’s attendance was reduced and what information may help you move
+    forward.”
+acceptance_criteria:
+- explain partial day attendance in plain, parent-friendly language
+- distinguish between voluntary and involuntary partial day attendance
+- provide examples of what partial day attendance may look like in practice
+- explain common reasons schools may implement partial day attendance
+- help parents understand how partial day attendance can affect a child’s education and participation
+- explain why understanding the concept is important when discussing supports and accommodations
+- avoid educational jargon wherever possible
+- provide links or references to trusted supporting resources
+testing_checks:
+- provides a clear definition of partial day attendance
+- explains involuntary partial day attendance
+- distinguishes between family-requested and school-imposed reductions
+- provides understandable examples
+- avoids technical or policy-heavy language
+- helps parents understand why the concept matters
+guiding_question: What does partial day attendance mean?” … before moving into more advanced discussions
+  about rights, advocacy, and escalation.
+avoid_framing: null
+content_required:
+- definition of partial day attendance
+- definition of involuntary partial day attendance
+- distinction between voluntary and involuntary reduced schedules
+- common attendance reduction scenarios
+- examples from elementary, middle, and high school settings
+- impacts of reduced attendance on learning, participation, and social inclusion
+- plain-language explanations suitable for families
+- trusted inclusive education resources and references
+- common terminology used by schools and education systems
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 121
+  extracted_at: '2026-10-14'

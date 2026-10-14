@@ -1,0 +1,107 @@
+story_id: '112'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know why my child was sent home so that I can support them to receive
+  their accommodations.
+situation_summary: A parent has been told their child cannot attend school for the full day and wants
+  to understand the specific reasons behind the school’s decision.
+opening_message: The school keeps sending my daughter home after lunch because they say she can’t stay
+  regulated for the full day.
+persona: A mother of a 9-year-old daughter in Grade 4 who has autism and sensory processing differences.
+  She works part-time and is frustrated but trying to stay calm and cooperative with the school. She writes
+  in short, direct sentences and sometimes uses everyday language to describe her daughter's disability-related
+  needs.
+hidden_facts:
+- The school has been sending her daughter home after lunch 3–4 times a week for the past month.
+- The school's stated reason has changed — first it was 'dysregulation,' then 'safety,' and most recently
+  'staffing.'
+- Her daughter has an IEP that includes sensory breaks, a quiet space, and EA support for the full school
+  day.
+- The EA assigned to her daughter was recently moved to cover another classroom in the afternoons.
+- The school has not provided anything in writing about the early dismissals.
+- The parent has had two brief hallway conversations with the vice-principal but no formal meeting.
+- Her daughter has not had any serious incidents — no injuries, no property damage.
+- The parent wants to understand the real reason so she can figure out whether the school is actually
+  following the IEP.
+reference_flow:
+- step: Clarify the reason.
+  text: “It sounds like the school believes your child is experiencing challenges that make it difficult
+    to participate for the full school day.”
+- step: Explore understanding.
+  text: “Has the school explained specifically what is happening and what supports have been tried?”
+- step: Explain possible categories.
+  text: “Schools often cite reasons such as behaviour, safety concerns, staffing limitations, lack of
+    specialized supports, transportation challenges, or unmet accommodation needs.”
+- step: Help identify gaps.
+  text: “Do you know whether the school has provided this information in writing or discussed what accommodations
+    were attempted before reducing attendance?”
+- step: Reframe toward problem-solving.
+  text: “Understanding the exact reason is important because different situations may require different
+    supports, accommodations, or follow-up actions.”
+- step: Offer next step.
+  text: “Let’s identify what information you may still need from the school.”
+acceptance_criteria:
+- help the parent identify the reason(s) provided by the school
+- distinguish between observed behaviours, support needs, staffing limitations, safety concerns, transportation
+  issues, and other factors
+- explain the reason in plain language
+- help the parent understand whether the reason relates to accommodations, supports, or school capacity
+- identify information that may be missing or unclear
+- suggest questions the parent may wish to ask the school to better understand the situation
+- avoid making assumptions or assigning blame
+- provide guidance that helps the parent move toward resolving the issue
+testing_checks:
+- help clarify the reason
+- avoid blame
+- encourage fact-finding and documentation
+- direct the parent toward the next logical step
+guiding_question: null
+avoid_framing: null
+content_required:
+- common reasons schools cite for reduced attendance
+- examples of behaviour-related concerns
+- examples of accommodation-related concerns
+- examples of staffing and resource limitations
+- examples of safety-related concerns
+- examples of transportation-related concerns
+- plain-language explanations of each category
+- common questions families should ask to better understand the school’s reasoning
+- information about accommodations and support plans
+- indicators that the stated reason may be incomplete or unclear
+variants:
+- description: behavioural concerns
+  message: The school keeps calling me to pick up my son early because they say his behaviour gets too
+    hard to manage in the afternoon. They haven't really explained what's happening or what they're doing
+    about it.
+- description: lack of EA support
+  message: They told me my daughter can't stay for the full day because there's no one available to support
+    her in the afternoon. I don't really understand why that means she has to go home.
+- description: lack of nursing support
+  message: My son has a nurse who comes in to help with his medical needs but apparently she's only there
+    in the mornings, so the school says he can't stay after lunch. I want to know if that's actually a
+    valid reason to send him home.
+- description: safety concerns
+  message: The school says keeping my daughter for the full day is a safety risk but they won't tell me
+    exactly what they mean. I don't know what she's supposedly doing that makes her unsafe.
+- description: transportation issues
+  message: My son's bus only runs in the morning so the school said he can only attend half days. I'm
+    not sure if that's really a transportation problem or if there's something else going on.
+- description: unclear explanations from the school
+  message: The school keeps telling me my daughter 'isn't ready' for a full day but nobody will explain
+    what that actually means or what would need to change. I feel like I'm getting the runaround.
+- description: multiple contributing factors
+  message: They've mentioned behaviour, not enough staff, and something about safety all at different
+    times. I can't figure out what the real reason is for why my son keeps getting sent home early.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 112
+  extracted_at: '2026-10-14'

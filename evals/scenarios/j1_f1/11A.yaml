@@ -1,0 +1,101 @@
+story_id: 11A
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know what to do if the school does not respond so I can continue to
+  follow up and get a response. (persistence).
+situation_summary: A parent has asked the school for information, clarification, documentation, or support,
+  but days or weeks have passed without a response. They are unsure whether to wait longer, follow up
+  again, or escalate the issue, and don’t want the situation to stall.
+opening_message: I emailed the principal two weeks ago asking why my daughter is only attending mornings
+  and nobody has replied.
+persona: A mother of a Grade 2 girl with autism and sensory processing needs, living in a mid-sized Canadian
+  city. She is polite but increasingly anxious, and writes in short, direct sentences with occasional
+  grammatical informality. She is not familiar with special education law but is persistent and organized.
+hidden_facts:
+- She emailed the principal 14 days ago asking why her daughter is only allowed to attend mornings.
+- She has not received any reply — not even an acknowledgment.
+- Her daughter has been on a half-day schedule for about six weeks without any written explanation.
+- The school verbally told her it was a 'transition plan' but never put anything in writing.
+- She followed up once by phone and left a voicemail that was also not returned.
+- Her daughter has an IEP, and the parent does not believe a reduced schedule was ever discussed or agreed
+  to in it.
+- She wants a written explanation and a meeting to discuss returning her daughter to full days.
+- She is worried that continuing to wait will mean more weeks of missed school.
+reference_flow:
+- step: Acknowledge the frustration.
+  text: “That can be frustrating, especially when you’re trying to understand an important decision affecting
+    your child.”
+- step: Clarify timing.
+  text: “How long has it been since your original request, and have you sent any follow-up messages?”
+- step: Normalize the situation.
+  text: “In some situations, schools may be delayed in responding, but it’s reasonable to continue seeking
+    clarification.”
+- step: Recommend a follow-up.
+  text: “A respectful follow-up message is often the next best step.”
+- step: Provide sample wording.
+  text: '“For example: ‘I’m following up on my previous request regarding my child’s attendance. I would
+    appreciate an update when you have an opportunity.’”'
+- step: Encourage documentation.
+  text: “Keep copies of your emails and note when follow-up requests were sent.”
+- step: Explain future options.
+  text: “If repeated attempts do not result in a response, there may be additional steps available to
+    help move the conversation forward.”
+- step: Suggest next step.
+  text: “Let’s review who has been contacted and determine the most appropriate follow-up.”
+acceptance_criteria:
+- recognize when a parent has not received a response from the school
+- help the parent determine whether a reasonable amount of time has passed
+- explain that lack of response does not necessarily mean the issue has been rejected or resolved
+- provide guidance on appropriate follow-up actions
+- suggest respectful follow-up language parents can use
+- help parents document follow-up attempts
+- explain when additional follow-up may be appropriate
+- identify situations where escalation may eventually be considered
+- encourage persistence while maintaining a collaborative tone
+testing_checks:
+- encourage persistence
+- suggest reasonable next actions
+- support documentation
+- maintain a respectful and collaborative tone
+- avoid prematurely recommending escalation
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of common school communication timelines
+- examples of respectful follow-up language
+- guidance on documenting communication attempts
+- examples of communication logs
+- indicators that follow-up may be appropriate
+- examples of communication pathways within school systems
+- guidance on maintaining collaborative relationships during follow-up
+- examples of situations where escalation may eventually be considered
+variants:
+- description: no response has been received
+  message: Hi, I reached out to my daughter's teacher and the vice principal about her shortened school
+    day and haven't heard anything back at all. Not sure what to do next.
+- description: only a partial response has been received
+  message: I emailed the school about my son's reduced hours and the secretary replied saying someone
+    would get back to me — but that was 10 days ago and nothing since.
+- description: significant time has passed
+  message: It's been almost a month since I first asked the school why my daughter is only doing half
+    days. Still no real answer. Is there a point where I should be doing something more?
+- description: multiple follow-ups have already occurred
+  message: I've emailed twice and called once about my son being sent home every day after lunch. Every
+    time I'm told someone will follow up. Nobody ever does. What are my options?
+- description: different school staff have been contacted
+  message: I contacted my daughter's teacher, then the vice principal, and then the main office about
+    her partial days. Each person says it's someone else's area. I don't know who is actually supposed
+    to answer me.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11A
+  extracted_at: '2026-10-14'

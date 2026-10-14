@@ -1,0 +1,94 @@
+story_id: '236'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what to expect at each “stage” so that my child has an inclusive
+  education.
+situation_summary: A student is moving through different stages of the education system and the parent
+  is unsure what transition planning activities, supports, meetings, decisions, and opportunities should
+  occur at each stage. They want to understand what a well-planned and inclusive transition process should
+  look like so they can identify gaps and advocate effectively.
+opening_message: My daughter is moving to high school. What should I expect the school to do during the
+  transition?
+persona: A mother of a 14-year-old daughter with an intellectual disability and autism who is finishing
+  Grade 8 and moving to high school next year. She is engaged and proactive but unfamiliar with the formal
+  transition planning process. She writes in a warm, conversational tone with short sentences and occasional
+  run-ons.
+hidden_facts:
+- Her daughter has an IEP that has been in place since Grade 2.
+- The current school has not yet scheduled any transition meeting or mentioned one to the parent.
+- The parent has heard from another family that a transition plan should be started in Grade 7 or 8 but
+  is unsure if that happened.
+- The daughter's main goals are to make friends, participate in classes with her peers, and eventually
+  work in the community.
+- The parent is worried about losing the support staff her daughter currently has when she moves schools.
+- The receiving high school has not contacted the family at all yet.
+- The parent wants to know whether her daughter will be placed in a regular classroom or a separate program.
+- The parent is unsure what questions she should be asking or what meetings she has a right to attend.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Understanding what should happen during a transition can help families participate more confidently
+    and identify important planning opportunities.”
+- step: Explain the principle.
+  text: “Transition planning is intended to help students move successfully between stages while maintaining
+    learning, inclusion, supports, and future opportunities.”
+- step: Provide a stage-based roadmap.
+  text: Elementary → Middle School transition discussions begin; student strengths and supports are reviewed;
+    receiving educators receive information; inclusion and participation plans are discussed Middle School
+    → High School pathway planning discussions; course selection; graduation planning; employment and
+    future planning conversations High School → Post-Secondary / Community transition-to-adulthood planning;
+    employment preparation; community participation planning; post-secondary exploration; adult service
+    discussions
+- step: Connect to inclusion.
+  text: “At each stage, planning should support learning, participation, belonging, and future opportunities.”
+- step: Identify warning signs.
+  text: “Families may wish to ask questions if planning is occurring very late, important stakeholders
+    are missing, or future opportunities are not being discussed.”
+- step: Reinforce preparation.
+  text: “Knowing what to expect can help families recognize both opportunities and gaps in the transition
+    process.”
+- step: Suggest next step.
+  text: “Let’s look at the transition your child is approaching and identify what planning activities
+    should be happening now.”
+acceptance_criteria:
+- explain what transition planning should typically include at each educational stage
+- identify common activities, meetings, and planning processes associated with transitions
+- explain how inclusion should be reflected throughout the transition process
+- identify common decisions that occur at each stage
+- help parents recognize when important planning activities may be missing
+- provide examples of what successful transitions often include
+- explain how transition planning evolves over time
+- present information in a stage-by-stage roadmap format
+testing_checks:
+- explains transition activities clearly
+- presents information in a stage-based format
+- connects planning activities to inclusive education outcomes
+- identifies common transition milestones
+- helps parents recognize missing planning elements
+- encourages proactive participation
+guiding_question: What should a good transition process look like at this stage?
+avoid_framing: What should my child be doing?
+content_required:
+- transition-planning frameworks
+- stage-based educational transitions
+- inclusive education principles
+- transition meeting practices
+- course and pathway planning information
+- graduation planning information
+- employment and community transition resources
+- examples of successful transitions
+- transition planning milestones
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 236
+  extracted_at: '2026-10-14'

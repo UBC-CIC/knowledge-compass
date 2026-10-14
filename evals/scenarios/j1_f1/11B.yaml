@@ -1,0 +1,104 @@
+story_id: 11B
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know what to do if the school denies my request so I can take the appropriate
+  next step. (pushback).
+situation_summary: A parent has requested information, support, accommodations, or a return to full-time
+  attendance, and the school has declined the request. The parent is disappointed and uncertain whether
+  the decision is final, what it means, or what options remain available.
+opening_message: I asked the school to return my daughter to full-time attendance and they said no.
+persona: A mother of a 9-year-old daughter in Grade 4 who has an autism diagnosis and an IEP. She communicates
+  in short, direct sentences and tends to ask practical questions. She is frustrated but trying to stay
+  calm and work through the system.
+hidden_facts:
+- The school told her verbally that her daughter cannot return to full-time attendance yet, but gave no
+  written notice.
+- The stated reason was that there is not enough EA support available for a full day.
+- The parent made the request by email two weeks ago and only got a response after following up twice.
+- The school principal said the decision would be reviewed 'at some point' but gave no timeline.
+- The parent has not yet asked for the denial to be put in writing.
+- The daughter currently attends from 9 am to 12 pm only and misses all afternoon subjects including gym
+  and art.
+- The parent has not contacted the school board or any outside advocate yet.
+- The parent wants her daughter back full-time before the end of the school year.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “I can understand why that would be discouraging, especially when you’re trying to ensure your
+    child has access to a full school experience.”
+- step: Clarify the decision.
+  text: “Did the school explain why they declined the request?”
+- step: Explore the rationale.
+  text: “Understanding the reasons behind the decision can help determine what options may be available
+    next.”
+- step: Identify possible next steps.
+  text: '“Depending on the circumstances, you may wish to: request additional clarification; ask what
+    conditions would need to be met for the decision to change; review supporting documentation; discuss
+    alternative solutions”'
+- step: Encourage fact-finding.
+  text: “It may be helpful to understand whether the decision is considered temporary, conditional, or
+    final.”
+- step: Discuss escalation readiness.
+  text: “If concerns remain unresolved after further discussion, there may be additional pathways available.”
+- step: Suggest next step.
+  text: “Let’s look at the reasons provided and identify the most appropriate response.”
+acceptance_criteria:
+- recognize when a parent has received a denial or rejection from the school
+- help the parent understand the reason provided for the decision
+- distinguish between a final decision, a temporary decision, and a request for additional
+- information
+- explain that a denial does not necessarily mean all options have been exhausted
+- help the parent identify potential next steps
+- suggest questions that may help clarify the decision
+- encourage the parent to seek supporting rationale and documentation
+- explain when further discussion, review, or escalation may be appropriate maintain a collaborative and
+  problem-solving tone
+- avoid providing legal advice or guaranteeing outcomes
+testing_checks:
+- help the parent understand the rationale
+- encourage clarification and documentation
+- identify constructive next steps
+- maintain a collaborative tone
+- avoid treating the denial as the end of the process
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of common reasons schools deny requests
+- examples of attendance-related decisions
+- examples of accommodation and support-related decisions
+- guidance on seeking clarification
+- questions parents can ask after receiving a denial
+- examples of conditional versus final decisions
+- communication strategies for continued discussions
+- escalation pathways and prerequisites
+- documentation and record-keeping guidance
+variants:
+- description: the request is denied outright
+  message: I asked the school to return my daughter to full-time attendance and they said no.
+- description: the school provides detailed reasons
+  message: I asked the school to bring my daughter back full-time and they said no, they don't have enough
+    EA support for a full day. What do I do now?
+- description: the school provides vague reasons
+  message: I asked the school to return my daughter to full-time and they said no but the reason they
+    gave didn't really make sense to me. Not sure what to do next.
+- description: the decision is temporary
+  message: The school said my daughter can't go back full-time right now but they made it sound like it
+    might change later. Is that something I should just wait on?
+- description: the decision is conditional
+  message: The school said they'll reconsider full-time attendance for my daughter but only if certain
+    things are in place first. I'm not sure if that's reasonable or what I should do.
+- description: additional information is requested before reconsideration
+  message: The school said they need more information before they can decide about my daughter going back
+    full-time. What kind of information would they need and what should I be doing in the meantime?
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11B
+  extracted_at: '2026-10-14'

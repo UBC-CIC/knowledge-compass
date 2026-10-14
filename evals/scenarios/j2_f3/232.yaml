@@ -1,0 +1,96 @@
+story_id: '232'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what the expectations of my child should be at each stage so that
+  their education is realized.
+situation_summary: A student is moving through the education system and the parent wants to understand
+  what a meaningful, age-appropriate, and inclusive educational experience should look like at each stage.
+  They want to ensure their child is receiving appropriate learning opportunities, supports, and experiences
+  that prepare them for future transitions and adult life.
+opening_message: My son is moving into high school. What should we be focusing on at this stage?
+persona: Maria is a fictional mother of a 14-year-old son with an intellectual disability and autism who
+  is entering Grade 9 at a local public high school. She is thoughtful and engaged in her son's education
+  but unfamiliar with what inclusive high school should realistically look like. She writes in a warm,
+  plain, slightly anxious tone and tends to ask broad questions before drilling into specifics.
+hidden_facts:
+- Her son is entering Grade 9 in September and has an IEP that was last updated in Grade 7.
+- He has mild-to-moderate intellectual disability and is verbal but needs support with reading and written
+  tasks.
+- His elementary school focused heavily on literacy and numeracy basics; she is unsure whether high school
+  will continue that or shift focus.
+- She has heard the term 'transition planning' but does not know when it formally starts or what it involves
+  at the high school level.
+- She wants him to eventually live semi-independently and hold a part-time job, and she wonders if high
+  school can help work toward those goals.
+- The family has not yet met his high school resource teacher and the first IEP meeting has not been scheduled.
+- She is worried he will be placed in a self-contained class all day and separated from typical peers.
+- A family friend mentioned 'modified' vs 'alternative' expectations but she does not know the difference
+  or which applies to her son.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Many families find it helpful to understand how priorities and opportunities evolve throughout
+    a student’s educational journey.”
+- step: Explain the concept.
+  text: “Each stage of education brings different opportunities for learning, growth, independence, participation,
+    and future planning.”
+- step: Provide stage-based examples.
+  text: Elementary School foundational learning; friendships and belonging; communication and participation;
+    building confidence and interests Middle School increasing independence; self-advocacy; exploration
+    of strengths and interests; preparing for future educational choices High School course planning;
+    employment exploration; graduation pathways; community participation; transition to adulthood
+- step: Reinforce inclusion.
+  text: “At every stage, students should have opportunities to learn, participate, develop relationships,
+    and prepare for future possibilities.”
+- step: Suggest reflection questions.
+  text: “What skills, experiences, and opportunities will help my child move successfully into the next
+    stage?”
+- step: Connect to future planning.
+  text: “Understanding what typically happens at each stage can help families prepare before important
+    decisions are made.”
+- step: Suggest next step.
+  text: “Let’s look at the stage your child is entering and identify the opportunities that may be most
+    important to consider.”
+acceptance_criteria:
+- explain what educational growth and development may look like at different stages
+- help parents understand common learning, participation, and transition goals associated with each stage
+- explain how expectations can evolve as students move through elementary, middle, and high school
+- emphasize strengths, growth, and future opportunities rather than deficits
+- help parents distinguish between educational expectations and support needs
+- provide examples of learning, social, community, and independence-related outcomes
+- explain how inclusive education supports meaningful participation at every stage
+- encourage long-term planning while recognizing individual differences
+testing_checks:
+- explains stage-based expectations clearly
+- focuses on opportunities and growth
+- reinforces inclusive education principles
+- provides age-appropriate examples
+- avoids deficit-based assumptions
+- encourages future planning
+- recognizes that students progress differently
+guiding_question: What should a meaningful educational experience look like at this stage?
+avoid_framing: Is my child meeting expectations?
+content_required:
+- educational development frameworks
+- transition-planning principles
+- stage-based educational expectations
+- inclusive education principles
+- self-advocacy and independence-building concepts
+- employment and community participation planning
+- social and emotional development considerations
+- graduation and pathway planning information
+- examples of age-appropriate opportunities
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 232
+  extracted_at: '2026-10-14'

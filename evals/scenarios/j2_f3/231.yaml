@@ -1,0 +1,90 @@
+story_id: '231'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to understand what I need to advocate for at each stage so that my child
+  is on an inclusive ed pathway.
+situation_summary: A student is approaching a transition to a new grade, school, or stage of education.
+  The parent knows important decisions will be made during the transition process but is unsure what issues
+  they should be paying attention to, what decisions may affect future opportunities, and how to advocate
+  effectively at each stage.
+opening_message: My daughter is moving to middle school next year. What should I be paying attention to?
+persona: A mother of a 10-year-old daughter with a developmental disability and an IEP, finishing Grade
+  5 and heading into middle school. She is engaged and proactive but unfamiliar with how the education
+  system works at the secondary level. She writes in short, plain sentences and tends to ask broad questions
+  before narrowing in.
+hidden_facts:
+- Her daughter has been in an inclusive classroom with EA support since Grade 1.
+- The current school has been generally supportive, but the receiving middle school is larger and less
+  familiar to the family.
+- A transition meeting has been mentioned by the resource teacher but not yet scheduled.
+- The parent has heard that middle school sometimes means more pull-out programming and is worried about
+  that.
+- No one has explained to her what decisions get made during the transition process or who is involved.
+- She wants her daughter to stay in a regular classroom with her peers and not be moved to a separate
+  program.
+- She does not know whether her daughter's IEP will automatically carry over or need to be renegotiated.
+- The daughter has friends in her current class and the parent is anxious about social continuity as well.
+reference_flow:
+- step: Acknowledge the transition.
+  text: “Transitions are important because decisions made during these periods can influence future educational
+    opportunities and supports.”
+- step: Explain the concept.
+  text: “The focus of advocacy often changes as students move through the education system.”
+- step: Provide a stage-based overview.
+  text: Elementary → Middle School maintaining inclusion; preserving friendships and belonging; support
+    continuity; maintaining learning expectations Middle School → High School course selection; educational
+    pathways; graduation planning; future opportunities High School → Post-Secondary or Community employment
+    preparation; post-secondary options; adult services; community participation
+- step: Connect to inclusion.
+  text: “At every stage, families can consider how decisions support participation, belonging, learning,
+    and future opportunities.”
+- step: Suggest questions.
+  text: “What decisions are being made now that could affect future opportunities?”
+- step: Reinforce planning.
+  text: “The earlier families understand upcoming decisions, the more options they often have available.”
+- step: Suggest next step.
+  text: “Let’s look at the transition your child is approaching and identify the key areas to focus on.”
+acceptance_criteria:
+- explain the purpose of transition planning
+- help parents understand that different advocacy priorities emerge at different stages of education
+- identify common transition points (elementary, middle school, high school, post-secondary, community)
+- explain key decisions commonly made at each stage
+- help parents understand how those decisions can affect future opportunities
+- explain how inclusive education principles apply throughout transitions
+- provide examples of questions families can ask at each stage
+- encourage proactive planning before transitions occur
+- present information in a clear, stage-based format
+testing_checks:
+- explains transition planning clearly
+- identifies key stages and decision points
+- connects transitions to future opportunities
+- reinforces inclusive education principles
+- provides useful planning questions
+- presents information in an organized, stage-based manner
+guiding_question: What should I be paying attention to at this stage of my child’s educational journey?
+avoid_framing: What should I do right now?
+content_required:
+- transition planning frameworks
+- common educational transition stages
+- inclusive education principles
+- stage-specific planning considerations
+- educational pathway information
+- graduation pathway information
+- support-planning practices
+- post-secondary and community transition resources
+- examples of transition-planning questions
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 231
+  extracted_at: '2026-10-14'

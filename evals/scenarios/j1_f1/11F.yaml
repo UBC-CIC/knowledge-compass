@@ -1,0 +1,84 @@
+story_id: 11F
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want a way to keep track of my actions so I stay organized.
+situation_summary: A parent has had multiple conversations, sent emails, attended meetings, and taken
+  various actions to support their child, but is struggling to keep track of what has already been done,
+  what is still outstanding, and what should happen next.
+opening_message: I’ve sent emails, talked to the principal, requested documentation, and attended meetings.
+  I’m starting to lose track of everything.
+persona: A mother of a 10-year-old daughter in Grade 5 who has an IEP and autism diagnosis. She has been
+  navigating a reduced school day for several months and has had many back-and-forth exchanges with the
+  school. She writes in short, slightly overwhelmed sentences and tends to list things rather than explain
+  them in full.
+hidden_facts:
+- Her daughter has been on a reduced schedule for about four months, attending only until noon each day.
+- She has sent at least six emails to the principal and vice-principal over the past two months.
+- She attended two formal meetings and one informal phone call with the school team.
+- She requested a written explanation of the reduced schedule but is not sure if she ever received a complete
+  response.
+- The school promised to review the schedule at the last meeting but she has not heard back since.
+- She has notes scattered across her phone, a notebook, and her email inbox but no single place where
+  everything is organized.
+- She is not sure which of her requests are still outstanding or what the school is obligated to do next.
+- She wants a way to see everything in one place so she knows what to follow up on and what comes next.
+reference_flow:
+- step: Acknowledge the challenge.
+  text: “That’s very common. When situations unfold over weeks or months, it can become difficult to remember
+    what has already happened.”
+- step: Explain the benefit.
+  text: “Keeping track of your actions can help you stay organized, avoid repeating steps, and prepare
+    for future discussions.”
+- step: Suggest categories.
+  text: '“You may wish to track: o emails sent o meetings attended o documentation requested o responses
+    received o follow-up actions o upcoming commitments”'
+- step: Organize chronologically.
+  text: “Recording actions in date order can help create a clear timeline of events.”
+- step: Identify gaps.
+  text: “Reviewing your timeline may help identify unanswered questions or overdue follow-ups.”
+- step: Support future planning.
+  text: “Before your next meeting, you can quickly review what actions have already been taken.”
+- step: Recommend next step.
+  text: “Let’s create a simple action log that tracks what you’ve done and what still needs attention.”
+acceptance_criteria:
+- help parents record actions they have taken
+- allow parents to track progress over time
+- distinguish between completed actions, pending actions, and future actions
+- help parents identify outstanding follow-ups
+- provide a simple way to organize activities chronologically
+- support documentation of key dates and milestones
+- help parents understand where they are in the process
+- make it easy to review previous actions before meetings or discussions
+- encourage ongoing organization without creating excessive administrative burden
+testing_checks:
+- helps parents identify actions already taken
+- distinguishes completed and pending actions
+- encourages chronological organization
+- supports preparation for future meetings
+- helps identify missing follow-ups
+- provides a simple and understandable structure
+guiding_question: What have I already done?” “What’s still outstanding?” “What’s my next step?
+avoid_framing: null
+content_required:
+- examples of action tracking logs
+- timeline and case management best practices
+- examples of completed versus outstanding actions
+- guidance on organizing communication records
+- examples of milestone tracking
+- templates for action plans and follow-up logs
+- examples of common activities parents undertake during advocacy processes
+- strategies for maintaining organized records over time
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11F
+  extracted_at: '2026-10-14'

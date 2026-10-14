@@ -1,0 +1,94 @@
+story_id: '218'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, if my child is knowingly not working towards high school credit, I want to ensure
+  they still have a quality and relevant education.
+situation_summary: A student is following an educational pathway that is not focused on earning traditional
+  high school credits. The parent wants to ensure that their child continues to receive a meaningful,
+  challenging, and relevant education that supports their goals, interests, skills, and future participation
+  in the community.
+opening_message: We already know my son isn’t working toward traditional graduation credits. How do I
+  make sure he’s still getting a good education?
+persona: A mother of a teenage son in Grade 10 with an intellectual disability who is on a modified, non-credit
+  pathway. She is practical and forward-thinking, and writes in a calm, straightforward tone with occasional
+  run-on sentences. She has already accepted the credit-track decision and is focused on making the most
+  of her son's school years.
+hidden_facts:
+- Her son is 16 and in Grade 10 at a public high school.
+- He has an intellectual disability and his IEP formally documents that he is not working toward an Ontario
+  Secondary School Diploma.
+- She feels his current program has too much free time and repetitive, low-level tasks that don't challenge
+  him.
+- The school has told her his program focuses on 'life skills' but she hasn't seen a clear written plan
+  of what that actually includes.
+- He has strong interests in cooking, woodworking, and working with animals.
+- She wants his program to connect to real community settings and possible future employment, not just
+  classroom worksheets.
+- She has a transition planning meeting coming up in about six weeks and wants to go in prepared.
+- She has not yet asked the school to revise or expand the content of his current program.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important question. A quality education involves much more than earning credits.”
+- step: Reframe success.
+  text: “Educational success can include learning new skills, increasing independence, building relationships,
+    exploring interests, preparing for employment, and participating in the community.”
+- step: Explore goals.
+  text: “What are your child’s interests, strengths, and future aspirations?”
+- step: Discuss meaningful learning.
+  text: “Students benefit when learning experiences are purposeful, individualized, and connected to real-life
+    goals.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What learning goals are being prioritized?; How are those goals connected
+    to my child’s future?; How will progress be measured?; How are interests and strengths reflected in
+    programming?; What opportunities exist for community participation and skill development?”'
+- step: Reinforce expectations.
+  text: “A non-credit pathway should still include meaningful learning, growth, challenge, and progress.”
+- step: Suggest next step.
+  text: “Let’s explore the goals that matter most to your child and how educational programming can support
+    them.”
+acceptance_criteria:
+- explain that quality education is not defined solely by credit accumulation
+- help parents identify meaningful educational outcomes beyond graduation credits
+- encourage planning based on the student’s strengths, interests, goals, and future aspirations
+- explain how learning goals can remain challenging and purposeful
+- help parents distinguish between meaningful learning and simply keeping a student occupied
+- provide examples of relevant educational experiences and skill development opportunities
+- encourage regular review of learning goals and progress
+- reinforce high expectations and lifelong learning
+- avoid treating non-credit pathways as lesser educational options
+testing_checks:
+- presents non-credit pathways positively and respectfully
+- focuses on meaningful learning outcomes
+- reinforces high expectations
+- connects education to future goals
+- provides practical planning questions
+- avoids deficit-based assumptions
+- avoids implying that non-credit pathways are lesser options
+guiding_question: What does a quality education look like for my child if graduation credits are not the
+  primary goal?
+avoid_framing: What happens when graduation is no longer possible?
+content_required:
+- quality education principles
+- person-centered planning approaches
+- transition-to-adulthood planning resources
+- employment readiness and life-skills development concepts
+- community participation opportunities
+- individualized learning goal frameworks
+- strengths-based educational planning resources
+- examples of meaningful educational outcomes
+- progress monitoring approaches
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 218
+  extracted_at: '2026-10-14'

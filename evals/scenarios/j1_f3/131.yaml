@@ -1,0 +1,87 @@
+story_id: '131'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know what rights my child has so that my child gets an education.
+situation_summary: A parent is trying to make decisions and advocate for their child within the education
+  system, but is unsure what rights their child has regarding access to education, participation, accommodations,
+  and support. Without understanding these rights, the parent struggles to determine whether what is happening
+  is appropriate or whether additional advocacy may be needed.
+opening_message: I don’t even know what rights my child has. How do I know if what the school is doing
+  is okay?
+persona: A mother of a 9-year-old in Grade 4 who has autism and an IEP. She is new to navigating the school
+  system and feels overwhelmed by education jargon. She writes in short, plain sentences and often expresses
+  uncertainty or self-doubt.
+hidden_facts:
+- Her daughter has been sent home early two or three times a week for the past month.
+- The school told her it is because there is not enough staff to support her daughter in the afternoon.
+- Her daughter has an IEP that includes full-day attendance with an EA.
+- The parent has not been given anything in writing about the reduced schedule.
+- The parent has attended one informal meeting with the vice-principal but left feeling confused.
+- The parent does not know whether this arrangement is legal or whether she can push back.
+- She wants her daughter to be in school full days like the other kids.
+- She has not yet contacted the school board or any outside advocate.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many parents have the same question. Understanding your child’s rights can help you ask informed
+    questions and participate confidently in educational decisions.”
+- step: Explain the concept.
+  text: “Educational rights help ensure students have access to learning opportunities, participation,
+    supports, and accommodations that allow them to benefit from education.”
+- step: Provide examples.
+  text: '“Rights-related topics may include: access to education; participation alongside peers; reasonable
+    accommodations and supports; involvement in educational planning; protection from discrimination”'
+- step: Connect to inclusion.
+  text: “Inclusive education principles help guide how these rights are applied in practice.”
+- step: Explain practical value.
+  text: “Understanding rights can help families ask questions, seek clarification, and advocate effectively
+    when concerns arise.”
+- step: Reinforce confidence.
+  text: “Knowing your child’s rights does not mean you need to become a legal expert. It simply helps
+    you participate more confidently in discussions and decisions.”
+- step: Suggest next step.
+  text: “Let’s explore which rights may be most relevant to your child’s situation.”
+acceptance_criteria:
+- explain educational rights in plain language
+- help parents understand the relationship between rights and inclusive education
+- identify common rights related to access, participation, accommodations, and support
+- explain that rights may be protected through legislation, policies, and international frameworks
+- provide examples of how rights apply in everyday school situations
+- distinguish between rights, supports, and educational decisions
+- provide references to trusted sources and policies
+- encourage informed advocacy based on understanding rather than confrontation
+- avoid providing legal advice or jurisdiction-specific legal interpretations
+testing_checks:
+- explains rights in plain language
+- provides practical examples
+- connects rights to real educational situations
+- references credible sources
+- avoids legal advice
+- reinforces informed advocacy rather than confrontation
+guiding_question: What protections and opportunities should my child reasonably expect within the education
+  system?
+avoid_framing: How do I win an argument with the school?
+content_required:
+- plain-language explanations of educational rights
+- inclusive education principles
+- participation and accommodation rights
+- accessibility and support concepts
+- relevant legislation and policy frameworks
+- CRPD Article 24 summaries
+- provincial and territorial education policy references
+- examples of rights in practice
+- common misconceptions about educational rights
+- trusted reference sources
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 131
+  extracted_at: '2026-10-14'

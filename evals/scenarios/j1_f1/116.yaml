@@ -1,0 +1,87 @@
+story_id: '116'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know what documentation I should request from the school so that I
+  have a complete picture of what’s happening.
+situation_summary: A parent has been told that their child’s attendance will be reduced or that they are
+  being sent home regularly. While they understand they should request documentation, they are unsure
+  what information they should ask for in order to fully understand the school’s decision, reasoning,
+  and plan moving forward.
+opening_message: The school agreed to put their decision in writing. What should I actually ask them for?
+persona: A mother of a 9-year-old son in Grade 4 who has autism and an IEP. She is organized and wants
+  to do things the right way, but is new to navigating the school system formally. She writes in short,
+  direct sentences and tends to ask practical, task-focused questions.
+hidden_facts:
+- The school told her verbally last week that her son would only attend from 9am to 12pm going forward.
+- The principal said the reason was that he becomes dysregulated in the afternoons and they don't have
+  enough staff to support him.
+- She has not received anything in writing yet but the principal agreed to provide something when she
+  asked.
+- Her son's IEP has not been updated since last spring and does not mention a reduced schedule.
+- She has been picking him up at noon every day for the past 5 school days.
+- She is not sure whether the school has a behaviour support plan in place for him.
+- She wants to understand the full reasoning and whether there is a plan to return him to full days.
+- She has not yet contacted the school board or any outside advocate.
+reference_flow:
+- step: Acknowledge the question.
+  text: “That’s a great next step. The more complete the information, the easier it will be to understand
+    what is happening and what options may be available.”
+- step: Explain the goal.
+  text: “You are trying to understand the decision, the reasons behind it, and the plan moving forward.”
+- step: Suggest key information to request.
+  text: '“You may wish to ask for: the reason for the reduced schedule; when the decision was made; who
+    was involved in the decision; supports or accommodations that were attempted; the expected duration;
+    the plan for returning to full-time attendance”'
+- step: Identify additional records.
+  text: “You may also ask whether there are meeting notes, support plans, behaviour plans, or other documents
+    related to the decision.”
+- step: Help identify gaps.
+  text: “If any of these areas are unclear, you can ask the school to clarify them.”
+- step: Encourage organization.
+  text: “Keeping these documents together can help you identify patterns and prepare for future discussions.”
+- step: Suggest next step.
+  text: “Once you’ve received the documentation, we can review it together and identify any missing information.”
+acceptance_criteria:
+- explain the types of information that may help the parent understand the situation
+- identify key documents or records that may exist
+- help the parent distinguish between facts, observations, decisions, and recommendations
+- suggest information that may be missing from verbal discussions
+- explain why each type of documentation may be useful
+- provide examples of questions the parent can ask if information is incomplete
+- encourage the parent to maintain copies of all documentation received
+- avoid suggesting documents that may not exist in every school or jurisdiction
+testing_checks:
+- identifies key categories of information parents may request
+- explains why the information is useful
+- suggests appropriate follow-up questions
+- helps parents distinguish between decisions, observations, and recommendations
+- encourages documentation and organization
+- does not assume the same documents exist in all jurisdictions
+guiding_question: null
+avoid_framing: null
+content_required:
+- common documentation associated with attendance decisions
+- examples of information families should request
+- examples of support plans and accommodation plans
+- examples of behaviour support documentation
+- examples of meeting notes and decision records
+- common information gaps found in school communications
+- guidance on organizing documentation
+- plain-language explanations of why each document may be useful
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+- 'Future enhancement: downloadable request checklists'
+- 'Future enhancement: documentation review workflows'
+- 'Future enhancement: document upload and analysis'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 116
+  extracted_at: '2026-10-14'

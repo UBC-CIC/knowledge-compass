@@ -1,0 +1,93 @@
+story_id: '219'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to hold teachers accountable to educating my child so that my child has
+  opportunities and choice later in life.
+situation_summary: A parent is concerned that their child’s educational program may be focusing primarily
+  on supervision, support, or participation rather than meaningful learning and progress. They want to
+  understand how to ensure educational goals remain a priority so their child continues to develop skills,
+  knowledge, and future opportunities.
+opening_message: I know my child is attending school, but how do I know they’re actually learning and
+  progressing?
+persona: A mother of a 13-year-old in Grade 8 with an intellectual disability and autism. She is warm
+  but increasingly frustrated that school feels more like daycare than education. She types in short,
+  direct sentences and sometimes uses capital letters for emphasis.
+hidden_facts:
+- Her daughter has an IEP but the goals haven't been updated in over a year.
+- The report card comments are vague — things like 'participates well' and 'is a valued member of the
+  class' with no mention of academic progress.
+- When she asked the teacher directly, she was told her daughter is 'doing great' but couldn't get specifics.
+- Her daughter spends a large part of the day in a separate room with an EA doing colouring and puzzles.
+- The mother has a transition to high school coming up next year and is worried about what options will
+  be available.
+- She has tried emailing the teacher twice with no detailed response.
+- She wants her daughter to eventually have some independence and maybe a job — she doesn't want doors
+  closed before they're even tried.
+- She has heard other parents talk about 'modified' vs 'alternative' expectations but doesn't fully understand
+  the difference or what her daughter is on.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families share that concern, especially during transitions when attention can become focused
+    on supports and logistics.”
+- step: Explain the principle.
+  text: “A quality education includes both participation and meaningful learning.”
+- step: Explore expectations.
+  text: “Students benefit when learning goals remain clear, measurable, and connected to future opportunities.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What learning goals are currently being worked on?; How is progress being
+    measured?; What growth has been observed this year?; How do these goals connect to future opportunities?;
+    What adjustments are being made when progress is limited?”'
+- step: Connect to future planning.
+  text: “Educational progress today often influences future options related to employment, further learning,
+    community participation, and independence.”
+- step: Encourage collaboration.
+  text: “Regular discussions about learning outcomes can help families and educators work together toward
+    shared goals.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s current learning goals and identify what evidence of progress you
+    may wish to review.”
+acceptance_criteria:
+- explain the importance of maintaining meaningful educational goals
+- help parents understand indicators of educational progress
+- encourage discussion of learning outcomes, not just supports and accommodations
+- provide examples of questions families can ask about learning and progress
+- help parents understand how educational goals should connect to future opportunities
+- explain how progress can be monitored and reviewed
+- encourage collaborative discussions about student growth and achievement
+- reinforce high expectations while recognizing individual learning needs
+- avoid positioning teachers and families as adversaries
+testing_checks:
+- emphasizes learning and growth
+- encourages discussion of educational outcomes
+- provides practical questions for families
+- reinforces future opportunities and choice
+- promotes collaboration between families and educators
+- avoids adversarial framing
+- focuses on evidence of progress
+guiding_question: How do I know my child is receiving a meaningful education?
+avoid_framing: How do I challenge the teacher?
+content_required:
+- quality education principles
+- learning goal frameworks
+- educational progress monitoring concepts
+- student achievement and growth measures
+- transition-planning resources
+- examples of learning-focused advocacy questions
+- strengths-based educational planning approaches
+- future-planning and opportunity frameworks
+- examples of meaningful educational outcomes
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 219
+  extracted_at: '2026-10-14'

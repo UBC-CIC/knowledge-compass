@@ -1,0 +1,103 @@
+story_id: '111'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want the system to recognize and clearly explain my situation (e.g., partial
+  day attendance) so I understand what is happening.
+situation_summary: A parent believes their child is being placed on a reduced school schedule by the school
+  and needs help understanding what is happening and why.
+opening_message: My son keeps getting sent home before lunch because the school says they can’t support
+  him all day.
+persona: A mother of a 7-year-old boy in Grade 2 who has a developmental disability and receives some
+  in-school support. She types in short, informal sentences and tends to be worried but measured in tone.
+  She is not familiar with legal or educational jargon around inclusion.
+hidden_facts:
+- The school has been sending her son home before lunch almost every day for the past three weeks.
+- The school told her verbally that they don't have enough EA support to manage him for a full day.
+- No formal meeting has been held and nothing has been put in writing.
+- Her son has an IEP but it specifies full-day attendance with EA support.
+- She has not been asked to consent to a reduced schedule and was not given any notice in advance.
+- She has been complying by picking him up, but she is starting to miss work and is worried about his
+  learning.
+- She contacted the principal once by phone but was told it was 'just temporary' with no end date given.
+- She wants to understand whether this is allowed and what she can do about it.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like your child is attending school on a reduced schedule that was initiated by the
+    school.”
+- step: Identify the situation.
+  text: “This is often referred to as involuntary partial day attendance.”
+- step: Explain the situation in plain language.
+  text: “In this situation, a student attends school for less than the full day, not because the family
+    requested it, but because the school believes it cannot currently support full participation.”
+- step: Normalize the experience.
+  text: “Many families experience this situation and are often unsure what to do next.”
+- step: Provide orientation.
+  text: “There are several steps you can take to better understand why this is happening and what options
+    may be available.”
+- step: Offer the next step.
+  text: “Let’s start by understanding why the school has reduced your child’s schedule.”
+acceptance_criteria:
+- recognize when a parent describes circumstances consistent with involuntary partial day attendance
+- identify the situation using clear, parent-friendly language
+- explain that the reduced schedule was initiated by the school rather than requested by the family
+- explain that this is a known situation experienced by other families
+- provide a brief explanation of what involuntary partial day attendance means
+- reassure the parent that there are actions they can take to better understand and respond to the situation
+- offer a logical next step within the guidance pathway
+- avoid legal conclusions or assigning fault
+testing_checks: []
+guiding_question: null
+avoid_framing: null
+content_required:
+- definition of involuntary partial day attendance
+- common indicators that a parent may be describing this situation
+- examples of partial day attendance scenarios
+- distinction between family-requested reduced schedules and school-imposed reduced schedules
+- plain-language explanation suitable for parents
+- common emotional reactions families experience
+- introductory guidance on what typically happens next
+- links/references to supporting inclusive education resources
+variants:
+- description: being sent home early every day
+  message: My daughter gets sent home early every single day. The school just calls me and I have to go
+    get her. This has been going on for weeks.
+- description: attending only mornings
+  message: My kid only goes to school in the mornings. The school set it up that way but I never agreed
+    to it — it just kind of happened.
+- description: attending only afternoons
+  message: They only let my daughter attend in the afternoons now. I don't really know why, it started
+    a few weeks ago and nobody explained it to me.
+- description: reduced attendance due to staffing limitations
+  message: The school told me they don't have enough staff right now so my son can only come in for part
+    of the day. I didn't ask for this.
+- description: reduced attendance due to behavioral concerns
+  message: The school keeps calling me to pick up my son early because of his behaviour. It's happening
+    almost every day and I don't know if this is normal.
+- description: reduced attendance due to lack of nursing or support resources
+  message: My daughter needs a nurse at school for some medical stuff and they say they can't get one,
+    so they've been sending her home after a couple of hours every day.
+negative_cases:
+- description: family-requested reduced schedules
+  message: We decided as a family to have our son do half days this year while he adjusts to a new school.
+    The school was fine with it and we set it up together.
+- description: illness-related absences
+  message: My daughter has been missing a lot of school lately because she keeps getting sick. The doctor
+    says she might have a chronic condition we're still figuring out.
+- description: temporary suspensions
+  message: My son was suspended for three days after an incident at school. I want to understand the suspension
+    process and whether it was handled properly.
+- description: voluntary homeschooling
+  message: We pulled our son out of school this year and are homeschooling him. It was our choice and
+    we're happy with it, but I have questions about curriculum.
+notes:
+- 'Complexity: 🟢 Small (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 111
+  extracted_at: '2026-10-14'

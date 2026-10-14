@@ -1,0 +1,91 @@
+story_id: '247'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to know who I should be to school meetings (related to transitions) so
+  that I can advocate effectively.
+situation_summary: A student is approaching a transition or support-planning discussion and the parent
+  wants to ensure they are not navigating important decisions alone. They want to understand who may be
+  helpful to involve in meetings so that their child’s needs, strengths, goals, and support requirements
+  are fully considered.
+opening_message: We have a transition planning meeting coming up. Should I bring anyone with me?
+persona: A mother of a 14-year-old son in Grade 9 who has an intellectual disability and receives support
+  through an IEP. She is engaged and proactive but unfamiliar with the formal processes around transition
+  planning. She writes in short, direct sentences and tends to ask practical, action-oriented questions.
+hidden_facts:
+- Her son's transition planning meeting is scheduled for next month at his high school.
+- The meeting is focused on planning for post-secondary life, including potential work experience and
+  community living.
+- She has never attended a formal transition planning meeting before and is unsure what to expect.
+- Her son currently receives support from a community agency that provides respite and life-skills coaching.
+- The school has invited his homeroom teacher and a vice-principal, but she does not know if that is everyone
+  who should be there.
+- She is considering asking her son's community support worker to attend but is not sure if that is appropriate.
+- Her son has expressed interest in working with animals someday, and she wants that goal reflected in
+  the plan.
+- She feels she has been the only one 'keeping track of everything' and does not want to walk in alone
+  again.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families find it helpful to bring additional support when discussing important educational
+    decisions.”
+- step: Explain the purpose.
+  text: “Different people can contribute different perspectives, knowledge, and support during transition
+    planning.”
+- step: Provide examples.
+  text: '“Depending on the situation, families may choose to involve: o another parent or caregiver o
+    a trusted family member o an advocate o a disability support professional o a therapist or clinician
+    o a community support worker o the student, when appropriate”'
+- step: Explain the value.
+  text: '“Additional participants can help: o ask questions o take notes o provide expertise o clarify
+    information o ensure important topics are discussed”'
+- step: Suggest questions.
+  text: '“You may wish to ask: o Who knows my child best? o Who understands their support needs? o Who
+    can help me understand educational decisions? o Who can help ensure future opportunities are considered?”'
+- step: Reinforce collaboration.
+  text: “Successful transition planning often benefits from having the right people involved early rather
+    than trying to solve concerns later.”
+- step: Suggest next step.
+  text: “Let’s explore the type of meeting you’re attending and identify who may be helpful to include.”
+acceptance_criteria:
+- explain the benefits of bringing additional support to transition and planning meetings
+- help parents identify individuals who may contribute valuable knowledge, expertise, or advocacy support
+- explain how different participants may support different aspects of the discussion
+- encourage collaborative planning and shared understanding
+- help parents consider both formal and informal support people
+- explain when student participation may be appropriate
+- provide examples of questions families can consider when deciding who to involve
+- reinforce that parents do not need to navigate complex transitions alone
+testing_checks:
+- identifies a variety of support people
+- explains the role each person may play
+- encourages collaborative planning
+- includes student participation where appropriate
+- reinforces that families do not need to navigate transitions alone
+- provides practical guidance without prescribing a specific approach
+guiding_question: Who can help me advocate effectively during important transition decisions?
+avoid_framing: Am I allowed to bring someone?
+content_required:
+- transition-planning practices
+- family engagement principles
+- advocacy and support roles
+- inclusive education principles
+- student participation frameworks
+- multidisciplinary planning concepts
+- examples of transition planning teams
+- support network and circle-of-support concepts
+- meeting preparation resources
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 247
+  extracted_at: '2026-10-14'

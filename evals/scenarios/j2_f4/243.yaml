@@ -1,0 +1,101 @@
+story_id: '243'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to ensure that my child is learning independence, friendships, socialization
+  skills so that they can get the same opportunities as everyone else.
+situation_summary: A student is receiving support at school, but the parent is concerned that the support
+  may be focused primarily on supervision, assistance, or safety rather than helping their child build
+  independence, friendships, social connections, and participation with peers. They want to ensure support
+  is helping their child develop the skills and relationships needed for future opportunities and adult
+  life.
+opening_message: My daughter has support all day, but I’m worried she’s spending more time with adults
+  than with other students.
+persona: A mother of a 14-year-old daughter in Grade 9 who has an intellectual disability and receives
+  full-time educational assistant support. She is warm but increasingly anxious about her daughter's long-term
+  independence and social life, and writes in short, heartfelt sentences.
+hidden_facts:
+- Her daughter has had the same EA assigned to her for two years and rarely interacts with classmates
+  during class or breaks.
+- The EA completes tasks alongside her daughter rather than prompting her to try independently first.
+- The parent noticed her daughter stopped attempting things on her own and now waits for the EA to step
+  in.
+- At the last IEP meeting, independence and peer relationships were not listed as goals — the focus was
+  on safety and task completion.
+- The parent has raised this concern once informally with the classroom teacher but felt it was brushed
+  off.
+- Her daughter has expressed that she wants more friends and feels left out at lunch.
+- The school has not offered any peer support program, buddy system, or social skills group.
+- The parent wants the IEP updated to include goals around independence and peer connection before the
+  end of the semester.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s a common concern for many families. Support should help students participate more fully
+    in school life, including building relationships and independence.”
+- step: Explain the principle.
+  text: “Effective supports are intended to increase a student’s ability to participate, make choices,
+    build skills, and develop relationships over time.”
+- step: Explore participation outcomes.
+  text: “When considering support effectiveness, it can be helpful to look beyond academics and ask how
+    support is affecting friendships, confidence, communication, and independence.”
+- step: Identify indicators of positive support.
+  text: '“Supports may be working well when students: participate alongside peers; build friendships;
+    develop confidence; make choices independently; require less adult prompting over time”'
+- step: Identify potential concerns.
+  text: '“Families may wish to explore further if: most interactions occur with adults rather than peers;
+    support limits participation in social activities; independence is not increasing over time; opportunities
+    for friendship and belonging are limited”'
+- step: Suggest questions.
+  text: '“You may wish to ask: How is support helping my child build independence?; How are friendships
+    and peer relationships being encouraged?; What opportunities exist for social participation?; How
+    will we know if independence is increasing over time?”'
+- step: Reinforce the broader goal.
+  text: “Support should help students access the same opportunities for learning, relationships, belonging,
+    and growth that other students experience.”
+- step: Suggest next step.
+  text: “Let’s explore how your child’s current supports are contributing to independence, friendships,
+    and participation.”
+acceptance_criteria:
+- explain that effective supports should promote independence and participation, not just assistance
+- help parents understand how friendships, peer relationships, and belonging contribute to inclusive education
+- explain how support can unintentionally create dependence or separation if not carefully designed
+- identify indicators that support is helping build independence and social participation
+- identify indicators that support may be limiting opportunities for peer interaction
+- provide examples of questions parents can ask about social inclusion and independence goals
+- encourage planning that includes friendship, belonging, and participation outcomes alongside academic
+  goals
+- reinforce that inclusion involves both learning and social participation
+testing_checks:
+- connects support to independence and belonging
+- explains the value of friendships and peer relationships
+- identifies indicators of effective support
+- recognizes risks associated with over-supporting students
+- promotes participation and natural relationships
+- provides practical advocacy questions
+- avoids suggesting that support should be removed when it remains necessary
+guiding_question: Is this support helping my child become more independent, connected, and included?
+avoid_framing: Does my child have enough support?
+content_required:
+- inclusive education principles
+- social inclusion and belonging frameworks
+- friendship and peer participation concepts
+- independence-building strategies
+- natural supports and peer support models
+- Educational Assistant role considerations
+- social and emotional development resources
+- participation and engagement indicators
+- examples of successful inclusion practices
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 243
+  extracted_at: '2026-10-14'

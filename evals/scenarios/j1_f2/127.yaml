@@ -1,0 +1,90 @@
+story_id: '127'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know what inclusive ed is so that I can’t be distracted from that goal.
+situation_summary: A parent is trying to make decisions about supports, accommodations, attendance, and
+  educational planning for their child. Along the way, they receive advice, recommendations, and options
+  from many different people, but are unsure how these decisions relate to the broader goal of inclusive
+  education.
+opening_message: People keep talking about inclusive education, but I’m not really sure what that means.
+persona: A parent of a child in Grade 3 who has been navigating a confusing mix of school meetings, IEP
+  discussions, and advice from various professionals. They speak in a plain, everyday tone and are earnest
+  but a little overwhelmed. They are trying to do right by their child but feel like they are missing
+  some foundational knowledge.
+hidden_facts:
+- Their child is 8 years old and has a developmental disability.
+- The child has an IEP that is currently being revised.
+- The school has suggested a reduced schedule as a short-term option.
+- A resource teacher, a behaviour consultant, and a district rep have all given the parent different advice
+  recently.
+- The parent has heard the phrase 'inclusive education' many times but no one has ever stopped to define
+  it.
+- The parent wants to make sure their decisions are pointing in the right direction long-term.
+- The parent is worried they might accidentally agree to something that moves their child away from inclusion
+  without realizing it.
+reference_flow:
+- step: Define the concept.
+  text: “Inclusive education means that students learn, participate, and belong alongside their peers
+    in the school community.”
+- step: Explain the goal.
+  text: “The goal is not simply for a student to be present at school, but to participate meaningfully
+    in learning, relationships, activities, and opportunities.”
+- step: Clarify common misconceptions.
+  text: “Inclusive education is about more than physical attendance. It also involves access, participation,
+    support, and belonging.”
+- step: Provide examples.
+  text: '“Examples of inclusive education may include: learning alongside peers; participating in school
+    activities; receiving appropriate accommodations and supports; having access to the same opportunities
+    as other students”'
+- step: Connect to decision-making.
+  text: “Understanding inclusive education can help families evaluate whether proposed solutions support
+    long-term participation and belonging.”
+- step: Reinforce the vision.
+  text: '“When difficult decisions arise, inclusive education provides a helpful lens for asking: ‘Will
+    this help my child participate more fully with their peers?’”'
+- step: Suggest next step.
+  text: “Let’s explore how inclusive education relates to your child’s current situation.”
+acceptance_criteria:
+- explain inclusive education in plain language
+- describe the purpose and goals of inclusive education
+- explain the difference between presence, participation, and belonging
+- help parents understand how inclusive education relates to everyday decisions
+- explain that inclusion involves more than simply attending school
+- provide examples of inclusive educational practices
+- explain why inclusive education is relevant when discussing attendance, accommodations, supports, and
+  transitions
+- avoid policy-heavy or overly technical language
+- reinforce that inclusive education is an ongoing goal rather than a single event or placement decision
+testing_checks:
+- explains inclusive education in simple language
+- avoids jargon and policy-heavy explanations
+- connects inclusion to real-world situations
+- distinguishes attendance from participation and belonging
+- provides practical examples
+- helps parents understand why inclusion matters
+guiding_question: What are we actually trying to achieve?
+avoid_framing: What problem are we trying to solve today?
+content_required:
+- plain-language definition of inclusive education
+- inclusive education principles
+- concepts of participation, belonging, and access
+- examples of inclusive educational practices
+- common misconceptions about inclusion
+- relationship between inclusion and attendance
+- relationship between inclusion and accommodations
+- relationship between inclusion and support planning
+- trusted inclusive education references and sources
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 127
+  extracted_at: '2026-10-14'

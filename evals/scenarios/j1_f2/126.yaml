@@ -1,0 +1,83 @@
+story_id: '126'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know who I can contact for help/support for PDA so that I don’t have
+  to navigate the situation alone.
+situation_summary: A parent believes their child may be experiencing partial day attendance and is becoming
+  increasingly concerned about the impact on their child’s education and participation. They feel uncertain
+  about the next steps and want to know who they can turn to for guidance, support, or advocacy.
+opening_message: I think my son is experiencing partial day attendance and honestly I don’t know where
+  to turn for help.
+persona: A single mother of a 10-year-old boy in Grade 5 who has an autism diagnosis and an IEP. She works
+  part-time and relies on the school day for childcare. She types in short, worried sentences and sometimes
+  uses abbreviations.
+hidden_facts:
+- Her son has been sent home early 2–3 times a week for the past month, usually after lunch.
+- The school calls it a 'modified schedule' but she never agreed to it in writing.
+- Her son's IEP includes full-day attendance as a goal.
+- The school told her informally that staffing is the reason, but gave nothing in writing.
+- She has missed shifts at work because of the early pickups.
+- She has asked his teacher twice for a meeting but has not heard back.
+- She contacted the school board's main line once but was transferred and then disconnected.
+- She wants to know if there is an advocate or organization that can speak on her behalf.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families feel that way when they first encounter partial day attendance. You do not have
+    to navigate this situation alone.”
+- step: Explain support options.
+  text: “Support can come from a variety of sources depending on your needs.”
+- step: Provide examples.
+  text: '“Some families seek support from:'
+- step: Explain roles.
+  text: school staff district personnel parent advocacy organizations disability organizations community
+    support groups other families with similar experiences” “Different supports can help in different
+    ways. Some provide information, some help with advocacy, and others offer emotional or peer support.”
+- step: Encourage connection.
+  text: “Connecting with someone who understands the process can often make it easier to understand your
+    options and next steps.”
+- step: Help narrow options.
+  text: “Let’s talk about what type of support you feel you need most right now.”
+- step: Suggest next step.
+  text: “Based on your situation, we can explore supports that may be helpful.”
+acceptance_criteria:
+- explain that parents do not have to manage the situation alone
+- identify common sources of support available to families
+- explain the different types of support various people or organizations may provide
+- help parents determine which support options may be most relevant to their situation
+- distinguish between school-based support, community support, advocacy support, and professional support
+- encourage parents to seek support early rather than waiting until the situation worsens
+- provide information in plain language
+- avoid recommending a specific organization unless appropriate contextual information is available
+testing_checks:
+- identifies multiple forms of support
+- explains the purpose of each support option
+- helps parents determine which supports may be appropriate
+- avoids assuming one solution fits all situations
+- encourages help-seeking behaviour
+- reinforces that parents do not have to navigate the situation alone
+guiding_question: null
+avoid_framing: null
+content_required:
+- common sources of support for families
+- school-based support roles
+- advocacy organizations and services
+- disability and inclusion support organizations
+- community and peer support resources
+- examples of how different supports can help
+- referral and navigation resources
+- emotional support considerations
+- plain-language descriptions of support options
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 126
+  extracted_at: '2026-10-14'

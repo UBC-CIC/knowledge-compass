@@ -1,0 +1,88 @@
+story_id: '132'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know where to find info on my child’s rights so that I can advocate
+  to the school.
+situation_summary: A parent has learned that their child has educational rights but is unsure where to
+  find reliable information to better understand those rights. They want access to trusted sources that
+  can help them prepare for conversations with the school and advocate confidently for their child.
+opening_message: How do I know if what I’m being told is accurate? Where can I actually find information
+  about my child’s rights?
+persona: A single mother of a 10-year-old daughter in Grade 5 who has an autism diagnosis and attends
+  a mainstream classroom with support. She has recently started learning about disability rights after
+  a friend mentioned her daughter has legal protections at school. She types in short, direct sentences
+  and tends to ask practical, no-nonsense questions.
+hidden_facts:
+- Her daughter has been sent home early two or three times a week for the past month, with the school
+  citing staffing shortages as the reason.
+- The school told her this is 'just temporary' but has not given any end date or written explanation.
+- A friend told her that her daughter has rights under provincial education law and possibly the Canadian
+  Charter, but the parent doesn't know the details.
+- She has never seen a copy of her daughter's IEP and didn't know she was entitled to one.
+- She has not yet asked the school anything in writing — all conversations have been verbal and informal.
+- She wants to walk into the next school meeting feeling prepared and not talked over.
+- She is worried that if she pushes too hard she will make things worse for her daughter at school.
+- She is looking for government or official sources she can trust, not just random websites.
+reference_flow:
+- step: Acknowledge the question.
+  text: “That’s a great question. Understanding where rights information comes from can help you advocate
+    with confidence.”
+- step: Explain the types of sources.
+  text: '“Information about educational rights may come from: legislation; education policies; human rights
+    frameworks; government guidance documents; trusted advocacy organizations”'
+- step: Highlight common examples.
+  text: '“Depending on your location, relevant sources may include: provincial or territorial education
+    policies; human rights legislation; inclusive education policies; CRPD Article 24 and related guidance”'
+- step: Explain practical use.
+  text: “You do not need to memorize these documents. The goal is to understand the key principles and
+    know where to find reliable information when questions arise.”
+- step: Build confidence.
+  text: “Being able to reference trusted sources can help make discussions with the school more productive
+    and informed.”
+- step: Offer support.
+  text: “I can help summarize these documents in plain language and explain how they relate to your child’s
+    situation.”
+- step: Suggest next step.
+  text: “Let’s identify which sources may be most relevant to your concern.”
+acceptance_criteria:
+- identify trusted sources of information about educational rights
+- explain the difference between legislation, policy, guidelines, and advocacy resources
+- provide plain-language summaries of relevant rights-based resources
+- help parents understand which resources may be most relevant to their situation
+- explain how rights information can support conversations with schools
+- provide references and links to credible sources where available
+- help parents distinguish authoritative sources from opinion-based information
+- avoid providing legal advice or legal interpretation
+testing_checks:
+- identifies credible sources
+- explains different types of rights-related resources
+- provides understandable summaries
+- connects resources to advocacy situations
+- avoids legal interpretation
+- encourages informed, evidence-based advocacy
+guiding_question: Where can I find reliable information about my child’s rights?
+avoid_framing: What should I believe?
+content_required:
+- provincial and territorial education policy sources
+- human rights legislation references
+- inclusive education policy documents
+- CRPD Article 24 and related guidance
+- government education resources
+- trusted advocacy organization resources
+- plain-language summaries of key documents
+- links and references to authoritative sources
+- explanations of how rights-based resources are used in practice
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 132
+  extracted_at: '2026-10-14'

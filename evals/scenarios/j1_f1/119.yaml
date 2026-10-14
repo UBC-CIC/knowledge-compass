@@ -1,0 +1,109 @@
+story_id: '119'
+reviewed: true
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to understand how to ensure my child’s support plan is followed so I can
+  advocate for them to remain at school full time.
+situation_summary: A parent is being told that their child cannot attend school for the full day due to
+  behavioural, learning, or support-related challenges. The parent is unsure whether the accommodations,
+  strategies, and supports already identified for their child are actually being implemented consistently
+  and effectively.
+opening_message: The school says my son can’t stay all day because of his behaviour, but he already has
+  a behaviour support plan.
+persona: A mother of a 9-year-old boy in Grade 4 who has a diagnosed behavioural exceptionality and an
+  existing behaviour support plan. She is persistent and engaged but not familiar with education law or
+  formal advocacy processes. She writes in short, direct sentences and tends to ask practical questions.
+hidden_facts:
+- Her son has a behaviour support plan (BSP) that was written at the start of the school year.
+- The school has been sending him home after lunch for the past three weeks, saying staff cannot manage
+  his afternoon behaviour.
+- She asked the principal whether the BSP strategies are being used and got a vague answer about staff
+  'doing their best'.
+- Her son also has an IEP with specific accommodations including sensory breaks and a designated quiet
+  space.
+- She has noticed that the educational assistant assigned to her son changed twice this term.
+- The classroom teacher told her informally that the quiet space is often unavailable because it is used
+  for other purposes.
+- She has not received anything in writing about the reduced schedule.
+- She wants her son back at school full time and wants to know whether the plan is actually being followed.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It sounds like you’re wondering whether the supports already identified for your child are being
+    implemented as intended.”
+- step: Clarify the plan.
+  text: “Do you know what supports, accommodations, or strategies are included in your child’s behaviour
+    plan or IEP?”
+- step: Explain the distinction.
+  text: “Having a support plan is important, but it’s also important to understand how consistently the
+    plan is being followed in practice.”
+- step: Suggest areas to explore.
+  text: '“You may wish to ask: Which parts of the plan are currently being implemented?; How often are
+    the strategies being used?; Have any changes been made to the plan?; What evidence suggests the plan
+    is or isn’t working?”'
+- step: Help identify gaps.
+  text: “If supports are not being implemented consistently, it may be difficult to determine whether
+    the plan itself is effective.”
+- step: Connect to attendance.
+  text: “Understanding how the support plan is being used can help inform discussions about your child’s
+    ability to participate in school full time.”
+- step: Suggest next step.
+  text: “You may wish to review the current plan and discuss implementation with the school before accepting
+    a reduced schedule as the only solution.”
+acceptance_criteria:
+- help the parent understand the purpose of support plans, accommodation plans, behaviour plans, and IEPs
+- help the parent identify what supports have been documented for their child
+- explain the difference between having a plan and implementing a plan
+- help the parent determine whether agreed-upon supports are being followed consistently
+- suggest questions the parent can ask to better understand implementation
+- help the parent identify gaps between the documented plan and current practice
+- encourage constructive collaboration with the school
+- explain how effective implementation of supports may affect attendance and participation
+- avoid assigning blame or making assumptions about staff intentions
+testing_checks:
+- focus on implementation rather than blame
+- encourage fact-finding and collaboration
+- help parents identify gaps between plans and practice
+- connect support implementation to participation and attendance
+guiding_question: null
+avoid_framing: null
+content_required:
+- definitions of IEPs, accommodation plans, behaviour support plans, and related support documents
+- examples of common accommodations and supports
+- examples of behaviour support strategies
+- indicators that a plan may not be implemented consistently
+- questions families can ask about implementation
+- examples of monitoring and review practices
+- relationship between supports, participation, and attendance
+- guidance on collaborative problem-solving with school teams
+- examples of documenting concerns about implementation
+variants:
+- description: a behaviour plan exists
+  message: The school keeps sending my son home early but he has a behaviour support plan. Shouldn't they
+    be using it instead of just calling me to pick him up?
+- description: an IEP exists
+  message: My daughter has an IEP but the school says she can't handle a full day. I feel like they're
+    not even looking at what's written in it.
+- description: accommodations have been documented
+  message: We worked with the school to put accommodations in place for my son, it's all documented, but
+    they still say he can't stay the whole day. Shouldn't they be following what was agreed?
+- description: supports are inconsistently applied
+  message: Some days the school manages fine with my son and other days they call me to get him. It feels
+    like it depends on who's with him that day, not on any actual plan.
+- description: staff turnover affects implementation
+  message: My son's support worker keeps changing and every time there's a new person he loses ground.
+    The school says he can only do half days now. Is that allowed?
+- description: parents are unsure what supports are supposed to be in place
+  message: The school says my daughter needs a shorter day but I don't even know what supports she's supposed
+    to be getting. How do I find out what should be in place for her?
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 119
+  extracted_at: '2026-10-14'

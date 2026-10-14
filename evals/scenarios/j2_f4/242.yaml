@@ -1,0 +1,97 @@
+story_id: '242'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to ensure my child is receiving the right level of support so that my
+  child is learning appropriately and getting an inclusive education.
+situation_summary: A student is receiving supports at school, but the parent is unsure whether those supports
+  are appropriately matched to their child’s needs and whether they are helping the student learn, participate,
+  build independence, and experience inclusion.
+opening_message: My daughter has support at school, but how do I know it’s actually the right support?
+persona: A mother of a 10-year-old daughter in Grade 5 who has a developmental delay and receives in-class
+  support from an educational assistant. She communicates in a warm but uncertain tone, often second-guessing
+  herself, and tends to ask open-ended questions rather than making demands.
+hidden_facts:
+- Her daughter has an IEP that mentions EA support for literacy and math, but the mother has never seen
+  a breakdown of how many hours or what the EA actually does each day.
+- The mother has noticed her daughter often brings home incomplete work and says she 'just waited for
+  help' rather than trying on her own.
+- At the last IEP meeting three months ago, the teacher said things were 'going well' but gave no specific
+  progress data.
+- The mother has heard from another parent that EA support can sometimes make kids less independent, and
+  this worries her.
+- Her daughter rarely mentions working with classmates and seems to spend most of her time at a separate
+  table with the EA.
+- The school has not offered any formal way for the mother to observe the classroom or see how support
+  is delivered.
+- The mother wants her daughter to eventually join a regular Grade 6 class with minimal support, but no
+  one has discussed a plan for reducing EA reliance.
+- She has not yet asked the school for a formal review of the support plan but is ready to if she knew
+  how.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important question. The goal is not simply to provide support, but to provide support
+    that helps a student succeed.”
+- step: Explain the principle.
+  text: “Effective supports help students learn, participate, build relationships, and become increasingly
+    independent.”
+- step: Discuss indicators of effective support.
+  text: '“Supports are often working well when students: participate meaningfully in learning; engage
+    with peers; make educational progress; gain confidence and independence; have access to the same opportunities
+    as their classmates”'
+- step: Discuss indicators that adjustments may be needed.
+  text: '“Families may wish to explore concerns when: learning progress is limited; participation remains
+    restricted; support creates unnecessary dependence; opportunities are reduced because of support arrangements;
+    social connections are limited”'
+- step: Suggest questions.
+  text: '“You may wish to ask: How is the effectiveness of this support being measured?; What outcomes
+    are we hoping to achieve?; Is this support increasing independence?; Are there alternative approaches
+    we should consider?”'
+- step: Reinforce continuous review.
+  text: “Support needs often evolve as students grow and educational environments change.”
+- step: Suggest next step.
+  text: “Let’s explore the supports your child currently receives and what outcomes those supports are
+    intended to achieve.”
+acceptance_criteria:
+- explain the difference between receiving support and receiving effective support
+- help parents understand how support effectiveness can be evaluated
+- explain how supports should promote learning, participation, belonging, and independence
+- identify indicators that supports may be insufficient, excessive, or poorly matched to the student’s
+  needs
+- provide examples of questions families can ask regarding support effectiveness
+- explain how support needs may change over time
+- encourage regular review of support strategies and outcomes
+- focus on student outcomes rather than support quantity
+testing_checks:
+- distinguishes support quantity from support effectiveness
+- focuses on outcomes rather than staffing levels
+- promotes participation and independence
+- provides practical indicators of success
+- identifies useful questions for families
+- encourages ongoing review and adjustment
+guiding_question: How do I know if my child’s supports are actually working?
+avoid_framing: Do they have enough support?
+content_required:
+- educational support models
+- inclusive education principles
+- independence-building concepts
+- support effectiveness indicators
+- accommodation planning practices
+- participation and belonging frameworks
+- educational progress measures
+- examples of support review discussions
+- strengths-based planning approaches
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 242
+  extracted_at: '2026-10-14'

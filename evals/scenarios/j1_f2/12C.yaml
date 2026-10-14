@@ -1,0 +1,87 @@
+story_id: 12C
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know how to be involved to change PDA in Canada so that others can
+  have better access to inclusive ed.
+situation_summary: A parent has gained experience navigating partial day attendance and inclusive education
+  challenges and wants to understand how they can help improve the system for other families. They are
+  interested in contributing their voice, experience, or expertise but are unsure where to start.
+opening_message: We’ve been through this ourselves. Is there anything I can do to help other families?
+persona: A mother in her early forties whose daughter with autism (Grade 6) spent two years on an informal
+  reduced schedule before the family successfully pushed back and secured full-day placement. She writes
+  in a warm, direct tone, occasionally using plain advocacy language she picked up along the way.
+hidden_facts:
+- Her daughter was informally sent home after lunch for nearly two full school years before the family
+  realized it wasn't required.
+- She kept detailed notes and emails throughout the process, which she now thinks could help other parents.
+- She connected with a parent advocacy group in her province during the process and found it invaluable.
+- She has been asked by another parent in her community to share her experience but doesn't know what
+  the best channels are.
+- She is interested in things like parent advisory councils, advocacy organizations, or government consultations
+  but doesn't know how they work.
+- She wonders whether sharing her story publicly (e.g., with media or policymakers) is realistic or useful.
+- She is unsure whether her experience is specific to her province or relevant nationally.
+- She wants to help without putting her daughter's privacy at risk.
+reference_flow:
+- step: Acknowledge the motivation.
+  text: “Many parents who have navigated these challenges want to help create a better experience for
+    future families.”
+- step: Explain the value of lived experience.
+  text: “Your experiences can provide valuable insight into what works, what doesn’t, and where improvements
+    may be needed.”
+- step: Provide examples of involvement.
+  text: '“Families contribute in many ways, including: participating in consultations; sharing their experiences;
+    joining advocacy or advisory groups; supporting other families; participating in research or surveys;
+    helping raise awareness”'
+- step: Normalize different levels of involvement.
+  text: “Not everyone wants to become an advocate. Even small contributions can make a meaningful difference.”
+- step: Connect to the bigger picture.
+  text: “Many improvements in inclusive education have been influenced by families sharing their experiences
+    and perspectives.”
+- step: Encourage reflection.
+  text: “Think about the type of involvement that feels realistic and meaningful for you.”
+- step: Suggest next step.
+  text: “Let’s explore organizations or opportunities that align with your interests.”
+acceptance_criteria:
+- explain ways families can contribute to improving inclusive education
+- identify opportunities for participation at local, regional, and national levels
+- provide examples of advocacy and engagement activities
+- explain how lived experience can influence awareness, policy, and practice
+- identify organizations and groups working in inclusive education
+- encourage participation at a level that feels comfortable for the parent
+- explain that meaningful contributions can take many forms
+- avoid promoting specific political positions or campaigns
+- focus on constructive involvement and system improvement
+testing_checks:
+- identifies multiple forms of involvement
+- explains participation opportunities in plain language
+- encourages constructive engagement
+- avoids political advocacy
+- respects different levels of commitment
+- recognizes the value of lived experience
+guiding_question: How can I help improve things for other families?
+avoid_framing: How do I fix the entire system?
+content_required:
+- inclusive education organizations and networks
+- advocacy and engagement opportunities
+- parent advisory groups
+- consultation and participation opportunities
+- examples of family-led system improvement efforts
+- peer support opportunities
+- research participation opportunities
+- awareness and education initiatives
+- plain-language descriptions of involvement options
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 12C
+  extracted_at: '2026-10-14'

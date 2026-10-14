@@ -1,0 +1,90 @@
+story_id: '125'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know the consequences of informal PDA so that my child’s support needs
+  are properly identified.
+situation_summary: A parent notices that their child is frequently missing parts of the school day or
+  school experience, but the arrangement has never been formally recognized or documented. The parent
+  is unsure whether this is having a broader impact on their child’s learning, development, participation,
+  or support planning.
+opening_message: My son only attends mornings and often misses activities in the afternoon. Could that
+  be affecting the support he receives?
+persona: A mother of a 9-year-old boy in Grade 4 who has an autism diagnosis and receives some in-school
+  support. She communicates in a warm but direct way, often asking practical questions. She is not familiar
+  with education policy language but is paying close attention to her son's day-to-day school experience.
+hidden_facts:
+- Her son has been attending only mornings for roughly three months, leaving after lunch each day.
+- The arrangement started informally after a few difficult afternoons; no one asked her to sign anything
+  or put it in writing.
+- The school told her verbally it was 'just temporary' while they figured out staffing, but nothing has
+  changed.
+- Her son has an IEP, but she hasn't seen it updated since the reduced schedule began.
+- She has noticed her son is missing afternoon subjects like science and gym, and some group projects.
+- She is worried he is falling behind socially because he misses most of the unstructured time with classmates.
+- She has not yet asked the school in writing about the arrangement or its impact.
+- She wants to understand whether this informal setup means her son is missing out on supports he is entitled
+  to.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important question. Reduced participation can sometimes affect how a student’s strengths,
+    challenges, and support needs are understood.”
+- step: Explain the connection.
+  text: “When students are not fully participating in the school day, staff may have fewer opportunities
+    to observe how supports are working in different situations.”
+- step: Provide examples.
+  text: '“For example: support needs may not be fully identified; accommodations may not be adjusted appropriately;
+    social challenges may be missed; academic gaps may become harder to recognize”'
+- step: Explain the broader impact.
+  text: “Over time, reduced participation can limit opportunities for learning, relationship building,
+    and skill development.”
+- step: Encourage reflection.
+  text: “You may wish to consider whether there are parts of the school day where important information
+    about your child’s needs is not being captured.”
+- step: Reinforce purpose.
+  text: “Understanding these impacts can help families advocate for meaningful participation and appropriate
+    supports.”
+- step: Suggest next step.
+  text: “Let’s look at which parts of your child’s school experience are being missed and what information
+    may be affected.”
+acceptance_criteria:
+- explain how informal partial day attendance can affect a student’s educational experience
+- describe how reduced participation may limit opportunities to observe and understand support needs
+- explain potential impacts on academic progress
+- explain potential impacts on social participation and belonging
+- help parents understand how support plans are often informed by participation and observation
+- provide examples of how unmet support needs may go unnoticed when participation is reduced
+- explain that impacts may vary from student to student
+- avoid assuming negative outcomes in every situation
+testing_checks:
+- explains how reduced participation can affect support identification
+- provides examples of missed opportunities for observation and assessment
+- connects participation to support planning
+- explains academic, social, and developmental impacts
+- avoids alarmist language
+- encourages informed advocacy
+guiding_question: null
+avoid_framing: null
+content_required:
+- impacts of informal partial day attendance
+- examples of participation-related support identification
+- support planning and accommodation processes
+- examples of missed opportunities for observation and assessment
+- academic impacts of reduced participation
+- social and emotional impacts of exclusion
+- examples of how support needs are identified in school settings
+- inclusive education principles related to participation
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 125
+  extracted_at: '2026-10-14'

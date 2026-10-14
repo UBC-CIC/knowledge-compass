@@ -1,0 +1,95 @@
+story_id: '241'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to know what supports my child is entitled to so that I can ensure they
+  get what they need.
+situation_summary: A student requires supports to participate, learn, and succeed at school. The parent
+  is unsure what types of supports may be available, how support decisions are made, and whether their
+  child is receiving the support they need to fully participate in their education.
+opening_message: How do I know if my child is getting the supports they should be getting?
+persona: A mother of a 10-year-old son in Grade 5 who has a developmental delay and uses some AAC to communicate.
+  She is soft-spoken but persistent, and types in short, plain sentences with occasional grammar slips.
+  She is new to the public school system after her son transitioned from a specialized program.
+hidden_facts:
+- Her son was recently placed in a general education classroom with some pull-out support, but she is
+  not sure exactly what that support looks like day to day.
+- She has heard other parents mention an 'EA' but does not know if her son has one assigned to him or
+  how much time that person spends with him.
+- The school gave her a document at the start of the year but she found it confusing and is not sure if
+  it lists what supports her son is supposed to get.
+- Her son sometimes comes home upset and says he didn't understand the work, which makes her worry he
+  is not getting enough help in class.
+- She attended one school meeting but felt the staff used a lot of jargon and she left without a clear
+  picture of what was actually in place.
+- She does not know who to ask at the school to get a straight answer about what supports her son is entitled
+  to.
+- She wants her son to be included in the full school day, not just pulled out for parts of it.
+- She has not yet asked the school to review or update the support plan since the school year started.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families have questions about supports, especially during transitions when support models
+    may change.”
+- step: Explain the concept.
+  text: “Supports are intended to help students participate, learn, develop relationships, and make progress
+    toward their educational goals.”
+- step: Provide examples.
+  text: '“Supports may include: accommodations; Educational Assistant support; communication supports;
+    personal care supports; transportation supports; behavioural supports; assistive technology; environmental
+    adaptations”'
+- step: Explain the principle.
+  text: “The most important question is often not ‘What support is my child entitled to?’ but ‘What support
+    does my child need to participate and succeed?’”
+- step: Suggest questions.
+  text: '“You may wish to ask: What needs have been identified?; What supports are currently addressing
+    those needs?; How is the effectiveness of those supports being evaluated?; Are there barriers that
+    remain unaddressed?”'
+- step: Connect to outcomes.
+  text: “Effective supports should help students participate meaningfully, continue learning, and access
+    the same opportunities as their peers.”
+- step: Suggest next step.
+  text: “Let’s look at your child’s current needs and explore the supports that may help address them.”
+acceptance_criteria:
+- explain common types of educational supports available to students
+- help parents understand how support needs are identified
+- explain how supports contribute to participation, learning, safety, independence, and inclusion
+- help parents understand the difference between a student’s needs and the specific support model used
+  to address those needs
+- provide examples of questions families can ask regarding supports
+- explain that support decisions may vary based on individual needs and circumstances
+- encourage parents to focus on outcomes rather than specific staffing models
+- connect supports to meaningful participation and educational progress
+testing_checks:
+- explains supports in plain language
+- focuses on student needs rather than labels
+- provides practical examples
+- connects supports to participation and learning
+- identifies useful advocacy questions
+- avoids guaranteeing specific support allocations
+guiding_question: What support does my child need to be successful?
+avoid_framing: How many support hours should my child receive?
+content_required:
+- educational support models
+- accommodation concepts
+- Educational Assistant roles
+- assistive technology supports
+- communication supports
+- transportation supports
+- personal care supports
+- inclusive education principles
+- support-planning processes
+- examples of support-related questions
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 241
+  extracted_at: '2026-10-14'

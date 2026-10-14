@@ -1,0 +1,94 @@
+story_id: '211'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to know what courses my child should be taking so that my child has more
+  choice/options for the future.
+situation_summary: 'A student is approaching a transition point where course selections and educational
+  pathway decisions are being discussed. The parent wants to ensure these decisions keep future opportunities
+  open and are based on the student’s interests, strengths, and goals rather than assumptions about disability
+  or support needs. (Note: This is about “Don’t make today’s decisions based solely on today’s challenges”.)'
+opening_message: The school is asking us to choose courses for next year. How do I know which ones will
+  keep options open for my son?
+persona: A mother of a 14-year-old son in Grade 9 who has a learning disability and receives some in-class
+  support. She is thoughtful and engaged but not familiar with education policy or credit systems. She
+  writes in a warm, conversational tone and tends to ask practical questions.
+hidden_facts:
+- Her son is finishing Grade 9 and the school has asked the family to choose his Grade 10 courses.
+- The guidance counsellor suggested steering him toward applied-level or modified courses, citing his
+  current struggles in math and reading.
+- Her son enjoys science and has said he might want to work in something outdoors or environmental one
+  day.
+- She is worried that choosing lower-level courses now will close the door to college or university later.
+- The school has not yet explained the difference between academic, applied, and locally developed course
+  streams or what each leads to.
+- She has not been told whether her son's IEP accommodations carry over regardless of which stream he
+  is in.
+- She wants to understand what prerequisites are needed to keep post-secondary options open before she
+  signs anything.
+- She has a meeting with the guidance counsellor scheduled in two weeks and wants to go in prepared.
+reference_flow:
+- step: Acknowledge the decision.
+  text: “Course selection can feel overwhelming because the choices made today may influence future opportunities.”
+- step: Reframe the discussion.
+  text: “Rather than asking which courses are easiest, it can be helpful to consider which options keep
+    the greatest number of future pathways available.”
+- step: Explore goals.
+  text: “What interests, strengths, or future possibilities has your child expressed?”
+- step: Explain the impact.
+  text: “Some courses serve as prerequisites for future programs, training, or post-secondary opportunities.
+    Understanding those connections can help families make informed choices.”
+- step: Discuss supports.
+  text: “A student’s support needs do not automatically determine which courses they can pursue. Accommodations
+    and supports may help students participate successfully in a wide range of courses.”
+- step: Encourage future-focused planning.
+  text: “When possible, many families choose pathways that preserve flexibility while interests and goals
+    continue to develop.”
+- step: Suggest next step.
+  text: “Let’s look at your child’s interests and explore which course options may help keep future opportunities
+    open.”
+acceptance_criteria:
+- explain how course selections can influence future educational and career opportunities
+- help parents understand common educational pathways and graduation requirements
+- encourage planning based on the student’s interests, strengths, and goals
+- explain the potential consequences of narrowing options too early
+- help parents understand how accommodations and supports can enable participation in a wider range of
+  courses
+- provide examples of questions families can ask during course-planning discussions
+- explain that pathways can change over time and should be reviewed regularly
+- encourage keeping options open whenever appropriate
+- avoid recommending specific courses without sufficient context
+testing_checks:
+- explains course-planning concepts clearly
+- connects course decisions to future opportunities
+- encourages student-centered planning
+- promotes keeping options open where possible
+- recognizes the role of accommodations and supports
+- avoids making definitive academic recommendations
+- encourages ongoing review and adjustment
+guiding_question: How can I keep future opportunities available for my child?
+avoid_framing: What course should my child take next semester?
+content_required:
+- graduation pathways and requirements
+- course prerequisite structures
+- post-secondary entrance requirements
+- employment and career pathway examples
+- transition planning concepts
+- inclusive education principles
+- accommodation and support planning information
+- examples of course-planning discussions
+- common misconceptions about educational pathways
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 211
+  extracted_at: '2026-10-14'

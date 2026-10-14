@@ -1,0 +1,93 @@
+story_id: '245'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to ensure my child gets a full day at school (properly supported) so that
+  they can have an opportunity to learn like everyone else.
+situation_summary: A student requires supports in order to participate successfully throughout the school
+  day. The parent is concerned that insufficient, ineffective, or inconsistent supports may result in
+  reduced attendance, missed learning opportunities, or exclusion from parts of the school experience.
+opening_message: The school says my child can’t stay for the full day because they don’t have enough support.
+  What should I be thinking about?
+persona: A mother of a 7-year-old in Grade 2 who has autism and requires one-on-one support to manage
+  transitions, sensory overload, and communication throughout the school day. She writes in short, direct
+  sentences and is clearly frustrated but trying to stay calm and constructive.
+hidden_facts:
+- The school is currently sending her son home after lunch, around 12:30 pm, citing a lack of available
+  Educational Assistant (EA) coverage in the afternoon.
+- This shortened day has been happening for about three weeks, with no formal written notice given to
+  the parent.
+- The parent was told verbally by the vice-principal that it is a 'temporary' arrangement, but no timeline
+  or plan has been provided.
+- Her son has an IEP that specifies full-day attendance with EA support as a required accommodation.
+- The parent has not yet asked for a copy of the IEP review or requested a team meeting to address the
+  gap in support.
+- The school has not suggested any alternative support arrangements or interim measures.
+- The parent is worried her son is falling behind in afternoon subjects like math and science.
+- She has not yet contacted the school board's special education department or a parent advocate.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families encounter situations where support challenges affect a student’s ability to participate
+    fully in school.”
+- step: Explain the principle.
+  text: “The goal of support is to help students access learning, participation, relationships, and opportunities
+    throughout the school day.”
+- step: Reframe the issue.
+  text: “The question is often not whether a student can attend for a full day, but what supports are
+    needed to make full participation successful.”
+- step: Explore impacts.
+  text: '“Reduced attendance can affect: learning opportunities; friendships and peer relationships; extracurricular
+    participation; consistency and routine; future educational outcomes”'
+- step: Suggest questions.
+  text: '“You may wish to ask: What specific support needs have been identified?; What barriers are preventing
+    full participation?; What alternatives have been explored?; What supports would enable my child to
+    remain for the full day?; How is this affecting learning and participation?”'
+- step: Reinforce inclusion.
+  text: “Students benefit when supports are designed to help them access the same educational opportunities
+    available to their peers.”
+- step: Suggest next step.
+  text: “Let’s explore the support barriers that have been identified and what solutions may help address
+    them.”
+acceptance_criteria:
+- explain the relationship between supports and full participation in school
+- help parents understand that attendance alone is not the goal; meaningful participation and learning
+  are the goals
+- identify common support barriers that may contribute to reduced attendance or exclusion
+- explain how support planning can help students participate throughout the school day
+- provide examples of questions families can ask when attendance is impacted by support concerns
+- help parents recognize when support needs may not be adequately addressed
+- reinforce that students should have access to the same learning opportunities as their peers
+- connect support planning to inclusion, participation, and educational progress
+testing_checks:
+- connects supports to participation and learning
+- explains the impact of reduced attendance
+- identifies support-related barriers
+- provides practical advocacy questions
+- focuses on educational access and inclusion
+- avoids treating attendance as the only outcome
+guiding_question: What supports are needed for my child to fully participate in school?
+avoid_framing: Can my child stay all day?
+content_required:
+- inclusive education principles
+- partial-day attendance concepts
+- support-planning practices
+- accommodation strategies
+- participation and belonging frameworks
+- educational access principles
+- support effectiveness indicators
+- examples of support-related barriers
+- advocacy and problem-solving resources
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 245
+  extracted_at: '2026-10-14'

@@ -1,0 +1,92 @@
+story_id: '246'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to know how often I should be checking in with the school so that I know
+  my child is getting quality support.
+situation_summary: A student is receiving supports at school and the parent wants to stay informed about
+  their child’s progress, participation, and well-being. They are unsure how often they should communicate
+  with the school and want a reasonable way to monitor support quality without needing to constantly intervene.
+opening_message: How often should I be checking in with the school to make sure everything is going well?
+persona: A mother of a 10-year-old in Grade 5 who has an intellectual disability and receives in-class
+  EA support. She is engaged and proactive but unsure of school norms around parent communication. She
+  writes in short, plain sentences and tends to ask practical, straightforward questions.
+hidden_facts:
+- Her daughter has been at the school for about two months since transitioning from a specialized program.
+- An EA supports her daughter for most of the school day.
+- The school sends home a communication book, but entries are sometimes sparse or skipped.
+- The parent has had one formal meeting with the teacher since the school year started.
+- She has heard mixed things from her daughter — some days she says it's great, other days she seems frustrated.
+- She is worried about being seen as a difficult parent if she reaches out too often.
+- She wants to know if there are signs she should watch for that would mean she needs to escalate concerns.
+- Her main goal is to feel confident her daughter is included and making progress without having to hover.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families wonder how to stay informed without feeling like they need to monitor every aspect
+    of their child’s school day.”
+- step: Explain the principle.
+  text: “The goal is to maintain enough communication to understand how your child is doing while allowing
+    educators and support staff to do their work.”
+- step: Discuss factors that affect communication frequency.
+  text: '“The appropriate level of communication may depend on: o the student’s support needs o recent
+    transitions o new support plans o emerging concerns o changes in educational programming”'
+- step: Provide examples.
+  text: '“Some families find success with: o scheduled check-ins o periodic progress reviews o communication
+    tied to support-plan reviews o updates during transition periods o additional discussions when concerns
+    arise”'
+- step: Focus on outcomes.
+  text: '“Rather than monitoring every activity, families often benefit from understanding: o Is my child
+    learning? o Are supports working? o Is participation improving? o Is independence increasing? o Are
+    friendships and belonging developing?”'
+- step: Suggest questions.
+  text: '“You may wish to ask: o How is my child progressing toward their goals? o Are supports still
+    meeting their needs? o Have any new concerns emerged? o What successes have been observed recently?”'
+- step: Reinforce partnership.
+  text: “Regular communication is often most effective when it focuses on shared goals and student outcomes
+    rather than day-to-day oversight.”
+- step: Suggest next step.
+  text: “Let’s explore the supports your child currently receives and identify what level of communication
+    may be most appropriate.”
+acceptance_criteria:
+- explain the value of regular communication between families and educators
+- help parents understand that communication needs may vary depending on the student, situation, and transition
+  stage
+- provide examples of common check-in approaches
+- identify indicators that may suggest more frequent communication is needed
+- explain how support effectiveness can be monitored over time
+- help parents focus on outcomes rather than daily monitoring
+- encourage collaborative relationships with educators
+- provide examples of questions that can help assess support quality
+testing_checks:
+- explains communication expectations clearly
+- avoids prescribing a single communication frequency
+- focuses on outcomes rather than monitoring activity
+- promotes collaborative relationships
+- identifies situations that may require more frequent communication
+- provides useful questions for families
+guiding_question: How can I stay informed about support quality without having to manage every detail?
+avoid_framing: How often should I email the school?
+content_required:
+- family-school partnership practices
+- support monitoring concepts
+- educational progress review practices
+- transition-planning principles
+- support effectiveness indicators
+- inclusive education principles
+- communication planning examples
+- student goal review frameworks
+- examples of successful family-school collaboration
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 246
+  extracted_at: '2026-10-14'

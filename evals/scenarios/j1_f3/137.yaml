@@ -1,0 +1,91 @@
+story_id: '137'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know how to apply Article 24 in a meeting with the school so that my
+  child’s rights are understood.
+situation_summary: A parent understands that Article 24 of the UN Convention on the Rights of Persons
+  with Disabilities (CRPD) supports inclusive education, but is unsure how to use it during discussions
+  with the school. They want to understand how Article 24 can help frame conversations about participation,
+  accommodations, and educational decision-making.
+opening_message: I keep hearing about Article 24. How do I actually use it in a meeting?
+persona: A mother of a 10-year-old daughter in Grade 5 who has an intellectual disability and attends
+  a mainstream classroom with support. She has been doing her own research into disability rights and
+  tends to write in short, direct sentences, sometimes using abbreviations. She is confident but wants
+  practical, actionable guidance.
+hidden_facts:
+- Her daughter's school has been sending her home after lunch three days a week, citing a lack of EA support
+  in the afternoons.
+- The parent read about Article 24 in an advocacy group's online resource and brought it up at an informal
+  chat with the vice-principal, who dismissed it as 'not really applicable in Ontario.'
+- There is an IEP in place but it does not mention reduced hours or a modified schedule.
+- The parent has a formal meeting with the principal and the special education resource teacher scheduled
+  for next week.
+- She has not yet put any of her concerns in writing to the school.
+- She wants her daughter back in class full days immediately and is willing to escalate if needed.
+- A family friend who is a lawyer told her Article 24 is relevant but could not explain how to use it
+  practically in a school meeting.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Many parents know Article 24 is important, but aren’t sure how to apply it during discussions
+    with the school.”
+- step: Explain the purpose.
+  text: “Article 24 supports the right of students with disabilities to access inclusive education and
+    participate alongside their peers.”
+- step: Translate the principle.
+  text: “Rather than quoting legal language, it can be helpful to focus on the questions Article 24 encourages
+    us to ask.”
+- step: Provide examples.
+  text: '“For example: o How does this decision support my child’s participation? o What accommodations
+    were considered before limiting participation? o How will my child continue learning alongside peers?
+    o What supports could make participation possible?”'
+- step: Connect to the meeting.
+  text: “Article 24 can serve as a framework for discussing inclusion, participation, belonging, and access
+    to educational opportunities.”
+- step: Reinforce collaboration.
+  text: “The goal is often to explore how participation can be supported rather than simply debating positions.”
+- step: Suggest next step.
+  text: “Let’s look at your specific concern and identify which Article 24 principles may be most relevant.”
+acceptance_criteria:
+- explain Article 24 in plain language
+- summarize the key principles most relevant to families
+- explain how Article 24 relates to inclusive education discussions
+- provide examples of situations where Article 24 may be relevant
+- help parents translate Article 24 principles into practical meeting questions
+- provide examples of respectful rights-based advocacy language
+- help parents connect concerns back to participation, belonging, and inclusion
+- encourage collaborative problem-solving rather than confrontation
+- avoid providing legal advice or legal interpretation
+testing_checks:
+- explains Article 24 in plain language
+- focuses on participation and inclusion
+- generates practical meeting questions
+- connects rights to real educational situations
+- encourages constructive advocacy
+- avoids legal advice or legal conclusions
+- accurately reflects the spirit of Article 24
+guiding_question: How do I use Article 24 in a conversation?
+avoid_framing: How do I quote Article 24 at someone?
+content_required:
+- Article 24 plain-language summaries
+- CRPD guidance documents
+- inclusive education principles
+- participation and belonging concepts
+- examples of Article 24 application in educational settings
+- rights-based advocacy language
+- examples of effective meeting questions
+- common educational scenarios where Article 24 is relevant
+- trusted references and source material
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 137
+  extracted_at: '2026-10-14'

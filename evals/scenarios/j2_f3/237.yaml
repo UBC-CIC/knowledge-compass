@@ -1,0 +1,97 @@
+story_id: '237'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what the challenges/resistance are at each stage of so that I
+  can ensure I properly advocate.
+situation_summary: A student is approaching a major educational transition and the parent wants to understand
+  the common challenges, barriers, and points of resistance that families often encounter. They want to
+  prepare in advance so they can identify concerns early and advocate effectively before opportunities
+  are lost.
+opening_message: My son is moving to high school next year. What should I be watching out for?
+persona: A mother of a 14-year-old son with an intellectual disability and autism who is finishing Grade
+  8. She is engaged and proactive but new to the high school system, and she writes in a straightforward,
+  conversational tone — concerned but calm.
+hidden_facts:
+- Her son has an IEP and has been in a partially integrated program throughout elementary school.
+- The receiving high school has a dedicated special education department but she has not yet met with
+  them.
+- His current resource teacher mentioned transition planning should start soon but gave no specifics.
+- She has heard from other parents that high school can mean less integration and more time in self-contained
+  classrooms.
+- She is worried about course selection and whether academic options will be kept open for him.
+- A transition meeting has not yet been scheduled and she is unsure who is responsible for initiating
+  it.
+- Her son wants to be involved in school sports and she wants to make sure that stays possible.
+- She does not know whether his current supports will carry over automatically or need to be renegotiated.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Every transition is different, but families often encounter similar challenges at key transition
+    points.”
+- step: Explain the purpose.
+  text: “Understanding common challenges can help families identify concerns early and participate proactively
+    in planning.”
+- step: Provide a stage-based overview.
+  text: 'Elementary → Middle School Common challenges may include: changes in support structures; loss
+    of continuity between educators; difficulty maintaining friendships; reduced familiarity with student
+    strengths and needs Middle School → High School Common challenges may include: pathway and course-selection
+    decisions; reduced educational expectations; pressure toward segregated or alternate programming;
+    graduation planning concerns High School → Post-Secondary / Community Common challenges may include:
+    service transitions; employment preparation gaps; reduced support availability; uncertainty regarding
+    future pathways'
+- step: Identify warning signs.
+  text: “Families may wish to pay attention when important decisions are being made without discussion,
+    when expectations begin to decrease, or when future opportunities are being limited without clear
+    rationale.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What risks are associated with this transition?; What barriers have been
+    identified? How will opportunities be preserved?; What planning is occurring to address these concerns?”'
+- step: Reinforce preparedness.
+  text: “Most challenges are easier to address when they are anticipated rather than discovered after
+    decisions have already been made.”
+- step: Suggest next step.
+  text: “Let’s explore the transition your child is approaching and identify the challenges families commonly
+    encounter.”
+acceptance_criteria:
+- identify common transition-related challenges at each educational stage
+- explain why these challenges often occur
+- help parents recognize early warning signs
+- explain how challenges may affect inclusion, learning, supports, and future opportunities
+- provide examples of questions families can ask when concerns arise
+- help parents prepare proactively rather than reactively
+- present information in a stage-based format
+- avoid assuming every transition will encounter difficulties
+testing_checks:
+- identifies realistic transition challenges
+- explains challenges in a balanced manner
+- avoids creating unnecessary fear
+- provides useful warning signs
+- offers practical advocacy questions
+- encourages proactive planning
+- connects challenges to future opportunities
+guiding_question: What should I be watching for during this transition?
+avoid_framing: What will go wrong?
+content_required:
+- common transition challenges by stage
+- inclusive education barriers
+- educational pathway decision points
+- support continuity concerns
+- graduation and transition planning information
+- post-secondary and community transition resources
+- employment and adult-life transition concepts
+- examples of successful transition planning practices
+- warning signs and risk indicators
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 237
+  extracted_at: '2026-10-14'

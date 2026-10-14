@@ -1,0 +1,91 @@
+story_id: '233'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what the important timelines are for course selection (high school)
+  so that my child can enrolled in credited courses to be able to graduate.
+situation_summary: A student is approaching high school course selection and the parent is concerned that
+  important decisions may be made before they fully understand the available options, graduation requirements,
+  or future implications. They want to know when key decisions occur so they can prepare and participate
+  effectively.
+opening_message: My daughter will be entering high school soon. When do I need to start paying attention
+  to course selection?
+persona: A mother whose daughter is finishing Grade 8 and has a learning disability affecting reading
+  and processing speed. She is engaged and proactive but unfamiliar with how high school course selection
+  works in her province. She writes in short, plain sentences and tends to ask practical, timeline-focused
+  questions.
+hidden_facts:
+- Her daughter is currently in Grade 8 and will enter Grade 9 in the fall.
+- The school held a brief course selection information night in February but the parent felt it moved
+  too fast and left with more questions than answers.
+- Her daughter has an IEP and the parent is unsure whether the IEP team will be involved in course selection
+  decisions.
+- The parent is worried her daughter will be steered toward modified or locally developed courses without
+  a full explanation of what that means for graduation.
+- She has heard the term 'compulsory credits' but does not know how many are required or what subjects
+  they cover.
+- She wants her daughter to keep the option of college or university open but is not sure which course
+  stream supports that.
+- The family has not yet met with the guidance counsellor one-on-one.
+- The course selection form is due back to the school within the next two weeks.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s a great question. Many important educational decisions happen before students actually
+    enter high school.”
+- step: Explain the importance.
+  text: “Understanding key timelines can help families participate in planning before options become limited.”
+- step: Provide a roadmap.
+  text: '“Common milestones may include: transition planning discussions; pathway exploration; course-selection
+    meetings; graduation planning reviews; annual course registration periods”'
+- step: Connect to future opportunities.
+  text: “Course selections can influence graduation pathways, post-secondary options, employment preparation,
+    and future educational opportunities.”
+- step: Suggest questions.
+  text: '“You may wish to ask: When are course selections made?; What information should we review beforehand?;
+    What prerequisites should we consider?; How will these decisions affect future options?”'
+- step: Reinforce planning.
+  text: “Families often have more flexibility when they understand upcoming decision points early.”
+- step: Suggest next step.
+  text: “Let’s look at your child’s current grade and identify the planning milestones that may be approaching.”
+acceptance_criteria:
+- explain why course-selection timelines are important
+- identify common milestones associated with high school pathway planning
+- help parents understand when key decisions are typically made
+- explain how course selection connects to graduation requirements and future opportunities
+- identify questions families may wish to ask before course-selection decisions occur
+- encourage proactive planning rather than last-minute decision making
+- explain that timelines may vary by jurisdiction or school
+- provide information in a clear, chronological format
+testing_checks:
+- explains timelines clearly
+- presents information chronologically
+- connects timelines to future opportunities
+- encourages proactive planning
+- identifies useful questions for families
+- recognizes that timelines may vary by school or jurisdiction
+guiding_question: When do important educational decisions happen, and how can I be ready for them?
+avoid_framing: When is course registration?
+content_required:
+- high school transition-planning timelines
+- course-selection processes
+- graduation pathway information
+- prerequisite structures
+- educational planning milestones
+- annual registration timelines
+- transition-planning frameworks
+- examples of course-selection discussions
+- future pathway considerations
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 233
+  extracted_at: '2026-10-14'

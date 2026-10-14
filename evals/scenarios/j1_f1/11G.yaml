@@ -1,0 +1,106 @@
+story_id: 11G
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know when it’s time to escalate the issue so I don’t wait too long
+  or act too early.
+situation_summary: A parent has been working with the school to resolve concerns about their child’s reduced
+  attendance, but progress has stalled. They are unsure whether they should continue trying to resolve
+  the issue through normal discussions or whether it is time to involve additional people, processes,
+  or supports.
+opening_message: We’ve had three meetings and my son is still only attending mornings. How do I know if
+  it’s time to escalate?
+persona: A mother of a 9-year-old son in Grade 4 who has autism and uses an AAC device. She has been engaging
+  with the school for several weeks and is organized but increasingly frustrated. She writes in short,
+  direct sentences and sometimes uses bullet-point thinking even in chat.
+hidden_facts:
+- Her son has been on a half-day schedule (mornings only) for about six weeks without a formal written
+  plan.
+- Three meetings have taken place — two with the classroom teacher and one with the vice-principal.
+- The school's stated reason is that they are waiting for a behaviour consultant to become available.
+- The school promised at the second meeting to provide a written update within two weeks; that update
+  never came.
+- She sent a follow-up email ten days ago and has not received a reply.
+- Her son's IEP exists and does not mention a reduced schedule as a support.
+- She has been keeping a log of dates, who attended each meeting, and what was said.
+- She wants to know whether she should contact the principal, the school board, or a parent advocate —
+  and in what order.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s a reasonable question. Many parents struggle to determine when continued discussions are
+    likely to be productive and when additional support may be needed.”
+- step: Explore what has already happened.
+  text: “Let’s look at what actions have already been taken and what responses you’ve received.”
+- step: Assess progress.
+  text: “Have any meaningful changes occurred since the issue was first identified?”
+- step: Identify indicators.
+  text: '“Some signs that escalation may be appropriate include: repeated meetings without progress; commitments
+    that are not being followed through; lack of response to requests; unresolved concerns despite multiple
+    attempts to address them”'
+- step: Explain the purpose.
+  text: “Escalation is typically intended to bring additional review, support, or decision-making into
+    the process when normal discussions have not resolved the issue.”
+- step: Encourage thoughtful action.
+  text: “The goal is not to escalate at the first challenge, but also not to allow concerns to remain
+    unresolved indefinitely.”
+- step: Suggest next step.
+  text: “Let’s review your timeline and determine whether escalation may be appropriate in your situation.”
+acceptance_criteria:
+- help the parent assess the current state of the situation
+- identify indicators that the issue may not be progressing toward resolution
+- distinguish between situations that may benefit from continued discussion and those that may warrant
+  escalation
+- help the parent evaluate whether reasonable attempts have been made to resolve the issue
+- explain common signs that additional support or review may be needed
+- encourage documentation of previous actions and outcomes
+- help parents understand the purpose of escalation
+- provide guidance without encouraging premature escalation
+- avoid assuming bad intent by the school or staff
+testing_checks:
+- help assess readiness
+- identify indicators objectively
+- encourage thoughtful decision-making
+- avoid escalating unnecessarily
+- connect recommendations to documented facts and actions
+guiding_question: null
+avoid_framing: null
+content_required:
+- common indicators that escalation may be appropriate
+- examples of situations where continued discussion may still be productive
+- examples of unresolved attendance-related concerns
+- escalation principles and decision-making guidance
+- examples of communication breakdowns
+- examples of unmet commitments or stalled progress
+- documentation and timeline review guidance
+- examples of escalation pathways within education systems
+variants:
+- description: discussions are ongoing and productive
+  message: We've been meeting with the teacher every week and things feel like they're moving, just slowly.
+    How do I know if I should keep waiting or start pushing harder?
+- description: discussions have stalled
+  message: We've had a few meetings but nothing has actually changed for my son. The conversations just
+    keep going in circles. Is it time to do something more?
+- description: commitments have not been fulfilled
+  message: At our last meeting the school said they'd send me a written plan within two weeks. That was
+    a month ago and I've heard nothing. What should I do now?
+- description: responses are delayed
+  message: I keep emailing the vice-principal and it takes weeks to get any response. At what point does
+    a slow response mean I need to go higher up?
+- description: multiple meetings have occurred without progress
+  message: We're on our fourth meeting and my son is still only there half the day. Every meeting ends
+    with 'we'll look into it.' When is enough enough?
+- description: parents are uncertain whether escalation is warranted
+  message: I don't want to make things awkward with the school if things are actually fine, but I also
+    don't want to wait too long. How do I tell if this is the moment to escalate?
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11G
+  extracted_at: '2026-10-14'

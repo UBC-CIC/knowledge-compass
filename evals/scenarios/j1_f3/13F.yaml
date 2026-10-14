@@ -1,0 +1,92 @@
+story_id: 13F
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to what to do if legal reasons are cited for my child’s exclusion so that
+  I can defend my child.
+situation_summary: A parent is told that their child cannot participate in an activity, program, course,
+  or educational opportunity because of legal, liability, safety, policy, or regulatory reasons. The parent
+  is unsure whether the explanation is accurate, complete, or whether alternative solutions may still
+  exist.
+opening_message: The school says my son can’t attend the field trip because of liability concerns. What
+  should I do?
+persona: A mother of a 10-year-old son in Grade 5 who has a physical disability and uses a wheelchair.
+  She is engaged and protective but tries to stay calm and collaborative with the school. She types in
+  short, direct sentences and occasionally uses informal punctuation.
+hidden_facts:
+- The school told her verbally that the field trip venue is 'not wheelchair accessible' and that liability
+  rules prevent them from taking her son.
+- Her son has an IEP that includes full participation in school activities and outings.
+- The school has not provided anything in writing about the exclusion.
+- This is the second field trip her son has been excluded from this school year.
+- She has not yet asked the school to explore alternative accommodations or a modified participation plan.
+- The class trip is to a science centre and is scheduled in three weeks.
+- Another parent mentioned that the science centre does have an accessible entrance and accessible exhibits.
+- She has not yet spoken to the principal — only to her son's classroom teacher.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It can be difficult when legal, liability, or policy reasons are cited and the explanation is
+    not fully understood.”
+- step: Encourage clarification.
+  text: “A helpful first step is often to understand exactly what concern is being raised and whether
+    it is a legal requirement, a policy interpretation, or a risk-management decision.”
+- step: Suggest questions.
+  text: '“You may wish to ask: o Can you explain the specific concern? o What policy or requirement applies?
+    o How was this decision reached? o What alternatives were considered? o What accommodations were explored
+    before exclusion was proposed?”'
+- step: Connect to inclusion.
+  text: “Inclusion discussions often focus on identifying ways participation can occur safely and meaningfully
+    rather than assuming exclusion is the only option.”
+- step: Encourage documentation.
+  text: “Requesting explanations in writing can help ensure everyone has a clear understanding of the
+    reasons being provided.”
+- step: Reinforce thoughtful advocacy.
+  text: “Understanding the rationale behind a decision often helps families ask more informed questions
+    and explore additional options.”
+- step: Suggest next step.
+  text: “Let’s examine the explanation you’ve been given and identify what information may still be missing.”
+acceptance_criteria:
+- help parents understand common legal or policy-based reasons that may be cited for exclusion
+- explain the difference between legal requirements, policy decisions, risk management, and administrative
+  practices
+- encourage parents to seek clarification and supporting information
+- help parents identify respectful questions they can ask
+- explain how inclusion, accommodation, and participation principles may still be relevant
+- encourage fact-finding before drawing conclusions
+- provide examples of information parents may wish to request
+- explain that legal and policy matters can be complex and context-specific
+- avoid providing legal advice or determining whether a school’s position is legally correct
+testing_checks:
+- encourages information gathering
+- helps parents ask clarifying questions
+- distinguishes legal requirements from assumptions where appropriate
+- promotes constructive advocacy
+- avoids legal conclusions
+- avoids telling parents the school is right or wrong
+- encourages documentation and follow-up
+guiding_question: How do I understand and respond when legal reasons are used to justify exclusion?
+avoid_framing: How do I prove the school is wrong?
+content_required:
+- common legal and policy-based explanations cited in schools
+- liability and risk-management concepts (plain language)
+- accommodation and inclusion principles
+- examples of exclusion scenarios
+- documentation and clarification practices
+- questions families can ask
+- policy versus legal requirement distinctions
+- examples of alternative accommodation approaches
+- trusted educational and rights-based resources
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13F
+  extracted_at: '2026-10-14'

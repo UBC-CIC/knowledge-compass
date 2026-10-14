@@ -1,0 +1,91 @@
+story_id: '135'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know the parameters (that are common) of the school’s duty to accommodate
+  so that I can hold the school accountable.
+situation_summary: A parent has been told that certain supports, accommodations, or participation opportunities
+  cannot be provided for their child. They want to understand what schools are generally expected to do
+  to support inclusion before limiting participation or concluding that accommodation is not possible.
+opening_message: The school says my son can’t participate because they don’t have the resources. Aren’t
+  they supposed to accommodate him?
+persona: A mother of a 9-year-old boy in Grade 4 who has a developmental disability and uses a communication
+  device. She is determined but not familiar with education law, and she writes in short, direct sentences
+  with occasional frustration showing through.
+hidden_facts:
+- The school told her verbally that they don't have enough EA support to include her son in afternoon
+  rotations like art and gym.
+- Her son currently attends only the morning block and is picked up at lunch — this has been going on
+  for about six weeks.
+- No formal reduced-schedule agreement was ever signed or sent home in writing.
+- Her son has an IEP but she has not been invited to an IEP review meeting since the schedule changed.
+- The principal said the board 'doesn't have the budget' for additional EA hours right now.
+- She has not yet asked for anything in writing from the school.
+- She wants to know what the school is actually required to do before they can say accommodation is impossible.
+- She has not contacted the school board or any outside advocate yet.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Many parents have similar questions when participation is limited due to support needs.”
+- step: Explain the concept.
+  text: “The duty to accommodate generally refers to the responsibility to identify and implement reasonable
+    supports that help students participate and access educational opportunities.”
+- step: Connect to inclusion.
+  text: “The purpose of accommodation is to reduce barriers and support meaningful participation alongside
+    peers whenever possible.”
+- step: Provide examples.
+  text: '“Accommodations may include: instructional supports; communication supports; environmental adjustments;
+    scheduling considerations; assistive technology; additional planning or staffing supports”'
+- step: Encourage inquiry.
+  text: '“Parents may wish to ask: What accommodations were considered?; Which accommodations were attempted?;
+    Why were certain options not pursued?; What alternatives were explored?”'
+- step: Clarify expectations.
+  text: “Understanding the accommodations that were considered can help families participate in informed
+    discussions about inclusion and participation.”
+- step: Suggest next step.
+  text: “Let’s explore what supports have been discussed for your child and whether there may be additional
+    questions to ask.”
+acceptance_criteria:
+- explain the concept of the duty to accommodate in plain language
+- describe the purpose of accommodation within inclusive education
+- explain that accommodation generally involves removing barriers to participation
+- identify common types of accommodations used in educational settings
+- explain that accommodations are often individualized
+- help parents understand what questions they can ask about accommodations that have been considered or
+  attempted
+- explain the relationship between accommodation and participation
+- distinguish between accommodation, modification, and exclusion
+- avoid making legal determinations about whether a duty has been met
+testing_checks:
+- explains accommodation in plain language
+- provides practical examples
+- connects accommodation to participation
+- encourages productive questions
+- distinguishes accommodation from exclusion
+- avoids legal advice
+- avoids making judgments about specific situations
+guiding_question: What kinds of efforts should generally be considered to support participation?
+avoid_framing: Has the school broken the law?
+content_required:
+- plain-language explanation of the duty to accommodate
+- inclusive education principles
+- accommodation frameworks and concepts
+- examples of educational accommodations
+- participation and accessibility concepts
+- common barriers faced by students
+- examples of accommodation discussions
+- distinction between accommodation, modification, and exclusion
+- human rights guidance related to accommodation
+- trusted policy and educational resources
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 135
+  extracted_at: '2026-10-14'

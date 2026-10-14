@@ -1,0 +1,94 @@
+story_id: 21A
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to ensure teachers are aware of the expectations of my child so that they
+  have a choice of what they want to do in life.
+situation_summary: A student is transitioning to a new teacher, grade, school, or educational environment.
+  The parent is concerned that educators may not fully understand their child’s strengths, capabilities,
+  aspirations, and potential, resulting in lower expectations and fewer future opportunities.
+opening_message: My daughter is moving to a new school. How do I make sure people see her potential and
+  not just her support needs?
+persona: A mother of a 12-year-old daughter with Down syndrome who is entering middle school. She is warm
+  but quietly assertive, and writes in short, plain sentences — occasionally emotional but always focused
+  on her daughter's future. Her daughter loves art and has clear social goals and interests.
+hidden_facts:
+- Her daughter is moving from a small elementary school where teachers knew her well to a larger middle
+  school where no one knows her yet.
+- At her old school, her daughter was included in the regular classroom for most subjects with some pull-out
+  support.
+- Her daughter recently won a school art award and hopes to take art classes at the new school.
+- The parent has heard from other families that the new school tends to place kids with disabilities in
+  a separate self-contained class by default.
+- The IEP meeting for the new school is scheduled for two weeks after the start of the school year — after
+  placement decisions are already made.
+- The parent tried emailing the new school's resource teacher over the summer but has not received a reply.
+- Her daughter has expressed that she wants to have friends and be in classes with other kids her age.
+- The parent's main fear is that staff will focus only on what her daughter cannot do and set a low ceiling
+  on her future.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families worry that important information about their child’s strengths and aspirations
+    may be lost during transitions.”
+- step: Explain the importance.
+  text: “The expectations educators hold can influence opportunities, course recommendations, supports,
+    and future planning.”
+- step: Encourage strengths-based conversations.
+  text: '“It can be helpful to share: strengths and interests; learning successes; future goals; preferred
+    learning approaches; aspirations expressed by the student”'
+- step: Suggest questions.
+  text: '“You may wish to ask: What goals are being considered for my child?; How are strengths reflected
+    in planning?; What opportunities are being made available?; How are future aspirations being incorporated
+    into educational decisions?”'
+- step: Connect to future opportunities.
+  text: “Educational expectations today often influence the choices and opportunities available later
+    in life.”
+- step: Reinforce collaboration.
+  text: “Families and educators can work together to ensure planning reflects both support needs and future
+    possibilities.”
+- step: Suggest next step.
+  text: “Let’s identify the key messages you want new educators to understand about your child.”
+acceptance_criteria:
+- explain the importance of maintaining high expectations during transitions
+- help parents communicate their child’s strengths, interests, goals, and aspirations
+- encourage discussions about future opportunities rather than current limitations
+- provide examples of information families may wish to share with educators
+- explain how expectations can influence educational opportunities and outcomes
+- help parents identify questions they can ask about future planning and learning goals
+- reinforce strengths-based educational planning
+- encourage collaboration between families and educators
+- avoid promoting unrealistic expectations while maintaining a focus on possibilities
+testing_checks:
+- promotes strengths-based planning
+- encourages sharing aspirations and goals
+- explains the importance of expectations
+- provides useful questions for families
+- connects expectations to future opportunities
+- avoids deficit-based assumptions
+- encourages collaborative planning
+guiding_question: How do I help new educators understand my child’s potential?
+avoid_framing: How do I convince teachers to expect more?
+content_required:
+- strengths-based planning approaches
+- transition-planning practices
+- student profile and learner profile concepts
+- educational goal-setting frameworks
+- future-planning and aspiration-based planning resources
+- examples of effective transition information
+- inclusive education principles
+- person-centered planning concepts
+- examples of student strengths and interests documentation
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 21A
+  extracted_at: '2026-10-14'

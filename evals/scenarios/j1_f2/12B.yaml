@@ -1,0 +1,85 @@
+story_id: 12B
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know who I can contact for help/support for inclusive ed so that I
+  won’t have to do this alone.
+situation_summary: A parent wants to better understand and advocate for inclusive education but is unsure
+  where to find guidance, expertise, or support. They know they cannot be expected to navigate educational
+  systems, policies, and advocacy efforts entirely on their own.
+opening_message: I believe in inclusive education, but I honestly don’t know who can help me navigate
+  all of this.
+persona: A mother of a Grade 3 child with autism and a communication support plan, living in a mid-sized
+  Canadian city. She is motivated and caring but feels overwhelmed by the education system and unsure
+  who the "right" people are to talk to. She writes in short, honest sentences and often expresses self-doubt.
+hidden_facts:
+- Her daughter has been sent home early two or three times a week for the past month, always around lunchtime.
+- The school says it is due to staffing shortages but has not put anything in writing.
+- She has attended one school meeting but felt talked over and left without clear answers.
+- She has heard the term 'inclusion' but does not know what it means legally or who enforces it.
+- A neighbour mentioned there are parent advocacy groups but she does not know how to find them.
+- She is not sure whether she needs a lawyer, a social worker, or someone else entirely.
+- She wants to understand the system well enough to speak up confidently at the next meeting.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families feel that way. Inclusive education can involve policies, planning, meetings, supports,
+    and decisions that can be difficult to navigate alone.”
+- step: Normalize seeking support.
+  text: “It’s completely reasonable to seek guidance and support from others.”
+- step: Explain support options.
+  text: '“Support may come from: parent advocacy organizations; disability organizations; community support
+    groups; educational support services; other families with lived experience; professionals who understand
+    inclusive education”'
+- step: Explain roles.
+  text: “Different supports can help in different ways. Some provide information, some offer advocacy
+    guidance, and others provide emotional or peer support.”
+- step: Encourage connection.
+  text: “Many families find it helpful to connect with people who have experienced similar situations.”
+- step: Build confidence.
+  text: “You don’t need to become an expert overnight. Having the right supports can make the journey
+    much easier.”
+- step: Suggest next step.
+  text: “Let’s explore what type of support would be most helpful for your situation right now.”
+acceptance_criteria:
+- explain that support is available to families navigating inclusive education
+- identify common sources of support and guidance
+- explain the different roles various support organizations and individuals may play
+- help parents understand when different supports may be useful
+- distinguish between educational, advocacy, community, and peer supports
+- encourage parents to seek support proactively rather than waiting for a crisis
+- provide information in plain language
+- help parents understand that building a support network is a normal part of advocacy
+- avoid assuming a single support source will meet every family’s needs
+testing_checks:
+- identifies multiple types of support
+- explains how different supports can help
+- avoids assuming one organization solves every problem
+- encourages proactive help-seeking
+- provides understandable explanations
+- reinforces that parents do not have to navigate the journey alone
+guiding_question: Who can help me navigate inclusive education?
+avoid_framing: Where do I file a complaint?
+content_required:
+- inclusive education support organizations
+- parent advocacy organizations
+- disability support organizations
+- community-based support services
+- peer support networks
+- educational support resources
+- examples of support roles and services
+- referral and navigation resources
+- plain-language descriptions of support options
+- jurisdiction-specific resources where available
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 12B
+  extracted_at: '2026-10-14'

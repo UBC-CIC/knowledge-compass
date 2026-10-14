@@ -1,0 +1,98 @@
+story_id: '234'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to understand when (timelines, lead time) I should be having transition
+  planning meetings with the old and new educators involved in the transition so that my child has a smooth
+  transition.
+situation_summary: A student is approaching a transition to a new grade, school, or educational environment.
+  The parent wants to ensure that transition planning begins early enough and includes the right people
+  so that important information, supports, expectations, and opportunities are not lost during the transition.
+opening_message: My daughter is moving to middle school next year. When should transition planning meetings
+  start?
+persona: A mother of a 12-year-old daughter with a learning disability and anxiety who is finishing Grade
+  6 and moving to middle school next year. She is organized and proactive but unfamiliar with how transition
+  planning works in the school system. She writes in short, direct sentences and tends to ask practical,
+  timeline-focused questions.
+hidden_facts:
+- Her daughter has an IEP that includes accommodations for reading, written output, and anxiety management
+  strategies.
+- The current elementary school has not yet mentioned anything about transition planning, and the parent
+  is worried it will be left too late.
+- The receiving middle school is a different building with a different principal and teaching team who
+  have never met her daughter.
+- Her daughter had a very rough transition from Grade 3 to Grade 4 when supports were not communicated
+  and it took months to get back on track.
+- The parent wants to know which people should be in the room — she is unsure whether the middle school
+  teachers, the resource teacher, or the vice-principal need to be involved.
+- She has heard from another parent that transition meetings should happen in the spring but does not
+  know if that is early enough.
+- Her daughter is also seeing a private therapist for anxiety, and the parent wants to know if that person
+  can or should be included.
+- The family is considering requesting a school visit for her daughter before the school year starts to
+  reduce first-day anxiety.
+reference_flow:
+- step: Acknowledge the importance.
+  text: “Transition planning is often most effective when it begins before the transition year is complete.”
+- step: Explain the purpose.
+  text: “The goal is to ensure that information, supports, learning goals, and expectations move with
+    the student.”
+- step: Explain timing.
+  text: “Many families benefit from beginning transition conversations months before the actual transition
+    occurs, rather than waiting until the final weeks of the school year.”
+- step: Identify participants.
+  text: '“Transition planning often involves: the family; current educators; future educators; support
+    staff; the student, when appropriate”'
+- step: Identify discussion topics.
+  text: '“Meetings may include discussions about: strengths and interests; learning goals; accommodations
+    and supports; social inclusion; transportation; future educational pathways”'
+- step: Reinforce continuity.
+  text: “Early planning helps reduce the risk of supports, expectations, and opportunities being lost
+    during transitions.”
+- step: Suggest next step.
+  text: “Let’s identify the transition your child is approaching and discuss what planning conversations
+    may be helpful.”
+acceptance_criteria:
+- explain the purpose of transition planning meetings
+- explain why early planning is important
+- identify common transition-planning timelines
+- help parents understand who should typically be involved in transition planning
+- explain the roles of current educators, future educators, families, and students
+- identify common topics discussed during transition meetings
+- encourage planning before key decisions have already been made
+- explain how transition planning supports continuity of learning, supports, and inclusion
+- present information in a timeline-based format
+testing_checks:
+- explains transition planning clearly
+- emphasizes early planning
+- identifies key participants
+- provides practical examples of discussion topics
+- connects planning to successful transitions
+- presents information chronologically
+- reinforces continuity of supports and expectations
+guiding_question: When should transition planning begin and who should be involved?
+avoid_framing: When is the transition meeting?
+content_required:
+- transition-planning frameworks
+- common educational transition timelines
+- roles and responsibilities during transitions
+- transition meeting best practices
+- inclusive education principles
+- support continuity concepts
+- examples of transition-planning agendas
+- student profile and strengths-based planning resources
+- family engagement practices
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 234
+  extracted_at: '2026-10-14'

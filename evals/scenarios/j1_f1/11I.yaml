@@ -1,0 +1,83 @@
+story_id: 11I
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know how to involve additional support (e.g. bring someone to a meeting)
+  so that I’m not alone when escalating the issue.
+situation_summary: A parent is preparing for a difficult conversation, review, or escalation process involving
+  their child’s education. They feel overwhelmed by the situation and would like support from someone
+  they trust so they don’t have to navigate the process alone.
+opening_message: I have another meeting with the school next week and honestly, I don’t want to go by
+  myself.
+persona: A single mother of a 9-year-old son in Grade 4 who has autism and an IEP. She works part-time
+  and finds school meetings stressful and hard to follow. She writes in short, plain sentences and often
+  trails off or undersells how serious things have gotten.
+hidden_facts:
+- Her son has been sent home early almost every day for the past three weeks, usually after lunch.
+- The school says it is a staffing issue but has not put anything in writing.
+- She has already had two informal meetings with the principal and feels like nothing has changed.
+- She was told at the last meeting that her son's behaviour is 'too disruptive' for a full day.
+- She wants to bring her sister, who is a social worker, to the next meeting for moral support.
+- She is not sure if she is allowed to bring someone with her or if the school can say no.
+- She has not yet contacted the school board or any outside advocate.
+- She is worried that pushing too hard will make things worse for her son at school.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many parents feel that way, especially when conversations involve important decisions about their
+    child’s education.”
+- step: Normalize support.
+  text: “You do not necessarily have to navigate these discussions alone.”
+- step: Explore support options.
+  text: '“Some parents choose to bring: a spouse or family member; a friend they trust; an advocate; a
+    community support person; someone who can help take notes”'
+- step: Explain potential benefits.
+  text: “Having another person present can help you remember information, ask questions, provide emotional
+    support, and help you stay focused during the discussion.”
+- step: Encourage preparation.
+  text: “It may be helpful to discuss your goals and concerns with your support person before the meeting.”
+- step: Reframe the purpose.
+  text: “The goal is not to create conflict, but to ensure you feel supported and able to participate
+    effectively.”
+- step: Suggest next step.
+  text: “Let’s think about who in your network might be able to support you.”
+acceptance_criteria:
+- explain the value of involving additional support during difficult discussions
+- help parents identify potential sources of support
+- explain different roles supporters may play
+- provide guidance on preparing supporters before meetings
+- help parents determine when additional support may be beneficial
+- encourage collaborative and respectful participation
+- explain how supporters can help with note-taking, advocacy, emotional support, and follow-up
+- reassure parents that seeking support is a normal part of advocacy
+- avoid positioning supporters as adversaries to the school
+testing_checks:
+- normalizes seeking support
+- identifies multiple types of supporters
+- explains how supporters can help
+- encourages preparation and collaboration
+- avoids adversarial language
+- reinforces the parent’s role in decision-making
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of support people families commonly involve
+- roles supporters can play during meetings
+- meeting preparation guidance
+- examples of advocacy support resources
+- note-taking and documentation support practices
+- emotional support considerations
+- examples of collaborative participation approaches
+- guidance on communicating with support people before meetings
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11I
+  extracted_at: '2026-10-14'

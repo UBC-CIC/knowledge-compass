@@ -1,0 +1,94 @@
+story_id: 21B
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to ensure my child is involved in extra curriculars so that they learn
+  essential skills in school that are not academic but still contributing to their growth and learning.
+situation_summary: A student is attending school and participating academically, but may not be involved
+  in extracurricular activities, clubs, sports, leadership opportunities, or other experiences that contribute
+  to personal growth, relationships, confidence, and life skills. The parent wants to ensure their child
+  has access to the full educational experience, not just classroom learning.
+opening_message: My son attends school every day, but he’s never included in clubs, sports, or other activities.
+  Am I missing something important?
+persona: A mother of a 14-year-old son in Grade 9 who has an intellectual disability and attends his neighbourhood
+  high school. She is warm and persistent, types in short conversational sentences, and sometimes second-guesses
+  herself but always advocates for her child.
+hidden_facts:
+- Her son has an intellectual disability and an active IEP.
+- He attends all his classes and is doing well academically with support, but has never been invited to
+  join any club, team, or school event outside of class time.
+- She asked his resource teacher once and was told extracurriculars are 'optional' and 'up to him to sign
+  up', but he needs support to navigate that process.
+- The school has a drama club, a basketball team, and a student council that other kids in his class participate
+  in.
+- Her son has expressed interest in basketball and has mentioned feeling left out when classmates talk
+  about after-school activities.
+- She has not yet spoken to the principal or requested a formal meeting about extracurricular access.
+- She wants the school to help facilitate his participation, not just leave the door technically open.
+- She is unsure whether extracurricular inclusion is something she can formally ask for or whether it
+  falls outside the school's obligations.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many important learning experiences happen outside the classroom.”
+- step: Expand the definition of learning.
+  text: “Students often develop valuable skills through extracurricular activities, including teamwork,
+    communication, leadership, self-confidence, problem-solving, and relationship-building.”
+- step: Provide examples.
+  text: '“Extracurricular opportunities may include: sports teams; clubs; student leadership activities;
+    music and arts programs; volunteer opportunities; school events and committees; community-based activities”'
+- step: Connect to future opportunities.
+  text: “These experiences can contribute to future employment, community participation, independence,
+    and personal growth.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What extracurricular opportunities are available?; What supports may help
+    my child participate?; What barriers currently exist?; How can participation be made meaningful and
+    successful?”'
+- step: Reinforce inclusion.
+  text: “A quality education includes opportunities to learn, contribute, belong, and develop both inside
+    and outside the classroom.”
+- step: Suggest next step.
+  text: “Let’s explore activities that align with your child’s interests and strengths.”
+acceptance_criteria:
+- explain the value of extracurricular participation as part of a quality education
+- help parents understand the social, emotional, leadership, and life skills that extracurricular activities
+  can support
+- provide examples of extracurricular opportunities available to students
+- explain how participation can contribute to confidence, belonging, independence, and future opportunities
+- help parents identify barriers that may limit participation
+- provide examples of accommodations and supports that may enable participation
+- encourage planning that includes both academic and non-academic experiences
+- reinforce that extracurricular involvement is an important part of student development
+- avoid assuming participation must look the same for every student
+testing_checks:
+- explains the value of extracurricular participation
+- connects participation to growth and future opportunities
+- promotes belonging and inclusion
+- provides practical examples
+- identifies barriers and supports
+- avoids focusing solely on academic achievement
+guiding_question: How can my child benefit from the full school experience?
+avoid_framing: Which club should my child join?
+content_required:
+- extracurricular participation concepts
+- social and emotional learning principles
+- leadership and life-skills development resources
+- examples of extracurricular opportunities
+- participation and belonging concepts
+- accommodation and support strategies
+- transition-to-adulthood planning resources
+- student strengths and interest exploration tools
+- examples of successful participation supports
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 21B
+  extracted_at: '2026-10-14'

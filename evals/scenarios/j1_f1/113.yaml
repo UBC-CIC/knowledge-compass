@@ -1,0 +1,105 @@
+story_id: '113'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to know why my child is asked to stay home on field trip days so that
+  my child can participate and I don’t have to take a day off work.
+situation_summary: A parent learns that their child’s class is going on a field trip, but their child
+  is not being permitted to attend. As a result, the parent must make alternate arrangements and may need
+  to miss work while their child misses an important educational and social experience.
+opening_message: The school told me my son can’t attend the field trip and should stay home that day.
+persona: A working mother of a 10-year-old boy in Grade 5 who has an autism diagnosis and an IEP. She
+  communicates in short, direct sentences and tends to be frustrated but polite. She is not familiar with
+  education law but knows her son has the right to be included.
+hidden_facts:
+- The class is going on a field trip to a science museum next Friday.
+- The school told her verbally that her son 'can't attend' but gave no written notice or explanation.
+- Her son's IEP includes accommodations for sensory regulation and 1:1 support for community outings.
+- The school has not arranged an Educational Assistant to accompany him on the trip.
+- This is the second field trip her son has missed this school year.
+- She had to take an unpaid day off work the last time this happened.
+- The principal said it was 'for his safety' but did not explain further.
+- She has not yet asked for anything in writing.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It sounds like your child has been excluded from participating in a school field trip.”
+- step: Seek clarification.
+  text: “Did the school explain why they believe your child cannot attend?”
+- step: Explore the reason.
+  text: “Schools may cite concerns related to supervision, transportation, safety, behaviour, accessibility,
+    or available supports.”
+- step: Help identify gaps.
+  text: “Do you know whether the school explored accommodations or additional supports that could allow
+    your child to participate?”
+- step: Connect to inclusion.
+  text: “Field trips are often considered part of a student’s educational experience, and participation
+    may be important for learning, social inclusion, and belonging.”
+- step: Suggest questions.
+  text: “You may wish to ask what barriers were identified, what accommodations were considered, and what
+    would be required for your child to participate.”
+- step: Offer next step.
+  text: “Let’s look at ways to gather more information and advocate for participation.”
+acceptance_criteria:
+- help the parent understand the reason provided by the school for excluding the student from the field
+  trip
+- distinguish between support-related, safety-related, behavioural, transportation, staffing, and logistical
+  concerns
+- explain those reasons in plain language
+- help the parent identify whether accommodations or supports have been considered
+- encourage the parent to seek clarification when the reason is vague or incomplete
+- help the parent understand how participation relates to inclusion
+- provide questions the parent may wish to ask the school
+- identify possible next steps for advocating for participation
+- avoid making assumptions or legal conclusions
+testing_checks:
+- help the parent understand the reason
+- encourage clarification
+- connect the discussion to participation and inclusion
+- identify constructive next steps
+guiding_question: null
+avoid_framing: null
+content_required:
+- common reasons students are excluded from field trips
+- examples of support and accommodation needs during community activities
+- transportation considerations
+- supervision and staffing considerations
+- accessibility considerations
+- inclusion principles related to school activities
+- examples of questions parents can ask
+- examples of accommodations that may support participation
+- common school practices and barriers
+- guidance on advocating for participation
+variants:
+- description: lack of staffing
+  message: The school says they don't have enough staff to support my son on the field trip so he has
+    to stay home. The rest of his class is going.
+- description: transportation limitations
+  message: They told me the bus isn't accessible for my son's needs so he can't go on the field trip.
+    The other kids are all going.
+- description: behavioural concerns
+  message: The teacher said my son can't go on the field trip because of his behaviour lately. He's being
+    left out while his whole class goes.
+- description: safety concerns
+  message: The school says it's a safety issue and my son can't attend the field trip. They didn't really
+    explain what the safety concern is.
+- description: accessibility concerns
+  message: The venue apparently isn't accessible so my son is being told to stay home on field trip day.
+    No one offered any other option.
+- description: lack of accommodations
+  message: My son's IEP has accommodations but the school says they can't put them in place for the field
+    trip so he just can't go.
+- description: vague or unexplained decisions
+  message: The school told me my son shouldn't come in on field trip day but won't really say why. I can't
+    get a clear answer from anyone.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 113
+  extracted_at: '2026-10-14'

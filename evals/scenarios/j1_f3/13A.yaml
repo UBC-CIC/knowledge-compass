@@ -1,0 +1,90 @@
+story_id: 13A
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know what rights my child has around selecting courses so that they
+  can pursue their goals.
+situation_summary: A student is approaching a point where course selections, educational pathways, or
+  program decisions will influence future opportunities. The parent is concerned that assumptions about
+  disability, support needs, or educational placement may limit options that should remain available to
+  their child.
+opening_message: The school is recommending a different pathway than the one my daughter wants. What rights
+  does she have when choosing courses?
+persona: A mother of a Grade 10 daughter with a learning disability, living in a mid-sized Canadian city.
+  She is engaged and informed but unfamiliar with the legal language around education rights. She writes
+  in short, direct sentences and tends to ask practical questions.
+hidden_facts:
+- The daughter has a learning disability (dyslexia) documented in her IEP.
+- The school is steering her toward a modified/applied pathway instead of the academic pathway she wants.
+- The daughter wants to pursue post-secondary education and needs the academic pathway to qualify.
+- The school's stated reason is that the academic courses would be 'too hard' for her given her IEP.
+- No formal meeting has been held yet — the recommendation came informally from a guidance counsellor.
+- The parent has not yet received anything in writing about the course recommendation.
+- The daughter is capable of the academic courses with the accommodations already in her IEP.
+- The parent wants to know if the school can legally steer her daughter away from courses she is capable
+  of taking.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Course and pathway decisions can have a significant impact on future opportunities, so it’s understandable
+    to want clarity.”
+- step: Explain the principle.
+  text: “Students and families should have meaningful involvement in educational planning and course selection
+    discussions.”
+- step: Connect to goals.
+  text: “Course decisions are often most effective when they are guided by the student’s interests, strengths,
+    aspirations, and long-term goals.”
+- step: Explain considerations.
+  text: '“Schools may consider: academic requirements; graduation pathways; support needs; accommodations;
+    future education or employment goals”'
+- step: Suggest questions.
+  text: '“You may wish to ask: What options are available?; Why is this recommendation being made?; What
+    supports would help my child succeed in their preferred course?; How might this decision affect future
+    opportunities?”'
+- step: Reinforce participation.
+  text: “Meaningful educational planning includes listening to the student’s goals and considering how
+    barriers can be addressed.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s goals and the options being discussed.”
+acceptance_criteria:
+- explain the importance of course selection and pathway decisions
+- help parents understand that students should have opportunities to pursue meaningful educational goals
+- explain common educational pathways and course options
+- describe how course decisions can impact future opportunities
+- help parents understand their role in educational planning discussions
+- explain how supports and accommodations relate to course participation
+- provide examples of questions families can ask when course recommendations are made
+- encourage informed decision-making based on student interests, strengths, and goals
+- avoid making guarantees about specific course placements or outcomes
+testing_checks:
+- explains course selection concepts clearly
+- connects course decisions to future opportunities
+- encourages student voice and participation
+- provides useful planning questions
+- recognizes the importance of accommodations and supports
+- avoids making placement recommendations
+guiding_question: How can my child pursue the educational pathway that aligns with their goals?
+avoid_framing: What course should my child take?
+content_required:
+- educational pathways and graduation options
+- course selection processes
+- transition planning concepts
+- inclusive education principles
+- student participation in educational planning
+- accommodations and support considerations
+- examples of course planning discussions
+- common barriers and assumptions that affect pathway decisions
+- future education, employment, and community participation considerations
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13A
+  extracted_at: '2026-10-14'

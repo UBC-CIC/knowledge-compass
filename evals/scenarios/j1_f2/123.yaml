@@ -1,0 +1,111 @@
+story_id: '123'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know what formalized partial day attendance looks like so that I can
+  identify what’s happening to my child.
+situation_summary: A parent has been told their child will attend school for only part of the day or follow
+  a modified schedule. The arrangement appears to be planned and intentional, but the parent is unsure
+  what formalized partial day attendance looks like, how it is typically documented, and what information
+  they should expect to receive.
+opening_message: The school says my daughter will only attend mornings for the foreseeable future and
+  they’ve put it in writing. Is that considered partial day attendance?
+persona: A mother of a Grade 2 girl with a developmental delay and anxiety, living in a mid-sized Canadian
+  city. She is cooperative and wants to work with the school but is confused by the paperwork and processes
+  involved. She writes in short, plain sentences and tends to ask one question at a time.
+hidden_facts:
+- The school sent home a one-page letter stating her daughter will attend mornings only, from 8:30 to
+  11:30 a.m., starting next week.
+- The letter does not mention a review date or an end date for the arrangement.
+- The parent signed and returned a copy of the letter at the school's request but was not sure what she
+  was agreeing to.
+- The school held a brief meeting with the parent and the classroom teacher before sending the letter,
+  but no one explained what the document meant legally or procedurally.
+- The daughter has an IEP, but the parent has not been told whether this schedule change is reflected
+  in it.
+- The parent has not been told who is responsible for monitoring whether the arrangement is working.
+- The parent received a separate email from the vice-principal saying the schedule will be 'reviewed when
+  things settle down,' but no specific timeline was given.
+- The parent wants to understand whether this kind of written plan is normal, what it should contain,
+  and whether she had the right to ask questions before signing.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like the school has implemented a planned reduced schedule and communicated that decision
+    formally.”
+- step: Define the concept.
+  text: “Formalized partial day attendance generally occurs when a student’s reduced schedule has been
+    intentionally established and documented by the school.”
+- step: Describe common indicators.
+  text: '“Examples may include: a written attendance plan; documented meeting decisions; scheduled review
+    dates; communication outlining attendance expectations; documented conditions for returning to full-time
+    attendance”'
+- step: Explain why it matters.
+  text: “When a reduced schedule becomes formalized, it is important that parents understand the reasons,
+    expectations, and plans associated with it.”
+- step: Encourage review.
+  text: '“You may wish to ask: Why was this decision made?; How will progress be monitored?; When will
+    the arrangement be reviewed?; What steps support a return to full-time attendance?”'
+- step: Highlight clarity.
+  text: “A formal arrangement should generally be clear enough that everyone understands what is expected
+    and how future decisions will be made.”
+- step: Suggest next step.
+  text: “Let’s review the information you’ve received and identify any gaps or unanswered questions.”
+acceptance_criteria:
+- explain what formalized partial day attendance is
+- describe common indicators that a reduced schedule has become formalized
+- help parents understand how such arrangements may be communicated or documented
+- explain the types of information parents may expect to receive
+- distinguish formalized arrangements from informal attendance reductions
+- help parents identify whether review dates, goals, or return-to-full-time plans exist
+- explain why documentation and clarity are important
+- encourage parents to seek clarification when arrangements are unclear
+- avoid implying that all formalized arrangements are inappropriate
+testing_checks:
+- explain what makes an arrangement formalized
+- distinguish formal and informal situations
+- encourage understanding and clarification
+- highlight the importance of review and documentation
+- help parents identify missing information
+guiding_question: null
+avoid_framing: null
+content_required:
+- definition of formalized partial day attendance
+- examples of documented attendance arrangements
+- examples of attendance plans and meeting outcomes
+- common elements found in formal attendance decisions
+- review and monitoring practices
+- examples of return-to-full-time planning
+- differences between formal and informal arrangements
+- guidance on clarification and documentation requests
+- plain-language explanations suitable for families
+variants:
+- description: written attendance plans
+  message: The school gave me a written plan saying my son will only be there for part of the day. Is
+    that something they're supposed to put in writing?
+- description: documented reduced schedules
+  message: They've given us a document showing a reduced schedule for my daughter. What does that usually
+    look like when it's done properly?
+- description: meeting decisions
+  message: We had a meeting and they decided my son would come in late and leave early each day. Does
+    a decision like that need to be written down somewhere?
+- description: review timelines
+  message: The school said they'll review my daughter's schedule in a few weeks but didn't give a specific
+    date. Is a review timeline something that should be included in these arrangements?
+- description: attendance agreements
+  message: The school asked me to sign an attendance agreement for my son. I didn't really understand
+    what I was agreeing to. Is that a normal thing?
+- description: written communications about reduced participation
+  message: I got an email from the vice-principal saying my daughter won't be doing the full day anymore.
+    Does a written communication like that count as something official?
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 123
+  extracted_at: '2026-10-14'

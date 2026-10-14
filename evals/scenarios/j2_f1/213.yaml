@@ -1,0 +1,98 @@
+story_id: '213'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to make sure my child has work experience so that they can get a job.
+situation_summary: A student is progressing through school, but the parent is concerned that they are
+  not being exposed to work experiences, employment opportunities, or skill-building activities that could
+  help prepare them for adult life. The parent wants to understand how work experience can support future
+  employment and independence.
+opening_message: My son is doing well in school, but I’m worried he isn’t getting any experience that
+  will help him find a job later.
+persona: A mother of a teenage boy in Grade 10 with an intellectual disability who communicates in a warm,
+  conversational tone. She is forward-thinking and engaged in her son's education, but feels she has to
+  push to get information. She uses plain, everyday language and tends to explain her worries in practical
+  terms.
+hidden_facts:
+- Her son is 16 and has a mild intellectual disability; he is included in a regular high school with some
+  modified courses.
+- He has never had a co-op placement, job shadowing, or any school-organized work experience.
+- His IEP mentions 'transition planning' but has no specific employment or vocational goals written into
+  it.
+- She raised the topic at his last IEP meeting and was told the school would 'look into it' but nothing
+  has happened since, about four months ago.
+- A neighbour's son at a different school did a supported co-op placement in Grade 11 and it made a big
+  difference, which is what prompted her concern.
+- She is not sure whether co-op or work experience programs are available to students with disabilities
+  at her son's school, or who to ask.
+- She wants her son to eventually live as independently as possible and sees paid or volunteer work as
+  a key part of that.
+- She is unsure whether she needs to wait for the school to act or whether she can request something specific
+  herself.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families share that concern. Employment skills and work experience often develop long before
+    a student enters the workforce.”
+- step: Explain the importance.
+  text: “Work experiences can help students build confidence, practical skills, workplace habits, and
+    an understanding of their interests and strengths.”
+- step: Provide examples.
+  text: '“Work-related experiences may include: job shadowing; volunteer opportunities; school-based work
+    programs; co-op placements; community employment experiences; career exploration activities”'
+- step: Connect to future planning.
+  text: “Students who gain work-related experience during school often have more opportunities to explore
+    career interests and build employment skills.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What work experience opportunities are available?; How are students connected
+    with employers?; What employment preparation programs exist?; How can my child’s interests be incorporated
+    into planning?”'
+- step: Reinforce possibilities.
+  text: “Employment planning is most effective when it begins early and focuses on strengths, interests,
+    and future goals.”
+- step: Suggest next step.
+  text: “Let’s explore the types of work experiences that may be a good fit for your child.”
+acceptance_criteria:
+- explain the value of work experience in preparing students for employment
+- help parents understand different forms of work-related learning opportunities
+- explain how work experience can build skills, confidence, and independence
+- encourage employment planning before graduation
+- help parents identify questions they can ask about work experience opportunities
+- explain the connection between school experiences and future employment outcomes
+- provide examples of age-appropriate work experience opportunities
+- encourage planning based on the student’s interests, strengths, and goals
+- avoid guaranteeing employment outcomes
+testing_checks:
+- explains the value of work experience clearly
+- connects work experience to future employment opportunities
+- provides practical examples
+- encourages early planning
+- focuses on strengths and interests
+- avoids guaranteeing employment outcomes
+- identifies useful questions for families
+guiding_question: How can my child build experiences today that support future employment?” (the next
+  level beyond graduation)
+avoid_framing: How do I get my child a job?
+content_required:
+- work experience and career exploration programs
+- co-op and school-to-work transition opportunities
+- volunteer and community participation opportunities
+- employment readiness concepts
+- transition-to-adulthood planning resources
+- examples of workplace skills
+- student strengths and interest exploration resources
+- employment pathway examples
+- inclusive employment principles
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 213
+  extracted_at: '2026-10-14'

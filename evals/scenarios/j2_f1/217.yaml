@@ -1,0 +1,89 @@
+story_id: '217'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent I want to know what my options are if my child is unable to get the credits to
+  graduate so that my child can still get a quality education.
+situation_summary: A student is struggling to earn the credits required for graduation or may not be on
+  a pathway that leads to a traditional high school diploma. The parent is concerned about what this means
+  for their child’s future and wants to understand what alternative educational pathways, supports, and
+  opportunities may still be available.
+opening_message: I’m worried my daughter may not get enough credits to graduate. What happens then?
+persona: A mother of a 16-year-old daughter in Grade 11 with a learning disability and processing difficulties.
+  She is practical and soft-spoken, types in short sentences, and sometimes trails off when she's unsure
+  how to phrase something. She worries about her daughter's future but tries to stay hopeful.
+hidden_facts:
+- Her daughter has a learning disability affecting reading and writing and has an IEP.
+- She has failed or not completed two required credits so far this year.
+- The school mentioned she may not be on track for an Ontario Secondary School Diploma (OSSD).
+- A resource teacher briefly mentioned something called a 'certificate' instead of a diploma but gave
+  no details.
+- The parent is worried this will close doors to college or any further education.
+- She wants to know if her daughter can still go to college or get a job with a different credential.
+- The school has not yet held a formal meeting to discuss alternative pathways.
+- Her daughter wants to work in a healthcare-related field someday.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families worry about this, especially during transitions when future pathways become more
+    important.”
+- step: Reframe the discussion.
+  text: “Graduation is one important milestone, but it is not the only pathway to learning, growth, employment,
+    and community participation.”
+- step: Explore possibilities.
+  text: '“Depending on the student’s goals and circumstances, options may include: continuing educational
+    programming; alternative graduation pathways; vocational or skills-based training; employment preparation
+    programs; community-based learning opportunities; transition-to-adulthood supports”'
+- step: Focus on strengths and goals.
+  text: “The most helpful question is often not ‘Can my child graduate?’ but ‘What future is my child
+    working toward, and what supports will help them get there?’”
+- step: Suggest questions.
+  text: '“You may wish to ask: What pathways remain available?; What learning goals are most important?;
+    What transition supports exist?; How can we continue building skills and opportunities?”'
+- step: Reinforce possibilities.
+  text: “Educational planning should continue to focus on growth, participation, and future opportunities,
+    regardless of the specific pathway.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s goals and the options that may support those goals.”
+acceptance_criteria:
+- explain that graduation is one of several educational outcomes
+- help parents understand alternative educational pathways that may exist
+- explain how educational planning can continue even when graduation credits are a concern
+- identify questions families can ask about available options
+- explain that opportunities for learning, skill development, employment preparation, and community participation
+  can continue beyond traditional graduation pathways
+- encourage strengths-based planning focused on the student’s goals and interests
+- help parents understand that educational success may look different for different students
+- avoid presenting alternative pathways as lesser options
+testing_checks:
+- explains alternatives in plain language
+- maintains a strengths-based approach
+- focuses on future opportunities
+- avoids deficit-based language
+- provides practical questions and next steps
+- reinforces that learning and growth can continue through multiple pathways
+guiding_question: What opportunities remain available if graduation credits become a challenge?
+avoid_framing: What happens when my child fails?
+content_required:
+- graduation pathways and requirements
+- alternative educational pathways
+- transition-to-adulthood planning resources
+- vocational and employment preparation programs
+- community participation opportunities
+- continuing education options
+- person-centered planning concepts
+- strengths-based planning resources
+- examples of successful alternative pathways
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 217
+  extracted_at: '2026-10-14'

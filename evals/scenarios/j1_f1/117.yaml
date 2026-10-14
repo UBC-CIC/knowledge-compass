@@ -1,0 +1,83 @@
+story_id: '117'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want to see clear next steps after each interaction with the school or other
+  staff so I can keep moving forward.
+situation_summary: A parent has just completed a conversation with the school, received new information,
+  or taken an action, but is unsure what to do next. They don’t want to lose momentum, repeat steps unnecessarily,
+  or miss an important opportunity to move the situation forward.
+opening_message: The principal emailed me and explained why my son is only attending mornings.
+persona: A single mother of a 9-year-old boy in Grade 4 who has an autism diagnosis and an IEP. She works
+  part-time and communicates in short, direct sentences, often typing quickly on her phone. She is organized
+  but feels out of her depth when dealing with school administration.
+hidden_facts:
+- The principal's email says her son is on a reduced morning-only schedule because there is not enough
+  EA support in the afternoons to meet his needs safely.
+- This arrangement started about three weeks ago without any formal meeting or written notice — the email
+  is the first official explanation she has received.
+- She replied to the email the same day asking what the next steps are, but has not heard back yet.
+- Her son's IEP was last updated in September and does not mention a reduced schedule.
+- She has been keeping a handwritten log of the days and times he has been sent home or kept to mornings
+  only.
+- She wants him back in school full days as soon as possible and is willing to attend a meeting.
+- A neighbour told her she should ask for everything in writing and request a formal meeting, but she
+  is not sure how to do that.
+- She does not know whether she should contact the school board directly or wait for the principal to
+  respond.
+reference_flow:
+- step: Acknowledge progress.
+  text: “That’s helpful information. You now have a better understanding of the school’s reasoning.”
+- step: Identify the current stage.
+  text: “The next step is usually to understand what supports were considered before the schedule was
+    reduced.”
+- step: Provide options.
+  text: '“You may wish to: ask what accommodations were attempted; request any supporting documentation;
+    ask what conditions would allow a return to full-time attendance”'
+- step: Explain why.
+  text: “These questions can help you understand whether additional supports may be available.”
+- step: Recommend a next action.
+  text: “A good next step may be to request information about the supports that were tried before the
+    decision was made.”
+- step: Keep momentum.
+  text: “Once you receive that information, we can determine what options may be available moving forward.”
+acceptance_criteria:
+- recognize where the parent is in the partial day attendance journey
+- identify the action or information that was most recently obtained
+- recommend one or more logical next steps
+- explain why each suggested step may be helpful
+- present recommendations in plain language
+- avoid overwhelming the parent with too many options
+- adapt recommendations based on information already gathered
+- encourage the parent to continue documenting actions and outcomes
+- provide links to relevant guidance or resources where appropriate
+testing_checks:
+- recommendations change based on information already gathered
+- recommendations are relevant to the current stage
+- the system does not repeatedly suggest completed actions
+- the system presents manageable next steps
+- the parent always receives a clear action they can take
+guiding_question: null
+avoid_framing: null
+content_required:
+- the overall partial day attendance pathway
+- the sequence of recommended actions within the pathway
+- common parent questions at each stage
+- dependencies between steps
+- examples of typical school responses
+- decision points and branching scenarios
+- supporting resources linked to each stage
+- indicators that a parent may be ready for escalation or appeal
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 117
+  extracted_at: '2026-10-14'

@@ -1,0 +1,92 @@
+story_id: '214'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to understand what are the prerequisites so that we can make an informed
+  decision (so we don’t actually close doors later).
+situation_summary: A student is approaching an educational, training, employment, or transition decision,
+  but the parent is unsure what requirements, prerequisites, or eligibility criteria may affect future
+  opportunities. They want to understand these requirements before making decisions that could limit future
+  options.
+opening_message: The school is recommending a different pathway for my daughter. How do I know what opportunities
+  that might affect later?
+persona: A mother of a 16-year-old daughter in Grade 11 with a learning disability and mild anxiety. She
+  is thoughtful and cautious, and tends to write in short, plain sentences, often expressing worry about
+  the future without using much educational jargon.
+hidden_facts:
+- The school is recommending her daughter move from the academic to the applied or locally-developed stream
+  for two core subjects.
+- The parent is unsure whether this change would affect her daughter's ability to apply to college or
+  university later.
+- The school framed it as a way to reduce stress and improve grades, but did not explain downstream consequences.
+- Her daughter has expressed interest in becoming a dental hygienist, which the parent believes may require
+  specific prerequisites.
+- The parent has not yet spoken to a guidance counsellor independently — only heard this in a team meeting.
+- The daughter is currently passing her academic courses, though with difficulty.
+- The school has not provided any written documentation about the pathway change or its implications.
+- The parent wants to say yes to the school's recommendation but is afraid of accidentally closing doors.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important question. Many future opportunities have requirements that are not always
+    obvious when decisions are first being made.”
+- step: Explain prerequisites.
+  text: “Prerequisites are requirements that must be completed before a student can access certain courses,
+    programs, training opportunities, or educational pathways.”
+- step: Provide examples.
+  text: '“Examples may include: required courses for graduation; courses needed for post-secondary admission;
+    requirements for specialized training programs; eligibility criteria for employment or transition
+    programs”'
+- step: Explain why it matters.
+  text: “Understanding prerequisites early can help families avoid unintentionally limiting future options.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What opportunities could this decision affect later?; Are there requirements
+    we should be aware of?; What options remain available if we choose this pathway?; How can we keep
+    future choices open?”'
+- step: Reinforce informed planning.
+  text: “The goal is not to choose a perfect pathway today, but to understand how today’s decisions connect
+    to tomorrow’s opportunities.”
+- step: Suggest next step.
+  text: “Let’s look at the opportunity you’re considering and identify any important prerequisites.”
+acceptance_criteria:
+- explain what prerequisites are in plain language
+- help parents identify prerequisites associated with courses, graduation pathways, postsecondary options,
+  employment programs, and transition opportunities
+- explain how current decisions may affect future eligibility
+- encourage parents to consider future goals when reviewing prerequisites
+- provide examples of common prerequisite structures
+- help parents identify questions they can ask before making decisions
+- encourage proactive planning rather than reactive decision-making
+- avoid recommending a specific pathway without sufficient context
+testing_checks:
+- explains prerequisites in plain language
+- provides relevant examples
+- connects prerequisites to future opportunities
+- encourages proactive planning
+- helps parents identify useful questions
+- avoids making assumptions about a student’s goals or pathway
+guiding_question: What requirements should we understand before making this decision?
+avoid_framing: What should we choose?
+content_required:
+- course prerequisite structures
+- graduation requirements
+- post-secondary admission requirements
+- employment and training pathway information
+- transition planning resources
+- educational pathway examples
+- common eligibility criteria for programs and services
+- future-planning frameworks
+- examples of prerequisite-related decisions
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 214
+  extracted_at: '2026-10-14'

@@ -1,0 +1,89 @@
+story_id: '139'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know if the school can give my child their medication so that they
+  can be safe at school.
+situation_summary: A student requires medication during the school day to manage a health condition, maintain
+  safety, or support participation in learning. The parent is unsure whether school staff can administer
+  medication and wants to understand how medication support is typically managed within the school environment
+  school.
+opening_message: My son needs medication during the school day. Can the school give it to him?
+persona: A mother of a Grade 3 boy who has a chronic health condition requiring daily medication at lunchtime.
+  She is warm but anxious, types in short sentences, and is new to navigating school health policies.
+  She wants her son to be safe and included at school without her having to leave work every day.
+hidden_facts:
+- Her son has Type 1 diabetes and needs an insulin injection at lunch.
+- The school has not yet set up any health or medication plan for him.
+- She currently drives to the school every day at noon to give him the injection herself.
+- The school principal told her verbally that 'staff aren't trained for that' but gave no written response.
+- She has a letter from his pediatrician outlining the medication schedule and dosage.
+- She is worried about what happens on days she cannot leave work.
+- She has not yet asked about an individual health support plan or accommodation.
+- She wants to know if the school is required to help or if it is optional.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families have questions about medication support because it is often essential for a student’s
+    health, safety, and participation at school.”
+- step: Explain the variability.
+  text: “Medication practices can vary depending on school policies, staffing models, training requirements,
+    and local regulations.”
+- step: Provide examples.
+  text: '“Students may require support with: o daily medications o emergency medications o seizure management
+    medications o diabetes-related medications o asthma medications o other prescribed treatments”'
+- step: Explain planning.
+  text: “Schools often use medication forms, health plans, emergency procedures, and communication processes
+    to help ensure medications are administered safely.”
+- step: Suggest questions.
+  text: '“You may wish to ask: o What medication supports are available? o What documentation is required?
+    o Who is responsible for administering medication? o What training is provided? o How are emergencies
+    handled?”'
+- step: Connect to participation.
+  text: “Appropriate medication support can be an important part of helping students attend school safely
+    and participate fully.”
+- step: Suggest next step.
+  text: “Let’s look at your child’s medication needs and identify what information may be helpful when
+    speaking with the school.”
+acceptance_criteria:
+- explain that medication support practices vary by jurisdiction and school system
+- explain the relationship between medication support, student safety, and participation
+- provide examples of medication support commonly provided in schools
+- help parents understand the planning and documentation often required
+- explain the importance of communication between families, healthcare providers, and schools
+- identify common questions parents may wish to ask
+- explain the role of medication administration plans where applicable
+- encourage proactive planning before medication is needed at school
+- avoid providing medical advice or legal determinations
+testing_checks:
+- explains medication support in plain language
+- emphasizes safety and planning
+- provides practical questions for families
+- avoids medical advice
+- avoids legal determinations
+- recognizes the importance of medication support for participation
+guiding_question: How is medication support typically managed at school?
+avoid_framing: Can I legally require the school to administer medication?
+content_required:
+- common school medication administration practices
+- medication planning processes
+- medication authorization requirements
+- health and safety planning concepts
+- emergency medication procedures
+- communication and documentation practices
+- examples of school health plans
+- roles and responsibilities commonly involved in medication support
+- jurisdiction-specific policies where available
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 139
+  extracted_at: '2026-10-14'

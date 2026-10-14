@@ -1,0 +1,88 @@
+story_id: 13D
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know what an appeal is so that I’m prepared to take action.
+situation_summary: A parent disagrees with a decision affecting their child’s education, participation,
+  supports, or placement. They have heard that they may be able to appeal the decision, but are unsure
+  what an appeal is, how it works, or when it may be appropriate to consider one.
+opening_message: The school made a decision I don’t agree with and someone told me I could appeal it.
+  What does that actually mean?
+persona: A single mother of a 10-year-old son in Grade 5 who has an IEP for anxiety and a learning disability.
+  She is determined but unfamiliar with education system processes and tends to write in short, direct
+  sentences. She has been pushing back on a recent school decision and heard from another parent that
+  she has options.
+hidden_facts:
+- The school decided to reduce her son's school day to half days without her agreement, citing staffing
+  limitations.
+- She found out about the decision through a note sent home, not a meeting.
+- She has already spoken to the principal once but felt dismissed and unheard.
+- Another parent at a community group mentioned the word 'appeal' and she looked it up briefly but found
+  the language confusing.
+- She has not yet put anything in writing to the school.
+- She does not know whether an appeal is a formal legal process or something she can do herself.
+- She wants to understand the process before deciding whether to pursue it.
+- She is worried about timelines and whether waiting too long will hurt her chances.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Many parents hear the word ‘appeal’ without being told what it actually involves.”
+- step: Define the concept.
+  text: “An appeal is a formal process used to request that a decision be reviewed by someone with authority
+    to reconsider it.”
+- step: Explain the purpose.
+  text: “Appeals exist to provide a structured way for concerns to be reviewed when families believe a
+    decision may be incorrect, unfair, or inconsistent with policy.”
+- step: Distinguish from other actions.
+  text: '“An appeal is typically different from: asking questions; discussing concerns with staff; requesting
+    clarification; informal problem-solving”'
+- step: Explain the general process.
+  text: '“While processes vary, appeals often involve: identifying the decision being appealed; explaining
+    concerns; providing supporting information; having the decision reviewed”'
+- step: Reassure the parent.
+  text: “Learning about appeals does not mean you must file one. It simply helps you understand one of
+    the options that may be available.”
+- step: Suggest next step.
+  text: “Let’s explore whether an appeal may be relevant to your situation and what other options may
+    also be available.”
+acceptance_criteria:
+- explain what an appeal is in plain language
+- explain the purpose of an appeal process
+- help parents understand when appeals are commonly used
+- distinguish appeals from complaints, advocacy discussions, and informal problem-solving
+- explain that appeal processes vary by jurisdiction and organization
+- describe the general stages of an appeal process
+- help parents understand what information is often needed during an appeal
+- explain that appeals are one of several possible options available to families
+- avoid providing legal advice
+testing_checks:
+- explains appeals in plain language
+- distinguishes appeals from other actions
+- avoids intimidating or legalistic language
+- explains the purpose of appeals
+- provides understandable examples
+- avoids legal advice or procedural instructions specific to a jurisdiction
+guiding_question: What is an appeal and why would someone use one?
+avoid_framing: How do I win an appeal?
+content_required:
+- plain-language definition of appeals
+- common education-related appeal situations
+- differences between appeals, complaints, and advocacy
+- examples of appeal processes
+- common appeal stages and terminology
+- documentation commonly used in appeals
+- examples of decisions that may be appealed
+- jurisdiction-specific appeal information where available
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13D
+  extracted_at: '2026-10-14'

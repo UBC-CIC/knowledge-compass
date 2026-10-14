@@ -1,0 +1,95 @@
+story_id: '134'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know what the bar for undue hardship is so that I know if the school
+  has genuinely reached that level.
+situation_summary: A parent has been told that a support, accommodation, or inclusive educational option
+  cannot be provided due to limitations faced by the school or education system. The parent wants to understand
+  what “undue hardship” means and how to determine whether all reasonable options have genuinely been
+  explored before participation is restricted.
+opening_message: The school says they can’t support my daughter on field trips because it would create
+  undue hardship. What does that actually mean?
+persona: A mother of a 10-year-old daughter in Grade 5 who has a physical disability requiring a personal
+  support worker. She is articulate but unfamiliar with education law, and tends to ask direct, practical
+  questions in a calm but firm tone.
+hidden_facts:
+- The school told her verbally that supporting her daughter on field trips would be 'undue hardship' but
+  gave no written explanation.
+- Her daughter has an IEP that includes accommodation for field trip participation.
+- The school cited a lack of available support workers on field trip days as the reason.
+- This has happened twice already this school year — her daughter missed a science centre trip and a nature
+  walk.
+- The parent asked the principal for alternatives (e.g., a different support worker or a parent volunteer)
+  and was told it wasn't possible.
+- The school board has not been contacted yet — all conversations have been with the classroom teacher
+  and principal.
+- The parent wants to understand what the school would actually need to prove to justify the exclusion.
+- She is considering requesting a meeting with the school board if the school cannot provide a satisfactory
+  answer.
+reference_flow:
+- step: Acknowledge the question.
+  text: “Undue hardship is an important concept in human rights and inclusive education discussions, but
+    it can sometimes be difficult to understand.”
+- step: Define the concept.
+  text: “In simple terms, undue hardship refers to situations where providing an accommodation would create
+    a significant burden that goes beyond what an organization is reasonably expected to provide.”
+- step: Explain the threshold.
+  text: “The concept is generally intended to represent a high threshold. It is typically more than inconvenience,
+    preference, or administrative difficulty.”
+- step: Explain the purpose.
+  text: “The goal is to encourage organizations to explore reasonable accommodations and supports before
+    limiting participation.”
+- step: Encourage questions.
+  text: '“Parents may wish to ask: What options were considered?; What supports were explored?; Why were
+    those options not feasible?; What alternatives were discussed?”'
+- step: Clarify limitations.
+  text: “Whether undue hardship has been reached depends on specific facts and circumstances and may require
+    further review.”
+- step: Suggest next step.
+  text: “Let’s explore how this concept relates to your child’s situation and what information may help
+    you better understand the decision.”
+acceptance_criteria:
+- explain undue hardship in plain language
+- explain why the concept exists within human rights frameworks
+- describe common factors that may be considered when assessing undue hardship
+- explain that undue hardship is generally intended to be a high threshold
+- help parents understand that inconvenience and undue hardship are not necessarily the same thing
+- provide examples to illustrate the concept
+- encourage parents to ask questions about options that were considered
+- explain that determinations may vary depending on circumstances and jurisdiction
+- avoid making legal determinations or conclusions
+testing_checks:
+- explains undue hardship in plain language
+- presents it as a high threshold
+- distinguishes inconvenience from undue hardship
+- encourages inquiry and clarification
+- provides examples and questions parents can ask
+- avoids making legal conclusions
+- avoids telling parents whether undue hardship has or has not been met
+guiding_question: What does undue hardship mean?
+avoid_framing: Has the school violated my child’s rights?
+content_required:
+- plain-language explanations of undue hardship
+- human rights accommodation principles
+- inclusive education and participation concepts
+- examples of accommodation discussions
+- common misconceptions about undue hardship
+- distinction between inconvenience and undue hardship
+- examples of questions families can ask
+- human rights guidance documents
+- jurisdiction-specific references where available
+- trusted legal and policy summaries written for non-lawyers
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 134
+  extracted_at: '2026-10-14'

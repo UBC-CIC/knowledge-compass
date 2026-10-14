@@ -1,0 +1,86 @@
+story_id: '115'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want guidance on how to request the school’s decision in writing so I have
+  proper documentation.
+situation_summary: A parent has been told verbally that their child will be sent home early or attend
+  school on a reduced schedule, but nothing has been provided in writing. The parent wants to understand
+  how to request written documentation so there is a clear record of the school’s decision and rationale.
+opening_message: The principal told me my son will only be attending mornings, but nothing has been provided
+  in writing.
+persona: A single mother of a 9-year-old boy in Grade 4 who has an IEP for anxiety and sensory processing
+  challenges. She works part-time and is frustrated but trying to stay calm and organized. She writes
+  in short, direct sentences and occasionally uses informal punctuation.
+hidden_facts:
+- The principal called her on a Tuesday afternoon and told her verbally that her son would only attend
+  mornings starting the following week.
+- No letter, email, or written notice of any kind has been sent home.
+- The reason given verbally was that the school 'doesn't have enough support staff in the afternoons.'
+- This arrangement has already been in place for about two weeks before she thought to ask for something
+  in writing.
+- She asked the principal once by phone if she could get something in writing and the principal said she
+  would 'look into it' but nothing arrived.
+- Her son's IEP does not mention a reduced schedule — it calls for a full school day with supports.
+- She is not sure whether this is a temporary or permanent arrangement.
+- She wants a written record so she can show it to someone who can help her figure out her next steps.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like the decision has been communicated verbally, but you have not received any written
+    documentation.”
+- step: Explain why documentation matters.
+  text: “Having the decision in writing helps ensure everyone has a shared understanding of what was decided,
+    why it was decided, and what the next steps are.”
+- step: Clarify what information may be helpful.
+  text: “You may wish to request the reason for the decision, the expected duration, any supports that
+    were considered, and the plan for returning to full-time attendance.”
+- step: Provide practical guidance.
+  text: “A respectful written request is often the simplest way to obtain this information.”
+- step: Offer sample wording.
+  text: '“For example: ‘Could you please provide the decision and the reasons for it in writing so that
+    I can better understand the plan moving forward?’”'
+- step: Encourage record keeping.
+  text: “Keeping copies of emails and written responses can be helpful if questions arise later.”
+- step: Suggest next step.
+  text: “Once you receive the documentation, we can review what information it contains and identify any
+    gaps.”
+acceptance_criteria:
+- explain why obtaining the decision in writing is important
+- help the parent understand what information should be included in a written decision
+- provide guidance on how to respectfully request the decision in writing
+- offer examples of language a parent could use
+- explain the difference between verbal discussions and documented decisions
+- encourage the parent to maintain records of communications
+- help the parent understand how written documentation may support future discussions or appeals
+- avoid making assumptions about legal requirements or school obligations
+testing_checks:
+- explains why written documentation is valuable
+- suggests appropriate information to request
+- provides respectful sample wording
+- encourages record keeping
+- does not imply legal rights that may vary by jurisdiction
+- guides the parent toward the next step after receiving documentation
+guiding_question: null
+avoid_framing: null
+content_required:
+- reasons families may wish to request decisions in writing
+- examples of information that should be documented
+- examples of respectful written requests
+- sample email templates or scripts
+- common elements of a school decision or attendance plan
+- guidance on record keeping and documentation
+- examples of missing or incomplete information
+- relationship between documentation, follow-up discussions, and appeals
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 115
+  extracted_at: '2026-10-14'

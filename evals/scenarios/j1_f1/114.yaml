@@ -1,0 +1,105 @@
+story_id: '114'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want guidance on how to respond when the school calls to pick up my child so
+  that I can take the right first step confidently and not leave work.
+situation_summary: A parent receives a call from the school asking them to pick up their child before
+  the end of the school day. The request is disruptive, may require the parent to leave work unexpectedly,
+  and leaves them unsure how to respond or what questions they should ask before agreeing.
+opening_message: The school just called and wants me to come pick up my daughter.
+persona: A single mother of a 9-year-old girl in Grade 4 who has an autism diagnosis and an IEP. She works
+  full-time in an office and types in short, stressed bursts. She is familiar with her daughter's school
+  team but is not well-versed in education law or her rights.
+hidden_facts:
+- The school has called to ask her to pick up her daughter about 90 minutes before the end of the day.
+- This is the third time in two weeks the school has called asking her to come early.
+- The reason given today was vague — the EA was away and they said they couldn't manage her daughter's
+  needs.
+- Her daughter has an IEP that includes EA support for the full school day.
+- The parent had to leave work early the previous two times and is worried about her job.
+- She has not asked for anything in writing from the school yet.
+- The school has not suggested any alternative plan or follow-up meeting.
+- She is not sure if she is allowed to say no to the pickup request.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “I understand. Let’s gather a little more information before deciding what to do next.”
+- step: Clarify the reason.
+  text: “Did the school explain why they want your child picked up?”
+- step: Gather facts.
+  text: “Is there an immediate safety concern or emergency?”
+- step: Explore supports.
+  text: “Do you know what supports, accommodations, or interventions were attempted before calling you?”
+- step: Identify patterns.
+  text: “Has this happened before, or is this the first time?”
+- step: Help organize information.
+  text: “It may be helpful to note who called, the reason provided, and any actions the school says were
+    taken.”
+- step: Suggest next step.
+  text: “Based on what you’ve told me, let’s look at the most appropriate next step and any questions
+    you may want to ask the school.”
+acceptance_criteria:
+- recognize when a parent is being asked to pick up their child before the end of the school day
+- help the parent remain calm and gather information before responding
+- guide the parent through key questions to ask the school
+- help the parent understand the reason for the pickup request
+- help distinguish between emergencies, safety concerns, behavioural concerns, support limitations, and
+  administrative convenience
+- encourage the parent to seek clarity on what supports or interventions have already been attempted
+- help the parent understand whether the pickup is expected to be a one-time event or part of an emerging
+  pattern
+- suggest appropriate next steps based on the information provided
+- avoid directing the parent to refuse a pickup request
+- avoid providing legal advice
+testing_checks:
+- gather information before suggesting actions
+- encourage documentation
+- help the parent understand the reason for the request
+- guide the parent toward the next appropriate step
+guiding_question: null
+avoid_framing: null
+content_required:
+- common reasons schools request early pickup
+- examples of emergency vs non-emergency situations
+- behaviour-related scenarios
+- safety-related scenarios
+- accommodation and support-related scenarios
+- staffing and resource limitation scenarios
+- questions parents can ask during pickup calls
+- examples of information parents should document
+- indicators of a developing pattern of partial day attendance
+- guidance on responding constructively during difficult conversations
+variants:
+- description: the call involves a safety concern
+  message: The school just called — they say my daughter hit another kid and I need to come get her right
+    now. I don't know what to do.
+- description: the call involves behaviour concerns
+  message: I just got a call saying my daughter is having a really hard day behaviourally and they want
+    me to pick her up early. Do I have to go?
+- description: the school reports staffing shortages
+  message: The school called and said they're short-staffed today and can't support my daughter properly
+    so I need to come get her. Is that allowed?
+- description: the school reports inability to provide support
+  message: They called saying they don't have the right support in place for my daughter today and want
+    me to pick her up. What do I do?
+- description: the parent is unsure why the call is happening
+  message: The school just called asking me to pick up my daughter but they were really vague about why.
+    I'm not sure what's going on.
+- description: the situation has happened repeatedly
+  message: This is the third time this month the school has called me to pick up my daughter early. It
+    keeps happening and I don't know how to make it stop.
+- description: the situation is occurring for the first time
+  message: The school just called for the first time asking me to come get my daughter before the day
+    is done. I've never dealt with this before.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 114
+  extracted_at: '2026-10-14'

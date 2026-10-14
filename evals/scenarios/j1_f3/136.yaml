@@ -1,0 +1,89 @@
+story_id: '136'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to how to get an EA for my child so that they’re properly supported.
+situation_summary: A parent believes their child needs additional support to participate successfully
+  at school. They have heard that an Educational Assistant (EA) may help, but are unsure how support decisions
+  are made, what factors are considered, and how to advocate for the supports their child may require.
+opening_message: My son is struggling at school. How do I get an EA assigned to him?
+persona: A mother of a 9-year-old boy in Grade 4 who has developmental delays and difficulty focusing
+  in a busy classroom. She is new to the special education system in Canada and speaks in a direct, plain
+  way, often asking practical "how do I" questions. She is determined but unsure where to start.
+hidden_facts:
+- Her son was recently diagnosed with a developmental delay by a pediatrician, and she has a written report.
+- His teacher has mentioned he often wanders the classroom, disrupts other students, and cannot complete
+  tasks independently.
+- The school has not yet formally assessed him or opened an IEP process.
+- He has been sent home early twice in the past month because staff said they couldn't manage his behaviour
+  that day.
+- She asked the principal about extra help and was told 'resources are limited' with no further explanation.
+- She has heard from another parent that an EA helped their child stay in class full-time.
+- She wants her son to stay in his regular classroom with his peers, not be moved to a separate program.
+- She is unsure whether she needs a formal diagnosis to request an EA or whether the school decides on
+  its own.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It sounds like you’re concerned that your child may need additional support to participate successfully
+    at school.”
+- step: Explain the role.
+  text: “Educational Assistants can provide support in a variety of ways, depending on a student’s needs
+    and educational plan.”
+- step: Reframe the discussion.
+  text: “Rather than focusing only on a specific support person, it can be helpful to first understand
+    what supports your child needs to be successful.”
+- step: Explain the process.
+  text: '“Schools often consider factors such as: participation challenges; learning needs; communication
+    needs; safety considerations; support requirements identified through planning processes”'
+- step: Suggest questions.
+  text: '“You may wish to ask: What support needs have been identified?; What supports are currently in
+    place?; What additional supports have been considered?; How are support decisions made?”'
+- step: Encourage collaboration.
+  text: “Understanding your child’s support needs can help guide productive discussions about what resources
+    and strategies may be most helpful.”
+- step: Suggest next step.
+  text: “Let’s explore the challenges your child is experiencing and what supports may help address them.”
+acceptance_criteria:
+- explain the role of an Educational Assistant (EA)
+- explain that support decisions are generally based on student needs rather than specific requests for
+  staffing
+- help parents understand how support needs are identified and documented
+- describe common processes used to determine support requirements
+- explain how parents can participate in discussions about supports
+- help parents understand the relationship between accommodations, support plans, and staffing decisions
+- encourage a focus on student needs and outcomes
+- provide examples of questions parents can ask during planning discussions
+- avoid guaranteeing that a particular support will be approved
+testing_checks:
+- explains the role of an EA accurately
+- focuses on student needs rather than staffing entitlements
+- provides examples of support planning discussions
+- encourages productive advocacy
+- avoids guaranteeing outcomes
+- explains how support decisions are generally made
+guiding_question: How do I advocate for the supports my child needs?
+avoid_framing: How do I force the school to provide an EA?
+content_required:
+- definition and role of Educational Assistants
+- examples of support provided by EAs
+- support planning processes
+- accommodation and support frameworks
+- examples of student support needs
+- common educational support models
+- parent participation in support planning
+- questions families can ask during support discussions
+- inclusive education principles related to support provision
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 136
+  extracted_at: '2026-10-14'

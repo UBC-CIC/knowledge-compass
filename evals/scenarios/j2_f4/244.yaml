@@ -1,0 +1,99 @@
+story_id: '244'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 4
+feature: Help families understand and advocate for effective supports.
+story_text: As a parent, I want to ensure my child is learning appropriate to their level (scaffolding)
+  so that they can continue to grow and develop.
+situation_summary: A student is receiving educational supports, but the parent is unsure whether learning
+  activities are appropriately challenging and helping their child continue to grow. They want to ensure
+  supports are being used to build skills and confidence rather than limiting expectations or reducing
+  opportunities for learning.
+opening_message: My son is receiving support, but I’m not sure if he’s actually being challenged enough
+  at school.
+persona: A mother of a 10-year-old boy in Grade 5 who has an intellectual disability and receives in-class
+  support through an educational assistant. She communicates in a warm but direct way, using everyday
+  language, and tends to ask practical questions rather than citing policy or jargon.
+hidden_facts:
+- Her son has a mild intellectual disability and an IEP that includes modified curriculum expectations.
+- He receives daily EA support for literacy and numeracy activities.
+- She has noticed that the work sent home looks very simple — mostly colouring sheets and matching tasks
+  — compared to what his classmates bring home.
+- His teacher told her at the last check-in that he is 'doing great and is happy,' but gave no details
+  about skill progress.
+- She has not seen updated learning goals in his IEP since the beginning of the school year.
+- She tried asking the EA informally but was told to speak with the teacher, and the teacher meeting has
+  been hard to schedule.
+- She wants him to keep building real reading and math skills, not just be kept busy.
+- Her goal is to understand what 'appropriate challenge' looks like for her son and how to ask the school
+  to show evidence of his progress.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important question. Effective supports should help students continue learning and growing,
+    not simply complete tasks or stay occupied.”
+- step: Explain the concept.
+  text: “Scaffolding means providing the right amount of support so a student can successfully engage
+    in learning that might otherwise be difficult.”
+- step: Explain the balance.
+  text: “Too little support can make learning frustrating. Too much support can limit opportunities for
+    growth and independence.”
+- step: Identify indicators of effective scaffolding.
+  text: '“Learning may be appropriately supported when students: o are challenged but able to succeed
+    o develop new skills over time o become more independent o show progress toward learning goals o remain
+    engaged and motivated”'
+- step: Identify potential concerns.
+  text: '“Families may wish to explore further if: o work rarely changes in complexity o expectations
+    appear significantly lower than the student’s abilities o support staff complete tasks for the student
+    o learning goals remain unchanged over long periods”'
+- step: Suggest questions.
+  text: '“You may wish to ask: o How are learning goals being adjusted as my child develops? o What new
+    skills is my child working toward? o How is support being used to promote growth? o How will we know
+    when additional independence is appropriate?”'
+- step: Reinforce the goal.
+  text: “The purpose of support is to help students access learning while continuing to develop new skills,
+    confidence, and independence.”
+- step: Suggest next step.
+  text: “Let’s look at your child’s current learning goals and explore how supports are helping them make
+    progress.”
+acceptance_criteria:
+- explain the concept of scaffolding in plain language
+- help parents understand the difference between support and reduced expectations
+- explain how effective supports can help students engage in appropriately challenging learning
+- identify indicators that learning activities may be too easy, too difficult, or appropriately matched
+- provide examples of how supports can be gradually adjusted as skills develop
+- encourage discussions about learning growth and progress, not just participation
+- help parents identify questions they can ask about educational expectations and learning goals
+- reinforce that all students should have opportunities to continue learning and developing
+testing_checks:
+- explains scaffolding in plain language
+- distinguishes support from reduced expectations
+- emphasizes growth and development
+- identifies indicators of effective learning support
+- provides practical advocacy questions
+- promotes high expectations and continued learning
+- avoids assuming that more support automatically means better outcomes
+guiding_question: Is my child being appropriately challenged and continuing to grow?
+avoid_framing: Is my child getting enough help?
+content_required:
+- scaffolding and differentiated instruction concepts
+- learning progression frameworks
+- educational support strategies
+- inclusive education principles
+- student growth and development concepts
+- independence-building practices
+- learning goal and achievement planning
+- examples of effective educational supports
+- indicators of educational progress
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_2_Feature_4.md
+  story_heading: User Story 244
+  extracted_at: '2026-10-14'

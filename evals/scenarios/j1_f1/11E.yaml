@@ -1,0 +1,86 @@
+story_id: 11E
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want guidance on what to document during my conversations so I don’t lose important
+  details.
+situation_summary: A parent is having conversations with teachers, principals, support staff, or school
+  administrators about their child’s attendance and supports. Important information is being shared, but
+  the parent is worried they may forget key details, misunderstand what was agreed to, or lose track of
+  commitments made during the discussion.
+opening_message: I have a meeting with the school tomorrow. What should I be writing down?
+persona: A mother of a 9-year-old son in Grade 4 who has autism and uses an AAC device. She is organized
+  but not familiar with education law, and she types in short, practical sentences. She is worried about
+  being caught off-guard in meetings and wants to feel prepared.
+hidden_facts:
+- Her son has been sent home early 2–3 times per week for the past month, usually after lunch.
+- The school says it is due to staffing shortages with his educational assistant.
+- She has had two informal phone calls with the vice-principal but nothing was put in writing.
+- The vice-principal mentioned a 'temporary plan' but never explained what it included.
+- She has a formal meeting tomorrow with the principal, the resource teacher, and the EA.
+- She is not sure if her son has a current IEP or whether it covers afternoon supports.
+- She has been keeping a rough calendar at home marking the days he came home early.
+- She wants the school to commit to a full-day schedule and is worried they will make vague promises she
+  can't hold them to.
+reference_flow:
+- step: Explain the purpose.
+  text: “Good documentation can help you remember what was discussed, what decisions were made, and what
+    actions are expected moving forward.”
+- step: Suggest key information to record.
+  text: '“You may wish to note: o date and time o who attended o concerns discussed o decisions made o
+    commitments or promises o timelines mentioned next steps”'
+- step: Highlight common gaps.
+  text: “Many parents remember the discussion but later forget who agreed to do what or when followup
+    was expected.”
+- step: Encourage clarity.
+  text: “If something is unclear during the conversation, it may be helpful to ask for clarification before
+    the meeting ends.”
+- step: Support organization.
+  text: “Keeping your notes together with emails and other documents can make future discussions much
+    easier.”
+- step: Suggest follow-up.
+  text: “After the meeting, you may wish to send a short summary email confirming your understanding of
+    the discussion.”
+- step: Recommend next step.
+  text: “Let’s review a simple conversation log template you can use.”
+acceptance_criteria:
+- explain why documenting conversations is important
+- help parents identify what information is most useful to record
+- suggest a simple structure for documenting conversations
+- distinguish between facts, opinions, commitments, and decisions
+- encourage documentation of timelines, responsibilities, and next steps
+- provide examples of useful notes parents can take
+- help parents organize information for future discussions
+- encourage timely documentation while details are still fresh
+- avoid encouraging adversarial or excessive record-keeping
+testing_checks:
+- identifies important information to document
+- suggests a practical note-taking structure
+- distinguishes decisions from discussions
+- encourages documenting timelines and commitments
+- supports organization of information
+- recommends follow-up summaries where appropriate
+guiding_question: null
+avoid_framing: null
+content_required:
+- best practices for documenting meetings and conversations
+- examples of conversation logs
+- examples of useful meeting notes
+- guidance on documenting commitments and timelines
+- examples of follow-up summaries
+- documentation templates or checklists
+- common information parents forget to record
+- organization and record-keeping strategies
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11E
+  extracted_at: '2026-10-14'

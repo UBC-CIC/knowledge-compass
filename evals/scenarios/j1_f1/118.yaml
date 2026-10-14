@@ -1,0 +1,102 @@
+story_id: '118'
+reviewed: true
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want guidance on how to prepare for and navigate conversations with the school
+  so that I can participate effectively and confidently, and avoid taking time off work to meet.
+situation_summary: A parent has been invited to meet with school staff to discuss their child’s reduced
+  attendance or support needs. These meetings can feel intimidating, and the parent wants to be prepared
+  so they can make the most of the conversation and advocate effectively for their child.
+opening_message: The school wants to meet with me next week about my son’s schedule. I don’t really know
+  what to expect.
+persona: A single mother of a 9-year-old boy in Grade 4 who has ADHD and anxiety. She works full-time
+  in retail with limited flexibility to take time off, so school meetings feel stressful and high-stakes.
+  She types in short, plain sentences and sometimes undersells her own concerns.
+hidden_facts:
+- The school has asked her to come in next week to discuss her son's 'current schedule and supports,'
+  but gave no further details in the email.
+- Her son has been attending only half-days for the past three weeks — the school started sending him
+  home after lunch without a formal explanation.
+- She has not seen or signed any updated plan; his IEP was last reviewed eight months ago.
+- The principal, his classroom teacher, and a resource teacher will all be at the meeting, which feels
+  overwhelming to her.
+- She has never attended a meeting like this before and does not know if she is allowed to bring someone
+  with her.
+- She is worried that if she says the wrong thing she will make things worse for her son.
+- She tried emailing the teacher last week to ask what the meeting is about but has not received a reply.
+- She wants her son back in school full-time and hopes the meeting will lead to a real plan.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “School meetings can feel overwhelming, especially when important decisions about your child’s
+    education are being discussed.”
+- step: Clarify the purpose.
+  text: “Do you know whether this meeting is about attendance, supports, behaviour concerns, accommodations,
+    or transition planning?”
+- step: Help the parent prepare.
+  text: '“It may be helpful to think about: what concerns you want addressed; what outcomes you’re hoping
+    for; any questions you want answered”'
+- step: Suggest key questions.
+  text: '“You may wish to ask: What supports have been attempted?; What led to this recommendation?; What
+    would need to happen for full-time attendance to resume?”'
+- step: Encourage documentation.
+  text: “Consider taking notes during the meeting or sending a summary afterward to confirm your understanding.”
+- step: Support advocacy.
+  text: “It’s okay to ask for clarification if something isn’t clear or if you need more information before
+    making a decision.”
+- step: Recommend next step.
+  text: “After the meeting, we can review what was discussed and identify any follow-up actions.”
+acceptance_criteria:
+- help parents prepare for discussions with school staff
+- identify key information parents may wish to gather beforehand
+- suggest questions parents may wish to ask during the meeting
+- help parents understand the purpose of different types of school meetings
+- encourage parents to document key points and decisions
+- help parents identify desired outcomes before the meeting
+- provide guidance for participating respectfully and confidently
+- offer follow-up actions after the meeting
+- support both in-person and virtual meeting scenarios
+testing_checks:
+- help parents prepare
+- suggest meaningful questions
+- encourage documentation
+- support respectful advocacy
+- identify logical follow-up actions
+guiding_question: null
+avoid_framing: null
+content_required:
+- common types of school meetings
+- meeting preparation guidance
+- examples of effective questions parents can ask
+- note-taking and documentation best practices
+- examples of desired outcomes for attendance-related meetings
+- guidance on communicating concerns respectfully
+- follow-up email templates or examples
+- common decisions that arise in attendance and accommodation discussions
+variants:
+- description: attendance meetings
+  message: The school set up a meeting to go over my daughter's attendance. I'm not sure what they're
+    going to say or what I should bring.
+- description: behaviour-related meetings
+  message: We have a meeting with the vice-principal next week because of some incidents with my son at
+    school. I want to be ready so I don't freeze up.
+- description: accommodation discussions
+  message: My daughter's teacher wants to meet to talk about adjustments they can make for her. I don't
+    really know how these conversations usually go.
+- description: support planning meetings
+  message: There's a meeting coming up to talk about putting together a support plan for my son. I want
+    to make sure I'm actually part of the decision.
+- description: follow-up meetings after attendance reductions
+  message: The school wants to meet again after cutting back my son's hours last month. I want to be more
+    prepared this time than I was before.
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 118
+  extracted_at: '2026-10-14'

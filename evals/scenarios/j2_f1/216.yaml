@@ -1,0 +1,94 @@
+story_id: '216'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to make sure I am advocating for my child’s learning so that my child
+  continues to meet learning goals as part of quality education.
+situation_summary: A student is transitioning to a new grade, school, or educational environment. The
+  parent wants to ensure that the focus remains on meaningful learning and growth, and is concerned that
+  expectations, supports, or opportunities may be reduced during the transition.
+opening_message: My son is moving to high school next year. I want to make sure we’re talking about learning,
+  not just supports.
+persona: A mother of a 14-year-old son with an intellectual disability and autism who is finishing Grade
+  8. She is thoughtful and organized, and has been closely involved in her son's IEP throughout elementary
+  school. She writes in clear, calm sentences but with an underlying urgency about protecting her son's
+  educational future.
+hidden_facts:
+- Her son has an IEP and has been working toward modified learning goals throughout elementary school.
+- She attended a transition meeting last month where the conversation focused almost entirely on scheduling
+  supports and EA hours, with little mention of academic or learning goals.
+- She is worried the high school team sees her son as someone to be managed rather than taught.
+- Her son has made real progress in literacy and numeracy over the past two years and she does not want
+  that momentum to stop.
+- The elementary resource teacher told her informally that high school can sometimes 'plateau' expectations
+  for students with IEPs.
+- She has not yet met the high school learning resource team and does not know who will be responsible
+  for his IEP.
+- She wants to know what questions to ask to make sure learning goals stay ambitious and meaningful.
+- She is open to modified pathways but does not want doors closed before high school has even started.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “That’s an important consideration. Supports are valuable, but they should ultimately help students
+    continue learning and progressing toward their goals.”
+- step: Explain the principle.
+  text: “Quality education is not only about attendance or participation. It also includes meaningful
+    learning, growth, and achievement.”
+- step: Connect to transitions.
+  text: “Transitions can be a time when attention shifts toward logistics and supports. It can be helpful
+    to also discuss learning expectations and long-term goals.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What learning goals are being prioritized?; How will progress be measured?;
+    What supports will help my child succeed academically?; How will we know if learning is continuing
+    after the transition?”'
+- step: Encourage ongoing review.
+  text: “Learning goals should be revisited regularly to ensure they continue to reflect the student’s
+    strengths, interests, and potential.”
+- step: Reinforce expectations.
+  text: “Students benefit when educational planning focuses on both support needs and opportunities for
+    growth.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s goals and identify the questions that can help keep learning at the
+    center of transition planning.”
+acceptance_criteria:
+- explain the importance of maintaining meaningful learning goals during transitions
+- help parents understand the difference between participation and educational progress
+- encourage parents to discuss learning outcomes in addition to supports and accommodations
+- explain how learning goals can be reviewed and monitored over time
+- help parents identify questions they can ask about educational progress
+- encourage high but realistic expectations based on the student’s strengths and goals
+- explain how supports and accommodations can contribute to learning success
+- reinforce that quality education includes both participation and learning
+- avoid assuming lower expectations based solely on disability or support needs
+testing_checks:
+- emphasizes learning and growth alongside participation
+- encourages discussion of educational outcomes
+- provides useful questions for families
+- reinforces high expectations
+- connects supports to learning success
+- avoids deficit-based assumptions
+guiding_question: How do I keep learning and growth at the center of educational planning?
+avoid_framing: How do I get more supports?
+content_required:
+- quality education principles
+- learning goal and educational planning concepts
+- transition-planning practices
+- academic progress monitoring approaches
+- accommodations and support planning
+- examples of learning-focused advocacy
+- student strengths-based planning resources
+- educational outcome frameworks
+- inclusive education principles
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 216
+  extracted_at: '2026-10-14'

@@ -1,0 +1,92 @@
+story_id: 11H
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 1
+feature: Guide parents through a clear, step-by-step path for what to do next
+story_text: As a parent, I want guidance on how to escalate if my issue isn’t resolved so I can take the
+  appropriate next step.
+situation_summary: A parent has made multiple attempts to resolve concerns about their child’s reduced
+  attendance, but the issue remains unresolved. They believe additional support or review is needed and
+  want guidance on how to move the issue forward appropriately.
+opening_message: I’ve tried meetings, follow-ups, and discussions with the school. Nothing has changed.
+  What should I do next?
+persona: A single mother of a 10-year-old son in Grade 5 who has an IEP for anxiety and sensory processing
+  challenges. She has been dealing with the school for several months and is frustrated but composed.
+  She writes in short, direct sentences and doesn't use much educational jargon.
+hidden_facts:
+- Her son has been sent home early 2–3 times per week for the past three months, consistently after lunch.
+- She has attended two formal meetings with the principal and his classroom teacher, plus several informal
+  check-ins.
+- The school's stated reason has shifted from 'staffing issues' to 'his behaviour is too disruptive in
+  the afternoon.'
+- She sent a follow-up email after each meeting but received only one brief reply acknowledging her concern
+  with no action taken.
+- The school has not updated her son's IEP or offered any new supports since the reduced schedule began.
+- She has kept a log of every early pickup with dates and times but is unsure what to do with it.
+- She has not yet contacted the school board or any outside advocate.
+- She wants her son back in school full days and is wondering if she needs a lawyer or if there is another
+  step first.
+reference_flow:
+- step: Acknowledge the situation.
+  text: “It sounds like you’ve made several attempts to resolve the issue and are looking for additional
+    ways to move the conversation forward.”
+- step: Review what’s been done.
+  text: “Before considering escalation, let’s review what actions you’ve already taken and what responses
+    you’ve received.”
+- step: Explain escalation.
+  text: “Escalation generally means involving additional people, supports, or review processes when normal
+    discussions have not resolved the issue.”
+- step: Explore options.
+  text: '“Depending on your situation, options may include: requesting a higher-level review; seeking
+    advocacy support; involving additional school or district personnel; pursuing a formal review or appeal
+    process”'
+- step: Emphasize preparation.
+  text: “Having clear documentation and a timeline of events can make escalation discussions more effective.”
+- step: Encourage constructive communication.
+  text: “The goal is usually to bring additional attention, support, or decision-making to the issue rather
+    than to create conflict.”
+- step: Suggest next step.
+  text: “Let’s identify which escalation options may be most appropriate based on your situation.”
+acceptance_criteria:
+- help the parent understand common escalation options
+- explain the purpose of escalation and when it may be appropriate
+- help parents identify potential next steps based on their situation
+- explain the importance of documentation and preparation before escalating
+- help parents organize information that may support escalation
+- provide guidance on communicating concerns clearly and respectfully
+- explain that escalation pathways may vary by jurisdiction
+- encourage constructive problem-solving throughout the process
+- avoid recommending a specific escalation pathway without sufficient context
+- avoid providing legal advice
+testing_checks:
+- explains escalation in plain language
+- helps parents assess available options
+- encourages documentation and preparation
+- maintains a collaborative tone
+- distinguishes escalation from appeal
+- avoids legal advice
+- adapts guidance based on actions already taken
+guiding_question: null
+avoid_framing: null
+content_required:
+- common escalation pathways within education systems
+- examples of escalation scenarios
+- guidance on preparing for escalation
+- documentation and timeline review guidance
+- examples of advocacy supports and resources
+- communication best practices
+- examples of formal and informal escalation approaches
+- jurisdiction-specific escalation information where available
+- relationship between escalation, review, and appeal processes
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_1.md
+  story_heading: User Story 11H
+  extracted_at: '2026-10-14'

@@ -1,0 +1,89 @@
+story_id: '215'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 1
+feature: Help families plan for their child’s future without limiting possibilities.
+story_text: As a parent, I want to make sure my child is succeeding in the prerequisites so that they
+  can take additional courses in the following years.
+situation_summary: A student has educational goals that depend on successfully completing prerequisite
+  courses or requirements. The parent wants to understand whether their child is making sufficient progress
+  and identify concerns early enough to provide additional support or adjust plans before future opportunities
+  are affected.
+opening_message: My son wants to take advanced courses later, but I’m worried he’s struggling in the prerequisite
+  course this year.
+persona: A parent of a Grade 9 student with a learning disability who is working toward a university-bound
+  pathway. They are engaged and proactive about their child's education and write in a straightforward,
+  concerned tone.
+hidden_facts:
+- Her son is in a Grade 9 academic math course, which is a prerequisite for the Grade 10 and 11 courses
+  he needs for his chosen pathway.
+- He has failed two of the three unit tests so far this term, scoring in the low 50s.
+- The school has not yet flagged any formal concern or reached out to her proactively.
+- His IEP includes extended time and the option to use a calculator, but she is not sure these accommodations
+  are being applied consistently in math.
+- She has tried hiring a private tutor for the past three weeks but has not seen improvement yet.
+- Her son wants to study engineering and knows he needs strong math grades to keep that option open.
+- She is worried that if he fails or barely passes, he will be placed in an applied stream next year and
+  lose access to the university-prep courses.
+- She has a parent-teacher interview scheduled in two weeks but feels that may be too late to act.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It’s helpful to identify these concerns early, while there is still time to provide support and
+    explore options.”
+- step: Explain the connection.
+  text: “Many future courses, programs, and opportunities depend on successfully completing prerequisite
+    requirements.”
+- step: Explore current progress.
+  text: “What feedback have you received about your child’s progress so far?”
+- step: Identify warning signs.
+  text: '“Possible indicators that additional support may be needed include: declining grades; missed
+    assignments; difficulty understanding course material; increased frustration or disengagement; concerns
+    raised by teachers”'
+- step: Suggest questions.
+  text: '“You may wish to ask: Is my child on track to meet course expectations?; What supports are available?;
+    Are accommodations being implemented effectively?; What can we do now to improve success?”'
+- step: Reinforce proactive planning.
+  text: “Addressing concerns early often provides more options than waiting until the end of the course.”
+- step: Suggest next step.
+  text: “Let’s look at the specific course and identify strategies that may help your child succeed.”
+acceptance_criteria:
+- explain why success in prerequisite courses matters for future opportunities
+- help parents understand indicators that a student may be struggling
+- encourage regular monitoring of progress rather than waiting until course selection time
+- identify questions parents can ask about academic progress and supports
+- explain how accommodations and supports may help students succeed
+- help parents understand the potential impact of failing or withdrawing from prerequisite courses
+- encourage early intervention when concerns arise
+- focus on planning and support rather than blame
+testing_checks:
+- explains why prerequisite success matters
+- helps identify signs of academic difficulty
+- encourages proactive monitoring
+- suggests useful questions and supports
+- connects current performance to future opportunities
+- focuses on solutions rather than deficits
+guiding_question: How do I know whether my child is on track for future opportunities?
+avoid_framing: Will my child pass this course?
+content_required:
+- course prerequisite concepts
+- academic progress indicators
+- accommodation and support strategies
+- student success planning resources
+- examples of academic monitoring practices
+- common barriers to success
+- questions families can ask educators
+- course progression pathways
+- early intervention strategies
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_1.md
+  story_heading: User Story 215
+  extracted_at: '2026-10-14'

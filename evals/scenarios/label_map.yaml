@@ -1,0 +1,304 @@
+reviewed: false
+journeys:
+  1:
+    name: Involuntary Partial Day Attendance Navigation
+    journey_key: J1
+  2:
+    name: Transitions to Public School and Community
+    journey_key: J2
+stories:
+  '111':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '112':
+    clusters:
+    - B
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '113':
+    clusters:
+    - B
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '114':
+    clusters:
+    - C
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '115':
+    clusters:
+    - D
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '116':
+    clusters:
+    - D
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '117':
+    clusters:
+    - B
+    - G
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '118':
+    clusters:
+    - E
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '119':
+    clusters:
+    - F
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11A:
+    clusters:
+    - G
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11B:
+    clusters:
+    - G
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11C:
+    clusters:
+    - G
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11D:
+    clusters:
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11E:
+    clusters:
+    - D
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11F:
+    clusters:
+    - D
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11G:
+    clusters:
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11H:
+    clusters:
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  11I:
+    clusters:
+    - J
+    - E
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '121':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '122':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '123':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '124':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '125':
+    clusters:
+    - A
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '126':
+    clusters:
+    - J
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '127':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '128':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '129':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  12A:
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  12B:
+    clusters:
+    - J
+    suggested_by: kiro (from story text vs repo catalog; review)
+  12C:
+    clusters:
+    - J
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '131':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '132':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '133':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '134':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '135':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '136':
+    clusters:
+    - I
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '137':
+    clusters:
+    - I
+    - E
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '138':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '139':
+    clusters:
+    - I
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13A:
+    clusters:
+    - I
+    - K
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13B:
+    clusters:
+    - I
+    - O
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13C:
+    clusters:
+    - E
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13D:
+    clusters:
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13E:
+    clusters:
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  13F:
+    clusters:
+    - I
+    - H
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '211':
+    clusters:
+    - K
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '212':
+    clusters:
+    - K
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '213':
+    clusters:
+    - K
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '214':
+    clusters:
+    - K
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '215':
+    clusters:
+    - K
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '216':
+    clusters:
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '217':
+    clusters:
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '218':
+    clusters:
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '219':
+    clusters:
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  21A:
+    clusters:
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  21B:
+    clusters:
+    - O
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '231':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '232':
+    clusters:
+    - L
+    - M
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '233':
+    clusters:
+    - K
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '234':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '235':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '236':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '237':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '238':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '241':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '242':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '243':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '244':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '245':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '246':
+    clusters:
+    - N
+    suggested_by: kiro (from story text vs repo catalog; review)
+  '247':
+    clusters:
+    - L
+    suggested_by: kiro (from story text vs repo catalog; review)

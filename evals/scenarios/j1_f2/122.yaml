@@ -1,0 +1,107 @@
+story_id: '122'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know what informal partial day attendance looks like so that I can
+  identify what’s happening to my child.
+situation_summary: A parent notices that their child is attending school less than their peers or is regularly
+  being sent home early, but nobody has used the term “partial day attendance.” The parent is unsure whether
+  this is a temporary accommodation, a common practice, or something they should be paying closer attention
+  to.
+opening_message: The school never said my son is on partial day attendance, but he only goes in the mornings
+  now.
+persona: A mother of a 9-year-old boy in Grade 4 who has a developmental disability and receives some
+  in-school support. She communicates in short, plain sentences and tends to ask questions cautiously,
+  not wanting to seem difficult. She is genuinely confused about whether what is happening to her son
+  is normal or a problem.
+hidden_facts:
+- Her son has been attending only mornings for about six weeks, leaving after lunch.
+- The arrangement started after a difficult week where he had some outbursts in class.
+- No one from the school gave her anything in writing — it was communicated verbally by the vice-principal.
+- She was told it was 'just for now' but nothing has changed and no end date was ever mentioned.
+- His IEP does not mention a reduced schedule.
+- She has asked the teacher twice about when full days will resume and got vague answers.
+- Her son is missing afternoon subjects including science and gym, which he enjoys.
+- She is worried other parents and her son himself are starting to notice he is different from his classmates.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Sometimes partial day attendance is not formally identified, even though a student is attending
+    less than the full school day.”
+- step: Explain informal situations.
+  text: “Reduced attendance can occur through informal arrangements or practices that develop over time.”
+- step: Provide examples.
+  text: '“Examples may include: attending only mornings or afternoons regularly being picked up early
+    being asked to stay home on certain days shortened schedules described as temporary but continuing
+    for extended periods missing activities that peers are expected to attend”'
+- step: Highlight common language.
+  text: “Schools may describe these arrangements as temporary, gradual, flexible, or supportive rather
+    than using the term ‘partial day attendance.’”
+- step: Encourage reflection.
+  text: “A useful question is whether your child is participating in the same school day and activities
+    as their peers.”
+- step: Suggest clarification.
+  text: “If attendance expectations are unclear, you may wish to ask the school how the current arrangement
+    is being documented and reviewed.”
+- step: Recommend next step.
+  text: “Let’s look at your child’s current attendance pattern and determine whether it may fit a partial
+    day attendance situation.”
+acceptance_criteria:
+- explain that partial day attendance is not always formally identified or documented
+- provide examples of situations that may indicate informal partial day attendance
+- help parents recognize patterns of reduced participation
+- distinguish between occasional events and ongoing attendance reductions
+- explain common language schools may use instead of the term “partial day attendance”
+- help parents identify when a reduced schedule may be becoming normalized
+- encourage parents to seek clarification when attendance expectations are unclear
+- avoid assuming all reduced attendance situations are inappropriate
+testing_checks:
+- help parents identify patterns
+- explain informal partial day attendance
+- encourage clarification
+- avoid jumping to conclusions
+- help parents determine whether further questions are warranted
+guiding_question: null
+avoid_framing: null
+content_required:
+- examples of informal partial day attendance arrangements
+- common attendance reduction patterns
+- examples of language schools may use instead of “partial day attendance”
+- indicators that a temporary arrangement may be becoming long-term
+- differences between occasional accommodations and ongoing reduced schedules
+- examples of participation limitations beyond attendance
+- guidance on seeking clarification and documentation
+- plain-language explanations suitable for families
+variants:
+- description: mornings only attendance
+  message: My son only goes to school in the mornings. Nobody told me this was the plan, it just kind
+    of happened. Is this normal?
+- description: afternoons only attendance
+  message: They have my daughter coming in only after lunch now. The teacher said it helps her transition
+    but I never agreed to it. Should I be worried?
+- description: repeated early pickups
+  message: The school keeps calling me to pick up my kid early, like 2 or 3 times a week. It's been going
+    on for over a month. Is that allowed?
+- description: reduced attendance on specific days
+  message: My son goes full days Monday and Tuesday but they send him home at noon on the other days.
+    No one explained why it's those specific days.
+- description: field-trip exclusions
+  message: My daughter got left behind when her class went on a field trip last week. The school said
+    it was easier. Can they do that?
+- description: temporary arrangements that continue indefinitely
+  message: The school said the shorter day was just temporary to help my son adjust, but it's been four
+    months now and nothing has changed.
+- description: attendance restrictions that are not formally documented
+  message: My kid has been on a shorter schedule for weeks but I have never received anything in writing
+    about it. Is that normal?
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 122
+  extracted_at: '2026-10-14'

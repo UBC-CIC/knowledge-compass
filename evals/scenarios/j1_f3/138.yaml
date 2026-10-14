@@ -1,0 +1,97 @@
+story_id: '138'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know if the school is required to provide personal care support so
+  that my child can attend school (dignity honoured at school).
+situation_summary: A student requires personal care support during the school day, such as assistance
+  with toileting, feeding, mobility, positioning, hygiene, or medical routines. The parent is concerned
+  that without these supports their child may be unable to attend school safely, participate fully, or
+  have their dignity respected.
+opening_message: My daughter needs assistance with toileting and positioning during the school day. The
+  school says they may not be able to provide that support. What does that mean for her education?
+persona: A mother in her late thirties raising a daughter with a physical disability and complex care
+  needs, likely in Grade 3 or 4. She is soft-spoken but persistent, and types in short, plain sentences.
+  She is unfamiliar with education law but knows her daughter's needs inside out.
+hidden_facts:
+- Her daughter has cerebral palsy and uses a wheelchair; she requires repositioning every 90 minutes and
+  assistance with toileting at least twice during the school day.
+- The school's principal told her verbally that they 'don't have trained staff' for personal care and
+  suggested the mother come in herself or hire a private aide.
+- Her daughter's IEP lists personal care support as a required accommodation but no staff member has been
+  assigned to carry it out.
+- Her daughter has already missed several full school days because the mother was told it was not safe
+  for her to attend without the support in place.
+- The school board has not responded to the mother's written request for a meeting sent two weeks ago.
+- The mother has spoken with another parent in the same school whose child receives personal care support
+  from an educational assistant, which makes her feel the school's position is inconsistent.
+- She wants her daughter to attend full days like her classmates and is worried about the long-term impact
+  on her learning and sense of belonging.
+- She has not yet contacted the school board's special education department or any outside advocacy organization.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Personal care support can be essential for many students to attend school safely, participate
+    fully, and maintain their dignity.”
+- step: Explain the connection.
+  text: “For some students, access to education depends on having appropriate personal care supports available
+    throughout the school day.”
+- step: Provide examples.
+  text: '“Personal care supports may include: toileting assistance; feeding support; positioning and mobility
+    assistance; hygiene support; assistance with health-related routines”'
+- step: Connect to inclusion.
+  text: “When personal care needs are not addressed, a student’s ability to participate in learning and
+    school life may be significantly affected.”
+- step: Suggest questions.
+  text: '“You may wish to ask: What supports have been identified?; How will these supports be provided?;
+    What alternatives have been considered?; How will my child’s dignity, privacy, and participation be
+    maintained?”'
+- step: Reinforce dignity.
+  text: “Support discussions should consider not only safety, but also dignity, inclusion, and meaningful
+    participation.”
+- step: Suggest next step.
+  text: “Let’s explore your child’s specific support needs and the questions that may help clarify available
+    supports.”
+acceptance_criteria:
+- explain the role of personal care support within educational settings
+- explain how personal care needs relate to participation and access to education
+- help parents understand the relationship between personal care, accommodation, and inclusive education
+- explain that responsibilities and service models may vary by jurisdiction
+- provide examples of personal care supports commonly provided in schools
+- explain the importance of dignity, privacy, and student wellbeing
+- help parents understand what questions they can ask when supports are not available
+- explain the difference between educational supports and personal care supports where relevant
+- avoid making legal determinations about specific situations
+testing_checks:
+- explains personal care support in plain language
+- recognizes the connection between support and educational participation
+- emphasizes dignity and privacy
+- provides useful questions for families
+- avoids legal determinations
+- supports constructive advocacy
+guiding_question: How can my child’s personal care needs be supported so they can participate fully at
+  school?
+avoid_framing: Can the school refuse?
+content_required:
+- definitions of personal care supports
+- examples of school-based personal care arrangements
+- inclusive education principles
+- dignity, privacy, and participation concepts
+- accommodation and support planning processes
+- common support models used in schools
+- questions families can ask about support provision
+- guidance related to participation and access
+- jurisdiction-specific resources where available
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟡 Medium (2–3 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 138
+  extracted_at: '2026-10-14'

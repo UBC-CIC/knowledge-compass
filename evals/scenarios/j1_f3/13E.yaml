@@ -1,0 +1,92 @@
+story_id: 13E
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know when I should get a lawyer so that I’m supported in my actions.
+situation_summary: A parent has spent significant time trying to resolve concerns about their child’s
+  education, participation, supports, or rights. Despite meetings, advocacy efforts, and escalation attempts,
+  the issue remains unresolved. The parent is unsure whether legal advice or representation may be appropriate
+  and wants to understand when families commonly seek legal support.
+opening_message: I’ve tried meetings, documentation, follow-ups, and escalation. At what point do people
+  usually talk to a lawyer?
+persona: A mother of a 10-year-old son in Grade 5 who has an IEP and autism diagnosis. She has been navigating
+  partial-day attendance issues for several months and writes in a calm but exhausted tone, using plain
+  everyday language. She is organized and has kept records throughout the process.
+hidden_facts:
+- Her son has been sent home early 2–3 times per week for the past four months due to what the school
+  calls 'behavioural incidents.'
+- She has attended at least five formal meetings with the principal and resource teacher, none of which
+  produced lasting changes.
+- She submitted a written complaint to the school board three weeks ago and has not received a substantive
+  response.
+- The school's special education coordinator told her verbally that the current schedule is 'the best
+  they can do' given staffing.
+- Her son's IEP has not been updated in over a year despite her requests.
+- She has a binder of emails, call logs, and pickup records dating back to the start of the school year.
+- A friend suggested she contact a disability rights organization, but she is unsure whether that is the
+  same as getting a lawyer.
+- She is worried about the cost of legal help and whether it would make the school relationship worse.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families ask that question when they feel they have exhausted other ways of resolving an
+    issue.”
+- step: Normalize the uncertainty.
+  text: “Seeking legal advice is one option available to families, but it is often not the first step.”
+- step: Explain common situations.
+  text: '“Families sometimes consider legal advice when: o significant rights concerns remain unresolved
+    o important decisions continue to affect the student o appeal processes have been exhausted or are
+    unclear o they need help understanding legal obligations or options”'
+- step: Explain other supports.
+  text: “Depending on the situation, families may also seek support from advocates, disability organizations,
+    mediation services, or other professionals.”
+- step: Encourage reflection.
+  text: '“It may be helpful to consider: o What efforts have already been made? o What outcome are you
+    seeking? o What questions do you need answered?”'
+- step: Clarify the role of legal advice.
+  text: “Legal professionals can help families understand legal rights, obligations, and available options,
+    but they cannot guarantee outcomes.”
+- step: Suggest next step.
+  text: “Let’s review your situation and explore what types of support may be most helpful at this stage.”
+acceptance_criteria:
+- explain that legal support is one of several possible forms of support available to families
+- help parents understand situations where families commonly seek legal advice
+- distinguish legal support from advocacy, mediation, support organizations, and appeal processes
+- explain potential benefits and limitations of obtaining legal advice
+- help parents assess whether other resolution pathways have been explored
+- encourage informed decision-making rather than fear-based decisions
+- explain that legal processes vary by jurisdiction
+- avoid recommending that a parent retain a lawyer in a specific case
+- avoid providing legal advice
+testing_checks:
+- explains the role of legal support clearly
+- presents lawyers as one possible support option rather than the default solution
+- identifies other available supports
+- encourages thoughtful decision-making
+- avoids recommending legal action
+- avoids legal advice
+- explains that circumstances vary
+guiding_question: When might legal advice become helpful?
+avoid_framing: Should I hire a lawyer?
+content_required:
+- common escalation pathways
+- appeal and review processes
+- advocacy and support organization resources
+- mediation and dispute resolution options
+- examples of situations where families seek legal advice
+- distinctions between legal support and advocacy support
+- plain-language explanations of legal consultation
+- jurisdiction-specific legal and advocacy resources where available
+- trusted referral sources
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13E
+  extracted_at: '2026-10-14'

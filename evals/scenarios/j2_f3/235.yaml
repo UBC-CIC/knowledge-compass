@@ -1,0 +1,91 @@
+story_id: '235'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 2
+journey_name: Transitions to Public School and Community
+feature_number: 3
+feature: Explain transition planning, pathways, and what to expect.
+story_text: As a parent, I want to know what questions to ask so that my child’s transition is successful.
+situation_summary: A parent is preparing for a transition planning meeting and wants to ensure important
+  topics are discussed before decisions are made. They are unsure what questions to ask and want guidance
+  that will help identify opportunities, risks, supports, and future planning considerations.
+opening_message: We have a transition meeting next month. What should I be asking?
+persona: A mother of a 14-year-old daughter in Grade 9 with an intellectual disability and autism. She
+  is organized and proactive but unfamiliar with the formal transition planning process. She writes in
+  short, practical sentences and tends to ask direct questions.
+hidden_facts:
+- Her daughter's transition meeting is scheduled for next month and will involve her teacher, the resource
+  consultant, and a school administrator.
+- Her daughter currently attends a specialized program but the family is hoping she can move toward more
+  community-based activities and eventual supported employment.
+- The school has not shared an agenda or any documents ahead of the meeting, so the parent feels unprepared.
+- Her daughter has expressed interest in working with animals someday.
+- The parent is worried the school will push a sheltered workshop pathway without exploring other options.
+- Previous meetings have felt one-sided, with the school presenting a plan and the parent feeling pressure
+  to agree on the spot.
+- The family has not yet connected with any adult services or disability support organizations.
+- The parent wants to know if there are things she should be researching or arranging outside of school
+  before the meeting happens.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Preparing questions in advance can help ensure important topics are discussed before decisions
+    are finalized.”
+- step: Organize the discussion.
+  text: Learning and Educational Goals What learning goals are being prioritized?; How will progress be
+    measured?; How will expectations be maintained? Supports and Accommodations What supports will continue?;
+    What changes should we expect?; How will successful supports transfer to the new setting? Inclusion
+    and Participation How will my child participate with peers?; What extracurricular opportunities will
+    be available?; How will belonging and friendships be supported? Future Planning How does this transition
+    affect future opportunities?; What pathways remain available?; What decisions will need to be made
+    next?
+- step: Highlight commonly missed topics.
+  text: “Families often focus on supports but may forget to discuss future opportunities, course planning,
+    or social inclusion.”
+- step: Encourage personalization.
+  text: “The most useful questions are often connected to your child’s strengths, interests, goals, and
+    aspirations.”
+- step: Reinforce preparation.
+  text: “Having questions prepared can help families participate more confidently and ensure important
+    topics are not overlooked.”
+- step: Suggest next step.
+  text: “Let’s build a personalized question list based on your child’s upcoming transition.”
+acceptance_criteria:
+- explain the purpose of asking questions during transition planning
+- provide examples of important questions based on the transition stage
+- help parents identify areas that are commonly overlooked
+- organize questions into meaningful categories
+- explain why each category matters
+- encourage discussions about learning, inclusion, supports, friendships, future opportunities, and student
+  goals
+- help parents personalize questions to their child’s situation
+- present information in an easy-to-use checklist format
+testing_checks:
+- generates relevant questions
+- organizes questions logically
+- includes both educational and social considerations
+- identifies commonly overlooked topics
+- adapts questions to different transition stages
+- encourages future-focused planning
+guiding_question: What questions should I ask to ensure nothing important is missed?
+avoid_framing: What should I say at the meeting?
+content_required:
+- transition-planning frameworks
+- transition meeting best practices
+- stage-specific transition considerations
+- inclusive education principles
+- support and accommodation planning resources
+- course and pathway planning information
+- friendship and belonging concepts
+- post-secondary and community transition resources
+- examples of successful transition planning discussions
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_2_Feature_3.md
+  story_heading: User Story 235
+  extracted_at: '2026-10-14'

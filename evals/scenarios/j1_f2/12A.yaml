@@ -1,0 +1,89 @@
+story_id: 12A
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 2
+feature: Explain the situation and key concepts in simple plain, language.
+story_text: As a parent, I want to know why inclusive ed matters for my child so that I can be more informed.
+situation_summary: A parent understands the concept of inclusive education and has heard about its benefits,
+  but is unsure how it applies to their own child. They want to understand why inclusion matters in the
+  context of their child’s education, relationships, future opportunities, and overall quality of life.
+opening_message: I understand what inclusive education is, but why does it matter specifically for my
+  child?
+persona: A parent of a child in Grade 3 who has an intellectual disability and attends a neighbourhood
+  school. They have done some reading about inclusive education and feel generally supportive of the idea,
+  but are wrestling with whether it truly makes a difference for their specific child. They write in a
+  thoughtful, measured tone, asking genuine questions rather than venting frustration.
+hidden_facts:
+- Their child has a mild intellectual disability and receives some in-class support from an educational
+  assistant.
+- The child's IEP goals focus on literacy, numeracy, and social communication.
+- The parent has heard positive things about inclusion from an advocacy group they follow online, but
+  has not seen clear evidence in their own child's day-to-day experience.
+- The child has one close friend in the class and seems happy at school most days.
+- The teacher has suggested the child might do better in a self-contained classroom, which prompted the
+  parent's question.
+- The parent worries about whether their child is learning enough academically in the inclusive setting.
+- The parent also wonders about long-term outcomes — employment, independence, friendships — and whether
+  inclusion now affects those later.
+- The parent has not yet spoken to an advocate or consulted anyone outside the school.
+reference_flow:
+- step: Acknowledge the question.
+  text: “That’s an important question. Understanding why inclusion matters can help you make informed
+    decisions about your child’s education and future.”
+- step: Connect to everyday experiences.
+  text: “Inclusive education influences more than academics. It affects who your child learns with, who
+    they build friendships with, and how they participate in school life.”
+- step: Explain participation.
+  text: “When students participate alongside their peers, they have more opportunities to learn, contribute,
+    develop relationships, and build confidence.”
+- step: Explain future impact.
+  text: “Experiences during school often shape future opportunities in employment, community involvement,
+    post-secondary education, and independent living.”
+- step: Personalize the concept.
+  text: “The specific benefits may look different for every child, but meaningful participation and belonging
+    are important considerations for all students.”
+- step: Reinforce reflection.
+  text: “When educational decisions arise, it can be helpful to ask how each option supports your child’s
+    long-term participation and inclusion.”
+- step: Suggest next step.
+  text: “Let’s talk about your child’s current situation and explore how inclusion may apply to them.”
+acceptance_criteria:
+- help parents connect inclusive education concepts to their child’s daily experiences
+- explain how inclusion can affect learning, participation, belonging, and relationships
+- describe how inclusive experiences can influence future opportunities
+- provide examples that are relevant to different ages and educational stages
+- help parents understand the long-term significance of educational decisions
+- encourage parents to consider both current and future impacts
+- present information in plain language
+- avoid assuming that every child’s needs or circumstances are identical
+testing_checks:
+- personalizes the discussion to the child’s situation
+- explains practical impacts of inclusion
+- connects current educational experiences to future outcomes
+- provides understandable examples
+- avoids generic or overly academic explanations
+- reinforces participation and belonging
+guiding_question: Why does inclusion matter for my child?
+avoid_framing: Why do educators talk about inclusion?
+content_required:
+- principles of inclusive education
+- participation and belonging concepts
+- age-appropriate examples of inclusion
+- academic, social, and developmental impacts of inclusion
+- long-term outcomes associated with participation
+- examples of inclusive educational experiences
+- transition and future-planning considerations
+- plain-language explanations suitable for families
+- evidence-informed descriptions of inclusive practices
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small (1 day)'
+source:
+  file: User_Stories_-_Journey_1_Feature_2.md
+  story_heading: User Story 12A
+  extracted_at: '2026-10-14'

@@ -1,0 +1,99 @@
+story_id: 13B
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to apply/advocate their human right to an education to activities that
+  are outside the classroom or after school (i.e. outside of academics) so that they’re included in all
+  aspects.
+situation_summary: A student is able to attend classes but is excluded from activities outside the classroom,
+  such as field trips, clubs, sports, school events, extracurricular activities, or other aspects of school
+  life. The parent wants to understand how principles of inclusion and participation apply beyond academics
+  so their child is not left out of important educational and social experiences. User Story As a parent,
+  I want to apply and advocate for my child’s human right to education in activities outside the classroom
+  so that they are included in all aspects of school life.
+opening_message: My daughter is allowed to attend classes, but she’s excluded from field trips and after-school
+  activities. Doesn’t inclusion apply there too?
+persona: A mother of a 10-year-old daughter in Grade 5 who has a physical disability and uses a wheelchair.
+  She is warm but increasingly frustrated, and types in short, direct sentences with occasional questions.
+  She is familiar with the word "inclusion" but not with legal frameworks or formal advocacy language.
+hidden_facts:
+- Her daughter has spina bifida and uses a wheelchair full-time.
+- The school allows her daughter to attend all regular classes without issue.
+- Her daughter was told she could not join the upcoming science field trip because the venue is 'not fully
+  accessible' — the school did not offer an alternative.
+- Her daughter was also turned away from the after-school drama club, with staff saying they 'couldn't
+  manage her needs' in that setting.
+- The school has never put the exclusions in writing; all communication has been verbal.
+- Her daughter has an IEP that mentions participation in school activities but the school has not referenced
+  it in these decisions.
+- The parent has not yet formally complained or requested a meeting — she is still trying to understand
+  if she has grounds to push back.
+- She wants her daughter to have the same social experiences as her classmates, not just academic access.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “Many families ask this question because some of the most meaningful school experiences happen
+    outside the classroom.”
+- step: Expand the concept.
+  text: “Inclusive education is often associated with academics, but participation, belonging, and social
+    connection are also important parts of a student’s educational experience.”
+- step: Provide examples.
+  text: '“Students may participate in: o field trips o clubs o sports o assemblies o graduation activities
+    o lunch and recreation periods o school events and celebrations”'
+- step: Explain why it matters.
+  text: “These experiences often contribute to friendships, confidence, skill development, community belonging,
+    and memories that shape a student’s school experience.”
+- step: Suggest questions.
+  text: '“You may wish to ask: o What barriers are preventing participation? o What supports could help
+    participation occur? o What alternatives have been considered? o How can participation be supported
+    safely and meaningfully?”'
+- step: Reinforce the goal.
+  text: “The focus is often not simply whether a student is present at school, but whether they are included
+    in the opportunities that make up school life.”
+- step: Suggest next step.
+  text: “Let’s explore the activity your child is being excluded from and what supports may help make
+    participation possible.”
+acceptance_criteria:
+- explain that participation and inclusion extend beyond academic instruction
+- describe how extracurricular and school-life activities contribute to belonging, relationships, and
+  educational experiences
+- explain how inclusive education principles may apply to non-academic activities
+- provide examples of participation opportunities commonly available to students
+- help parents identify questions they can ask when participation is limited
+- explain the relationship between participation, belonging, and educational outcomes
+- encourage collaborative problem-solving when barriers arise
+- provide examples of accommodations and supports that may enable participation
+- avoid making legal determinations about specific activities or situations
+testing_checks:
+- recognizes that participation extends beyond academics
+- explains the importance of belonging and social inclusion
+- provides practical examples
+- suggests useful advocacy questions
+- encourages collaborative problem-solving
+- avoids legal conclusions
+- focuses on participation and access rather than entitlement
+guiding_question: How can my child participate in the full experience of school?
+avoid_framing: How do I get my child into this one activity?
+content_required:
+- inclusive education principles related to participation and belonging
+- Article 24 participation concepts
+- examples of extracurricular and non-academic activities
+- common barriers to participation
+- examples of accommodations and supports
+- social inclusion and belonging concepts
+- participation-related advocacy questions
+- examples of successful inclusion practices
+- trusted inclusive education resources
+- plain-language explanations suitable for families
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 13B
+  extracted_at: '2026-10-14'

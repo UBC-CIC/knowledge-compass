@@ -1,0 +1,92 @@
+story_id: '133'
+reviewed: false
+testable: true
+modes:
+- standard
+journey_number: 1
+journey_name: Involuntary Partial Day Attendance Navigation
+feature_number: 3
+feature: Help parents understand their rights and how to advocate effectively.
+story_text: As a parent, I want to know how to hold the school accountable to the human right to inclusive
+  ed so that my child’s rights can be exercised.
+situation_summary: A parent believes that decisions being made by the school are limiting their child’s
+  access to meaningful participation and inclusion. They understand that inclusive education is a recognized
+  human right, but are unsure how to raise concerns, ask informed questions, and advocate effectively
+  when they believe that right is not being fully realized.
+opening_message: The school keeps telling me my son can’t participate, but everything I’ve learned says
+  he has a right to inclusive education. What am I supposed to do?
+persona: A mother of a 10-year-old boy in Grade 5 who has an intellectual disability and uses AAC to communicate.
+  She has been doing her own research into disability rights and speaks with quiet determination, but
+  feels overwhelmed by the gap between what she's read and what the school is actually doing.
+hidden_facts:
+- The school has been sending her son home after lunch most days for the past six weeks, saying he becomes
+  'too dysregulated' in the afternoon.
+- The school told her verbally that 'full inclusion just isn't realistic for kids like him.'
+- Her son has an IEP but she has not been invited to a review meeting since the partial schedule began.
+- She has read about Article 24 of the UN Convention on the Rights of Persons with Disabilities and mentioned
+  it to the vice-principal, who dismissed it.
+- She has not yet put any of her concerns in writing to the school.
+- She has not contacted the school board or any outside advocate yet.
+- She wants her son back in school for the full day with proper supports, not a modified placement.
+- She is unsure what questions to ask or what the school is actually obligated to do under the law.
+reference_flow:
+- step: Acknowledge the concern.
+  text: “It can be frustrating when school decisions appear inconsistent with your understanding of inclusive
+    education.”
+- step: Reframe the discussion.
+  text: “One helpful approach is to focus discussions on how your child’s participation and inclusion
+    can be supported, rather than on positions or assumptions.”
+- step: Explain the connection.
+  text: “Inclusive education is recognized as a human rights principle that supports participation, belonging,
+    and access to learning opportunities.”
+- step: Suggest questions.
+  text: '“You may wish to ask: How does this decision support my child’s participation?; What alternatives
+    were considered?; What supports could make participation possible?; How does this align with inclusive
+    education principles?”'
+- step: Encourage documentation.
+  text: “Keeping records of decisions, explanations, and discussions can help ensure everyone has a shared
+    understanding of the situation.”
+- step: Reinforce advocacy.
+  text: “Rights-based advocacy is often most effective when it focuses on solutions, participation, and
+    educational outcomes.”
+- step: Suggest next step.
+  text: “Let’s explore how inclusive education principles apply to your specific situation.”
+acceptance_criteria:
+- explain the relationship between inclusive education and human rights
+- help parents understand how rights-based advocacy differs from complaints or confrontation
+- explain how inclusive education principles can be used to guide discussions with schools
+- provide examples of questions parents can ask when concerns arise
+- help parents identify situations where inclusive education principles may not be fully reflected in
+  decisions or practices
+- encourage collaborative problem-solving where possible
+- explain the importance of documentation and clear communication
+- provide references to trusted rights-based resources
+- avoid legal advice or legal interpretation
+testing_checks:
+- explains inclusive education as a human rights principle
+- provides practical advocacy guidance
+- encourages constructive discussions
+- suggests useful questions and talking points
+- references credible sources
+- avoids legal advice
+- avoids adversarial or confrontational language
+guiding_question: How do I use inclusive education principles to advocate effectively?
+avoid_framing: How do I prove the school is wrong?
+content_required:
+- CRPD Article 24 summaries and guidance
+- inclusive education human rights principles
+- participation and belonging concepts
+- examples of rights-based advocacy
+- examples of inclusive education decision-making
+- common barriers to participation
+- questions families can ask during discussions
+- documentation and communication best practices
+- trusted human rights and inclusive education resources
+variants: []
+negative_cases: []
+notes:
+- 'Complexity: 🟢 Small–Medium (1–2 days)'
+source:
+  file: User_Stories_-_Journey_1_Feature_3.md
+  story_heading: User Story 133
+  extracted_at: '2026-10-14'
