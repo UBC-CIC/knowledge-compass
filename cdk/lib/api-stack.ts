@@ -601,6 +601,105 @@ export class ApiGatewayStack extends cdk.Stack {
             metricName: "LimitExpensiveEndpoints",
           },
         },
+
+        // Rule 5: Strict limit on anonymous identity minting (60 req/5min per IP).
+        // POST /user creates a new anonymous user and /user/publicToken mints
+        // credentials for it. Neither requires prior identity, so without a
+        // dedicated cap a single client can mint unlimited identities and
+        // sidestep every per-user limit. A legitimate first visit needs ~3 of
+        // these calls and each 15-minute refresh needs 1.
+        {
+          name: "LimitIdentityMinting",
+          priority: 6,
+          action: {
+            block: {},
+          },
+          statement: {
+            rateBasedStatement: {
+              limit: 60,
+              evaluationWindowSec: 300,
+              aggregateKeyType: "IP",
+              scopeDownStatement: {
+                orStatement: {
+                  statements: [
+                    {
+                      byteMatchStatement: {
+                        searchString: "/user/publicToken",
+                        fieldToMatch: { uriPath: {} },
+                        textTransformations: [{ priority: 0, type: "NONE" }],
+                        positionalConstraint: "ENDS_WITH",
+                      },
+                    },
+                    {
+                      andStatement: {
+                        statements: [
+                          {
+                            byteMatchStatement: {
+                              searchString: "/user",
+                              fieldToMatch: { uriPath: {} },
+                              textTransformations: [{ priority: 0, type: "NONE" }],
+                              positionalConstraint: "ENDS_WITH",
+                            },
+                          },
+                          {
+                            byteMatchStatement: {
+                              searchString: "POST",
+                              fieldToMatch: { method: {} },
+                              textTransformations: [{ priority: 0, type: "NONE" }],
+                              positionalConstraint: "EXACTLY",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: "LimitIdentityMinting",
+          },
+        },
+
+        // Rule 6: AWS Managed IP reputation list (known botnets, scanners and
+        // other malicious sources).
+        {
+          name: "AWS-AWSManagedRulesAmazonIpReputationList",
+          priority: 7,
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesAmazonIpReputationList",
+            },
+          },
+          overrideAction: { none: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWS-AWSManagedRulesAmazonIpReputationList",
+          },
+        },
+
+        // Rule 7: AWS Managed known bad inputs (Log4j/JNDI, invalid paths, etc.).
+        {
+          name: "AWS-AWSManagedRulesKnownBadInputsRuleSet",
+          priority: 8,
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesKnownBadInputsRuleSet",
+            },
+          },
+          overrideAction: { none: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWS-AWSManagedRulesKnownBadInputsRuleSet",
+          },
+        },
       ],
     });
 
