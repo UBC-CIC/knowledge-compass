@@ -46,5 +46,5 @@ __pycache__/
 evals/results/
 evals/.venv/
 
-.agents\tasks
+.agents/tasks
 .agents
