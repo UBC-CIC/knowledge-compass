@@ -2,6 +2,7 @@ import logging
 import time
 import boto3
 import os
+from typing import Optional
 from helpers.crud import fetch_system_config, fetch_journey_catalog, fetch_guideline_config
 from helpers.journeys import DEFAULT_CATALOG, JourneyCatalog, catalog_from_rows
 
@@ -433,6 +434,27 @@ def load_config(db_connection):
     _CONFIG_LOADED_AT = time.monotonic()
 
     logger.info("System config loaded successfully (prompt_mode=%s).", PROMPT_MODE)
+
+
+PROMPT_MODES = ("standard", "guideline")
+
+
+def resolve_prompt_mode(global_mode: str, override: Optional[str] = None) -> str:
+    """
+    The prompt mode for one chat turn. This is the single resolution point:
+    chat.py asks here instead of reading PROMPT_MODE directly.
+
+    override is chat_sessions.prompt_mode_override (migration 035), which only
+    a verified evaluation-harness tag can set; None means "use the global
+    guideline_config.prompt_mode". The globals are never changed per request,
+    so a warm container cannot carry one session's mode into the next.
+
+    When standard and guideline modes are merged into a dual mode, replace the
+    body of this function (and the override column) rather than the callers.
+    """
+    if override in PROMPT_MODES:
+        return override
+    return global_mode if global_mode in PROMPT_MODES else "standard"
 
 
 def apply_guideline_config(guideline: dict) -> None:

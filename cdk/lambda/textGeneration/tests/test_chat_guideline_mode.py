@@ -112,6 +112,7 @@ class ChatModeTestBase(unittest.TestCase):
             "save_routing_state": mock.Mock(),
             "get_guide_state": mock.Mock(return_value=None),
             "save_guide_state": mock.Mock(),
+            "get_prompt_mode_override": mock.Mock(return_value=None),
             "route_turn": mock.Mock(return_value=None),
             "decide_phase": mock.Mock(return_value="SUGGESTION"),
             "touched_keys": mock.Mock(return_value=([], [])),

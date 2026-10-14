@@ -6,7 +6,8 @@ from typing import Dict, Any, Optional, List, Tuple
 from helpers.crud import (
     fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
     get_exchange_count, get_session_title, update_session_title, save_journey_state,
-    get_session_context, save_routing_state, get_guide_state, save_guide_state
+    get_session_context, save_routing_state, get_guide_state, save_guide_state,
+    get_prompt_mode_override
 )
 from helpers.guideline_retrieval import GUIDELINE_SOURCE_TYPE, retrieve_guideline_sections
 from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
@@ -130,7 +131,13 @@ def _prepare_conversation(
 
     # Guideline mode (migration 031): answer only from uploaded guides. Skips
     # the router, phases, journey catalog and corpus retrieval entirely.
-    if config.PROMPT_MODE == "guideline":
+    # The mode is resolved per session (config.resolve_prompt_mode): a verified
+    # evaluation session may override the global setting without changing it.
+    prompt_mode = config.resolve_prompt_mode(
+        config.PROMPT_MODE,
+        get_prompt_mode_override(db_connection, chat_session_id),
+    )
+    if prompt_mode == "guideline":
         return _prepare_guideline_conversation(query, region, chat_session_id, db_connection, raw_history)
 
     # 4. Load session context. The user message is already saved, so the

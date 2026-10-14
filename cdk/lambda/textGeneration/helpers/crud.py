@@ -388,6 +388,30 @@ def get_session_context(db_connection, chat_session_id: str) -> Tuple[Optional[s
         return None, None
 
 
+def get_prompt_mode_override(db_connection, chat_session_id: str) -> Optional[str]:
+    """
+    chat_sessions.prompt_mode_override (migration 035): the per-session prompt
+    mode set only for verified evaluation-harness sessions. None for normal
+    sessions and on any error (for example before migration 035 has run); the
+    transaction is rolled back so later queries on the shared connection work.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                "SELECT prompt_mode_override FROM chat_sessions WHERE id = %s",
+                (chat_session_id,)
+            )
+            row = cur.fetchone()
+            return row[0] if row and row[0] in GUIDELINE_MODES else None
+    except Exception as e:
+        logger.error(f"get_prompt_mode_override failed: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
+        return None
+
+
 def save_routing_state(db_connection, chat_session_id: str, routing_state: Dict[str, Any]) -> None:
     """
     Persist per-session routing state (enum-only fields) into chat_sessions.metadata.
