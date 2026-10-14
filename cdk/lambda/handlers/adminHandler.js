@@ -780,17 +780,29 @@ exports.handler = async (event) => {
         // If timeRange is NOT provided, return all-time totals only (no timeSeries)
         const timeRangeProvided = typeof qs.timeRange === "string" && qs.timeRange.trim().length > 0;
 
-        // Helper: compute totals (either all-time or between startDate and endDate)
+        // Helper: compute totals (either all-time or between startDate and endDate).
+        // Evaluation-harness sessions (cs.eval_run_id set, migration 035) are
+        // test traffic and are excluded from every count.
         const fetchTotals = async (startDateIso /* string | null */, endDateIso /* string | null */) => {
           if (!startDateIso) {
             const totalsRows = await sqlConnection`
               SELECT
-                (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs) AS users,
-                (SELECT COUNT(cs.id)::int FROM chat_sessions cs) AS chat_sessions,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm) AS messages,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm WHERE cm.sender = 'user') AS questions,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'up') AS thumbs_up,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf WHERE sf.rating = 'down') AS thumbs_down
+                (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL) AS users,
+                (SELECT COUNT(cs.id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL) AS chat_sessions,
+                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                  JOIN chat_sessions cs ON cs.id = cm.chat_session_id
+                  WHERE cs.eval_run_id IS NULL) AS messages,
+                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                  JOIN chat_sessions cs ON cs.id = cm.chat_session_id
+                  WHERE cm.sender = 'user' AND cs.eval_run_id IS NULL) AS questions,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  JOIN chat_sessions cs ON cs.id = sf.chat_session_id
+                  WHERE sf.rating = 'up' AND cs.eval_run_id IS NULL) AS thumbs_up,
+                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  JOIN chat_sessions cs ON cs.id = sf.chat_session_id
+                  WHERE sf.rating = 'down' AND cs.eval_run_id IS NULL) AS thumbs_down
             `;
             return totalsRows[0];
           }
@@ -800,35 +812,45 @@ exports.handler = async (event) => {
               (SELECT COUNT(DISTINCT cs.user_id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
-                AND cs.created_at < ${endDateIso}) AS users,
+                AND cs.created_at < ${endDateIso}
+                AND cs.eval_run_id IS NULL) AS users,
 
               (SELECT COUNT(cs.id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
-                AND cs.created_at < ${endDateIso}) AS chat_sessions,
+                AND cs.created_at < ${endDateIso}
+                AND cs.eval_run_id IS NULL) AS chat_sessions,
 
               (SELECT COUNT(cm.id)::int
               FROM chat_messages cm
-              WHERE cm.created_at >= ${startDateIso}
-                AND cm.created_at < ${endDateIso}) AS messages,
-
-              (SELECT COUNT(cm.id)::int
-              FROM chat_messages cm
+              JOIN chat_sessions cs ON cs.id = cm.chat_session_id
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
-                AND cm.sender = 'user') AS questions,
+                AND cs.eval_run_id IS NULL) AS messages,
+
+              (SELECT COUNT(cm.id)::int
+              FROM chat_messages cm
+              JOIN chat_sessions cs ON cs.id = cm.chat_session_id
+              WHERE cm.created_at >= ${startDateIso}
+                AND cm.created_at < ${endDateIso}
+                AND cm.sender = 'user'
+                AND cs.eval_run_id IS NULL) AS questions,
 
               (SELECT COUNT(sf.id)::int
               FROM session_feedback sf
+              JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
-                AND sf.rating = 'up') AS thumbs_up,
+                AND sf.rating = 'up'
+                AND cs.eval_run_id IS NULL) AS thumbs_up,
 
               (SELECT COUNT(sf.id)::int
               FROM session_feedback sf
+              JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
-                AND sf.rating = 'down') AS thumbs_down
+                AND sf.rating = 'down'
+                AND cs.eval_run_id IS NULL) AS thumbs_down
           `;
           return totalsRows[0];
         };
@@ -888,6 +910,7 @@ exports.handler = async (event) => {
             FROM chat_sessions cs
             WHERE cs.created_at >= ${startDateIso}
               AND cs.created_at < ${endDateIso}
+              AND cs.eval_run_id IS NULL
             GROUP BY DATE_TRUNC('day', cs.created_at)::date
           ),
           daily_questions AS (
@@ -900,6 +923,7 @@ exports.handler = async (event) => {
             WHERE cm.created_at >= ${startDateIso}
               AND cm.created_at < ${endDateIso}
               AND cm.sender = 'user'
+              AND cs.eval_run_id IS NULL
             GROUP BY DATE_TRUNC('day', cm.created_at)::date
           ),
           daily_feedback AS (
@@ -908,8 +932,10 @@ exports.handler = async (event) => {
               COUNT(sf.id) FILTER (WHERE sf.rating = 'up')::int AS thumbs_up,
               COUNT(sf.id) FILTER (WHERE sf.rating = 'down')::int AS thumbs_down
             FROM session_feedback sf
+            JOIN chat_sessions cs ON cs.id = sf.chat_session_id
             WHERE sf.updated_at >= ${startDateIso}
               AND sf.updated_at < ${endDateIso}
+              AND cs.eval_run_id IS NULL
             GROUP BY DATE_TRUNC('day', sf.updated_at)::date
           )
           SELECT

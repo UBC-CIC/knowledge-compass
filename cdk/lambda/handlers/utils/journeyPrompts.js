@@ -366,7 +366,9 @@ async function feedbackCounts(sql, days) {
       SELECT sf.rating, cs.metadata->'routing' AS r
         FROM session_feedback sf
         JOIN chat_sessions cs ON cs.id = sf.chat_session_id
-       WHERE ${since}::timestamptz IS NULL OR sf.updated_at >= ${since}::timestamptz
+       WHERE (${since}::timestamptz IS NULL OR sf.updated_at >= ${since}::timestamptz)
+         -- Evaluation-harness sessions (migration 035) are test traffic.
+         AND cs.eval_run_id IS NULL
     ),
     tagged AS (
       SELECT rating,
