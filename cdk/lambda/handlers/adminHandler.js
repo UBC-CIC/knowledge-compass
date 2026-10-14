@@ -1054,6 +1054,7 @@ exports.handler = async (event) => {
             latest.min_exchanges_before_answer,
             latest.max_characters_per_user_message,
             latest.max_characters_per_day,
+            latest.max_messages_per_day_global,
             latest.max_characters_per_ai_message,
             latest.temperature,
             latest.top_p,
@@ -1076,6 +1077,7 @@ exports.handler = async (event) => {
           min_exchanges_before_answer: 0,
           max_characters_per_user_message: 2000,
           max_characters_per_day: 10000,
+          max_messages_per_day_global: 5000,
           max_characters_per_ai_message: 5000,
           temperature: 0.15,
           top_p: 0.5,
@@ -1216,6 +1218,7 @@ exports.handler = async (event) => {
           "min_exchanges_before_answer",
           "max_characters_per_user_message",
           "max_characters_per_day",
+          "max_messages_per_day_global",
           "max_characters_per_ai_message",
           "temperature",
           "top_p",
@@ -1316,6 +1319,19 @@ exports.handler = async (event) => {
           response.statusCode = 400;
           response.body = JSON.stringify({
             error: "max_characters_per_day must be an integer between 1 and 1000000",
+          });
+          break;
+        }
+
+        if (
+          patch.max_messages_per_day_global !== undefined &&
+          (!isFiniteInt(patch.max_messages_per_day_global) ||
+            patch.max_messages_per_day_global < 1 ||
+            patch.max_messages_per_day_global > 1000000)
+        ) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({
+            error: "max_messages_per_day_global must be an integer between 1 and 1000000",
           });
           break;
         }
@@ -1432,6 +1448,7 @@ exports.handler = async (event) => {
             min_exchanges_before_answer = COALESCE(${patch.min_exchanges_before_answer ?? null}::int, s.min_exchanges_before_answer),
             max_characters_per_user_message = COALESCE(${patch.max_characters_per_user_message}, s.max_characters_per_user_message),
             max_characters_per_day = COALESCE(${patch.max_characters_per_day ?? null}::int, s.max_characters_per_day),
+            max_messages_per_day_global = COALESCE(${patch.max_messages_per_day_global ?? null}::int, s.max_messages_per_day_global),
             max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message}, s.max_characters_per_ai_message),
             temperature = COALESCE(${patch.temperature}, s.temperature),
             top_p = COALESCE(${patch.top_p}, s.top_p),
@@ -1450,6 +1467,7 @@ exports.handler = async (event) => {
             s.min_exchanges_before_answer,
             s.max_characters_per_user_message,
             s.max_characters_per_day,
+            s.max_messages_per_day_global,
             s.max_characters_per_ai_message,
             s.temperature,
             s.top_p,

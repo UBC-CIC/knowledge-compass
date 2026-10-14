@@ -75,6 +75,53 @@ test("system settings GET falls back to the default daily character limit", asyn
   assert.equal(res.body.max_characters_per_day, 10000);
 });
 
+test("system settings rejects an out-of-range global daily message budget", async () => {
+  for (const value of [0, 1000001, 2.5, "5000"]) {
+    const sql = fakeSql();
+    const res = await invoke(sql, {
+      httpMethod: "PUT",
+      resource: "/admin/system-settings",
+      requestContext: adminContext,
+      body: JSON.stringify({ max_messages_per_day_global: value }),
+    });
+    assert.equal(res.statusCode, 400, String(value));
+    assert.match(res.body.error, /max_messages_per_day_global/);
+    assert.ok(!sql.queries().some((q) => q.text.includes("UPDATE system_settings")));
+  }
+});
+
+test("system settings saves the global daily message budget", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1", max_messages_per_day_global: 1234 }];
+    if (text.includes("FROM users")) return [{ id: "a1", role: "admin" }];
+    return [];
+  });
+  const res = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: adminContext,
+    body: JSON.stringify({ max_messages_per_day_global: 1234 }),
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.max_messages_per_day_global, 1234);
+  const update = sql.queries().find((q) => q.text.includes("UPDATE system_settings"));
+  assert.ok(update, "UPDATE query issued");
+  assert.ok(update.text.includes("max_messages_per_day_global = COALESCE"));
+  assert.ok(update.text.includes("s.max_messages_per_day_global"), "returned in RETURNING");
+  assert.ok(update.values.includes(1234));
+});
+
+test("system settings GET returns the global daily message budget", async () => {
+  const fallback = await invoke(fakeSql(), { httpMethod: "GET", resource: "/admin/system-settings", requestContext: adminContext });
+  assert.equal(fallback.statusCode, 200);
+  assert.equal(fallback.body.max_messages_per_day_global, 5000);
+
+  const sql = fakeSql((text) => (text.includes("FROM system_settings") ? [{ id: "s1", max_messages_per_day_global: 250 }] : []));
+  const res = await invoke(sql, { httpMethod: "GET", resource: "/admin/system-settings", requestContext: adminContext });
+  assert.equal(res.body.max_messages_per_day_global, 250);
+  assert.ok(sql.queries().some((q) => q.text.includes("latest.max_messages_per_day_global")));
+});
+
 test("removed example endpoint and unknown routes are not served", async () => {
   for (const resource of ["/admin/exampleEndpoint", "/admin/does-not-exist"]) {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource, requestContext: adminContext });

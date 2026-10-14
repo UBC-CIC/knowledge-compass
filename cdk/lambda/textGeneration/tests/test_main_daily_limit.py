@@ -2,7 +2,9 @@
 Tests for the daily character limit in main.handler: the allowance is
 reserved after the session ownership check and before the `start` event and
 any generation, and an over-limit message gets the existing terminal `error`
-event (WebSocket) / HTTP 429 (REST). Generation and the DB are mocked.
+event (WebSocket) / HTTP 429 (REST). The service-wide daily message budget
+(GLOBAL_DAILY_LIMIT_EXCEEDED) uses the same path. Generation and the DB are
+mocked.
 
 Run from the textGeneration dir:
 
@@ -130,7 +132,8 @@ class MainDailyLimitTests(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 200)
         self.reserve.assert_called_once_with(USER, len(QUERY), self.conn, main.config.MAX_CHARACTERS_PER_DAY,
-                                             request_id=None)
+                                             request_id=None,
+                                             global_limit=main.config.MAX_MESSAGES_PER_DAY_GLOBAL)
         self.get_response.assert_called_once()
         sent = self.types_sent()
         self.assertIn("start", sent)
@@ -156,6 +159,30 @@ class MainDailyLimitTests(unittest.TestCase):
 
         self.assertEqual(result["statusCode"], 400)
         self.reserve.assert_not_called()
+
+    def test_global_budget_spent_sends_busy_error_and_skips_generation(self):
+        self.reserve.return_value = (False, {**USAGE, "reason": main.GLOBAL_LIMIT_REASON})
+        result = main.handler(make_event())
+
+        self.assertEqual(result["statusCode"], 429)
+        self.get_response.assert_not_called()
+        self.assertEqual(self.types_sent(), ["error"])
+        payload = self.ws.payloads[0]
+        self.assertEqual(payload["error"], "GLOBAL_DAILY_LIMIT_EXCEEDED")
+        self.assertEqual(payload["message"], "The assistant is very busy today. Please try again tomorrow.")
+        # Per-user usage is not part of the service-wide error.
+        self.assertNotIn("character_usage", payload)
+
+        body = json.loads(result["body"])
+        self.assertEqual(body["error"], "GLOBAL_DAILY_LIMIT_EXCEEDED")
+        self.assertEqual(body["message"], main.GLOBAL_DAILY_LIMIT_MESSAGE)
+        self.assertNotIn("character_usage", body)
+
+    def test_global_budget_comes_from_settings(self):
+        with mock.patch.object(main.config, "MAX_MESSAGES_PER_DAY_GLOBAL", 7):
+            main.handler(make_event())
+
+        self.assertEqual(self.reserve.call_args.kwargs["global_limit"], 7)
 
     def test_reservation_error_fails_closed(self):
         self.reserve.side_effect = RuntimeError("db down")
