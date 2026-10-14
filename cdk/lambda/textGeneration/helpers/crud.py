@@ -191,6 +191,7 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
                     'min_messages_before_suggest': s.get('min_messages_before_suggest'),
                     'max_characters_per_user_message': s.get('max_characters_per_user_message'),
                     'max_characters_per_day': s.get('max_characters_per_day'),
+                    'max_messages_per_day_global': s.get('max_messages_per_day_global'),
                     'max_characters_per_ai_message': s.get('max_characters_per_ai_message'),
                     'temperature': _float('temperature'),
                     'top_p': _float('top_p'),

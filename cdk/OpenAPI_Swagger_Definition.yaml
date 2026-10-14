@@ -1808,6 +1808,7 @@ paths:
                   min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_day: { type: integer }
+                  max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
                   top_p: { type: number }
@@ -1856,6 +1857,11 @@ paths:
                 max_characters_per_day:
                   type: integer
                   description: Characters a user can send per UTC day
+                max_messages_per_day_global:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000000
+                  description: Messages all public users together can send per UTC day
                 max_characters_per_ai_message: { type: integer }
                 temperature: { type: number }
                 top_p: { type: number }
@@ -1887,6 +1893,7 @@ paths:
                   min_exchanges_before_answer: { type: integer }
                   max_characters_per_user_message: { type: integer }
                   max_characters_per_day: { type: integer }
+                  max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
                   temperature: { type: number }
                   top_p: { type: number }
@@ -3288,7 +3295,7 @@ paths:
         "404":
           description: Chat session not found
         "429":
-          description: Daily character limit reached (error DAILY_CHARACTER_LIMIT_EXCEEDED, with message and character_usage) or daily message limit reached
+          description: Daily character limit reached (error DAILY_CHARACTER_LIMIT_EXCEEDED, with message and character_usage), service-wide daily message budget reached (error GLOBAL_DAILY_LIMIT_EXCEEDED, with message) or daily message limit reached
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

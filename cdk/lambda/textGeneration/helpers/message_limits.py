@@ -4,6 +4,11 @@ import helpers.config as config
 
 logger = logging.getLogger(__name__)
 
+# usage["reason"] on a rejection caused by the service-wide daily message
+# budget (global_daily_usage, migration 036) rather than the user's own
+# character allowance. Per-user rejections carry no reason key.
+GLOBAL_LIMIT_REASON = "global_daily_messages"
+
 
 def reserve_daily_characters(
     user_id: str,
@@ -12,6 +17,7 @@ def reserve_daily_characters(
     limit: int,
     now: datetime | None = None,
     request_id: str | None = None,
+    global_limit: int | None = None,
 ) -> tuple[bool, dict]:
     """
     Atomically counts `char_count` characters against the user's allowance for
@@ -29,6 +35,15 @@ def reserve_daily_characters(
     request id that was already counted is allowed again without counting; a
     rejected message rolls back its claim so nothing is left behind. Without a
     request id the reservation is counted every time.
+
+    `global_limit` (system_settings.max_messages_per_day_global) caps how many
+    messages all public users together can send per UTC day. In the same
+    transaction, after the request-id claim and the per-user increment, the
+    day's row in global_daily_usage is incremented with an atomic
+    INSERT ... ON CONFLICT DO UPDATE ... WHERE messages + 1 <= limit. If the
+    budget is spent the whole transaction rolls back (claim and per-user
+    count included) and usage["reason"] is GLOBAL_LIMIT_REASON. A retried
+    request id is not counted again. None skips the global budget.
 
     Raises on DB errors (after rolling back) so the caller fails closed.
 
@@ -100,16 +115,41 @@ def reserve_daily_characters(
                 (user_id, usage_date, char_count, limit),
             )
             row = cur.fetchone()
-            if row:
+            if not row:
+                # The conflict update's WHERE failed: this message would exceed
+                # the limit. Roll back so the request-id claim (if any) is
+                # undone too.
+                db_connection.rollback()
+                used = current_used(cur)
                 db_connection.commit()
-                return True, usage(row[0])
+                return False, usage(used)
+            used = row[0]
 
-            # The conflict update's WHERE failed: this message would exceed the
-            # limit. Roll back so the request-id claim (if any) is undone too.
-            db_connection.rollback()
-            used = current_used(cur)
+            if global_limit is not None:
+                # Last statement before commit, so the single hot row per day
+                # is locked for as short a time as possible.
+                cur.execute(
+                    """
+                    INSERT INTO global_daily_usage (usage_date, messages, updated_at)
+                    VALUES (%s, 1, now())
+                    ON CONFLICT (usage_date) DO UPDATE
+                       SET messages = global_daily_usage.messages + 1,
+                           updated_at = now()
+                     WHERE global_daily_usage.messages + 1 <= %s
+                    RETURNING messages
+                    """,
+                    (usage_date, global_limit),
+                )
+                if cur.fetchone() is None:
+                    # Service-wide budget spent: undo the claim and the
+                    # per-user count so nothing from this message is kept.
+                    db_connection.rollback()
+                    used = current_used(cur)
+                    db_connection.commit()
+                    return False, {**usage(used), "reason": GLOBAL_LIMIT_REASON}
+
             db_connection.commit()
-            return False, usage(used)
+            return True, usage(used)
 
     except Exception as e:
         db_connection.rollback()

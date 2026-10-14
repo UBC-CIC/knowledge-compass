@@ -15,6 +15,7 @@ export type AssistantSettings = {
   min_exchanges_before_answer: number;
   max_characters_per_user_message: number;
   max_characters_per_day: number;
+  max_messages_per_day_global: number;
   max_characters_per_ai_message: number;
   temperature: number;
   top_p: number;
@@ -33,6 +34,7 @@ export const RECOMMENDED: AssistantSettings = {
   min_exchanges_before_answer: 0,
   max_characters_per_user_message: 2000,
   max_characters_per_day: 10000,
+  max_messages_per_day_global: 5000,
   max_characters_per_ai_message: 5000,
   temperature: 0.15,
   top_p: 0.5,
@@ -109,6 +111,7 @@ const RULES: Partial<Record<SettingKey, Rule>> = {
   min_exchanges_before_answer: { min: 0, max: 500, integer: true, label: "Questions before guidance" },
   max_characters_per_user_message: { min: 1, max: 200000, integer: true, label: "Longest message" },
   max_characters_per_day: { min: 1, max: 1000000, integer: true, label: "Characters per day" },
+  max_messages_per_day_global: { min: 1, max: 1000000, integer: true, label: "Messages per day, everyone" },
   max_characters_per_ai_message: { min: 1, max: 200000, integer: true, label: "Longest reply" },
   temperature: { min: 0, max: 2, integer: false, label: "Temperature" },
   top_p: { min: 0, max: 1, integer: false, label: "Top P" },

@@ -322,6 +322,15 @@ export default function SystemSettings() {
                 onChange={set("max_characters_per_day")}
                 error={errors.max_characters_per_day}
               />
+              <NumberField
+                label="Messages everyone can send per day, in total"
+                help="Counted across all families from midnight UTC. When it's reached, the assistant pauses for everyone until the next day."
+                min={1}
+                max={1000000}
+                value={draft.max_messages_per_day_global}
+                onChange={set("max_messages_per_day_global")}
+                error={errors.max_messages_per_day_global}
+              />
             </div>
           </SettingsCard>
 

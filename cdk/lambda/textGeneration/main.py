@@ -11,7 +11,7 @@ from helpers.embedding_space import EmbeddingSpaceError
 from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import resolve_caller_user_id, validate_session_ownership, sanitize_session_id
-from helpers.message_limits import reserve_daily_characters
+from helpers.message_limits import reserve_daily_characters, GLOBAL_LIMIT_REASON
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,6 +25,9 @@ DAILY_LIMIT_PARTIAL_MESSAGE = (
     "This message is longer than the {remaining:,} characters you have left today. "
     "Please try a shorter message."
 )
+# Service-wide daily message budget (system_settings.max_messages_per_day_global).
+GLOBAL_DAILY_LIMIT_ERROR = "GLOBAL_DAILY_LIMIT_EXCEEDED"
+GLOBAL_DAILY_LIMIT_MESSAGE = "The assistant is very busy today. Please try again tomorrow."
 
 
 def _daily_limit_message(char_usage):
@@ -106,7 +109,6 @@ def handler(event, context=None):
         return fail(400, 'Invalid JSON body')
 
     query = body.get('query')
-    is_intro_message = body.get('is_intro_message', False)
 
     chat_session_id = body.get('chat_session_id')
 
@@ -174,11 +176,17 @@ def handler(event, context=None):
         # and any Bedrock call; an over-limit message is rejected whole. A DB
         # error here raises into the generic 500 below (fail closed). The Lambda
         # request id stays the same across async retries, so a retried
-        # invocation is not counted twice.
+        # invocation is not counted twice. The same transaction also counts the
+        # message against the service-wide daily message budget.
         allowed, char_usage = reserve_daily_characters(
             user_id, len(query), conn, config.MAX_CHARACTERS_PER_DAY,
             request_id=getattr(context, 'aws_request_id', None),
+            global_limit=config.MAX_MESSAGES_PER_DAY_GLOBAL,
         )
+        if not allowed and char_usage.get('reason') == GLOBAL_LIMIT_REASON:
+            logger.warning("Global daily message budget reached")
+            return fail(429, GLOBAL_DAILY_LIMIT_ERROR, GLOBAL_DAILY_LIMIT_MESSAGE,
+                        extra={'message': GLOBAL_DAILY_LIMIT_MESSAGE})
         if not allowed:
             logger.info("Daily character limit reached")
             limit_message = _daily_limit_message(char_usage)
@@ -199,7 +207,6 @@ def handler(event, context=None):
             user_id=user_id,
             db_connection=conn,
             stream_callback=stream_chunk,
-            is_intro_message=is_intro_message
         )
         
         # Format response to match API contract
