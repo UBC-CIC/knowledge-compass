@@ -1,6 +1,7 @@
 import json
 import logging
 from helpers.cors import get_cors_headers
+from helpers.ingestion_lock import reject_if_locked
 from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
 from helpers.stage_data_sources import StageRejected, stage_file_pair
 from helpers.upload_identity import delete_s3_objects, upload_source_key
@@ -43,6 +44,10 @@ def stage_data_sources_batch(event, body, connection):
       ]
     }
     """
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
+
     created_by = admin_email_from_request(event, body)
     items = body.get("items")
 

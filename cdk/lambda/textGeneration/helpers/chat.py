@@ -14,7 +14,10 @@ from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
 from helpers.logic import get_current_prompt
 from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
-from helpers.retrieval import DEFAULT_MIN_SCORE, public_http_url, retrieve_from_pgvector, to_public_source
+from helpers.embedding_space import EmbeddingSpaceError
+from helpers.retrieval import (
+    DEFAULT_MIN_SCORE, effective_min_score, public_http_url, retrieve_from_pgvector, to_public_source,
+)
 from helpers.citations import (
     parse_cited_indices,
     select_cited_sources,
@@ -279,6 +282,7 @@ def _fallback_resources(
     sources: List[Dict[str, Any]],
     answer_text: str,
     limit: int = GUIDELINE_FALLBACK_RESOURCE_COUNT,
+    min_score: float = DEFAULT_MIN_SCORE,
 ) -> List[Dict[str, Any]]:
     """
     Library resources to show under "More resources" when a guideline-mode
@@ -287,7 +291,8 @@ def _fallback_resources(
     returned.
 
     Order: resources whose public URL appears in the answer (linked but not
-    cited, in retrieval order), then the rest at or above DEFAULT_MIN_SCORE by
+    cited, in retrieval order), then the rest at or above `min_score` (the active
+    embedding space's effective value; DEFAULT_MIN_SCORE when none is set) by
     descending score.
     """
     resources = [s for s in sources if s.get("source_type") != GUIDELINE_SOURCE_TYPE]
@@ -299,7 +304,7 @@ def _fallback_resources(
     rest = sorted(
         (
             s for s in resources
-            if not any(s is chosen for chosen in linked) and (s.get("score") or 0) >= DEFAULT_MIN_SCORE
+            if not any(s is chosen for chosen in linked) and (s.get("score") or 0) >= min_score
         ),
         key=lambda s: s.get("score") or 0,
         reverse=True,
@@ -414,6 +419,11 @@ def get_response(
         if user_id and save_user_message:
             usage_info = record_message_sent(user_id, db_connection)
 
+    except EmbeddingSpaceError:
+        # Fail loud: main.py turns this into an `error` event. Never answer from
+        # a mismatched or missing embedding space, and do not hide it behind the
+        # generic "An error occurred." reply below.
+        raise
     except ValueError as e:
         return {
             "response": str(e),
@@ -579,7 +589,12 @@ def get_response(
     fallback_count = 0
     if (is_guideline and guide_state and not public_sources and parsed_indices != []
             and answer_text and not answer_text.startswith("I encountered an error")):
-        public_sources = [to_public_source(s) for s in _fallback_resources(sources, answer_text)]
+        public_sources = [
+            to_public_source(s)
+            for s in _fallback_resources(
+                sources, answer_text, min_score=effective_min_score(db_connection, region)
+            )
+        ]
         fallback_count = len(public_sources)
 
     warning_text = None

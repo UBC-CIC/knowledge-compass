@@ -7,6 +7,7 @@ from helpers.admin_user import (
     get_user_id_by_email,
 )
 from helpers.cors import get_cors_headers
+from helpers.ingestion_lock import reject_if_locked
 from helpers.video_transcription import is_http_url, start_transcription_job
 from helpers.process_document_batch import trigger_uploaded_document
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
@@ -953,6 +954,12 @@ def stage_data_sources(event, body, connection):
     - type = "video"
     - type = "document"
     """
+    # Staging a document or video auto-starts its ingestion, so it honors the
+    # cutover lock too (deliberately a superset of sync / batch / retry).
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
+
     source_type = body.get("type")
     created_by = admin_email_from_request(event, body)
 

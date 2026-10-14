@@ -47,6 +47,7 @@ import {
   DEMO_OVERVIEW_TOTALS,
   isDemoMode,
 } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 type AnalyticsTotals = {
   users: number;
@@ -574,7 +575,7 @@ function CsvLinkStatusPanel({
         if (statusFilter) params.set("status", statusFilter);
 
         const res = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}/links?${params.toString()}`,
+          `${API_ENDPOINT}/admin/data_sources/${dataSourceId}/links?${params.toString()}`,
           {
             headers: { Authorization: token, "Content-Type": "application/json" },
           }
@@ -930,7 +931,7 @@ export default function DataSourceManagement() {
 
       // no timeRange so backend returns ALL-TIME totals
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/analytics`,
+        `${API_ENDPOINT}/admin/analytics`,
         {
           headers: {
             Authorization: token,
@@ -971,7 +972,7 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        `${API_ENDPOINT}/admin/data_sources`,
         {
           headers: {
             Authorization: token,
@@ -1029,7 +1030,7 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/sync`,
+        `${API_ENDPOINT}/admin/data_sources/sync`,
         {
           method: "POST",
           headers: {
@@ -1085,7 +1086,7 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}/retry`,
+        `${API_ENDPOINT}/admin/data_sources/${dataSourceId}/retry`,
         {
           method: "POST",
           headers: {
@@ -1149,7 +1150,7 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/${dataSourceId}`,
+        `${API_ENDPOINT}/admin/data_sources/${dataSourceId}`,
         {
           method: "DELETE",
           headers: {
@@ -1214,7 +1215,7 @@ export default function DataSourceManagement() {
       const token = await AuthService.getAdminIdToken();
 
       const res = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        `${API_ENDPOINT}/admin/data_sources`,
         {
           method: "POST",
           headers: {
@@ -1357,7 +1358,7 @@ export default function DataSourceManagement() {
         : file.name;
 
     const res = await fetch(
-      `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
+      `${API_ENDPOINT}/admin/generate-presigned-url?file_name=${encodeURIComponent(
         fileName,
       )}&content_type=${encodeURIComponent(contentType)}`,
       {
@@ -1578,7 +1579,7 @@ export default function DataSourceManagement() {
       ]);
 
       const batchUrlRes = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/generate-presigned-urls/batch`,
+        `${API_ENDPOINT}/admin/generate-presigned-urls/batch`,
         {
           method: "POST",
           headers: { Authorization: token, "Content-Type": "application/json" },
@@ -1649,7 +1650,7 @@ export default function DataSourceManagement() {
       });
 
       const stageRes = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources/batch`,
+        `${API_ENDPOINT}/admin/data_sources/batch`,
         {
           method: "POST",
           headers: { Authorization: token, "Content-Type": "application/json" },
@@ -1784,7 +1785,7 @@ export default function DataSourceManagement() {
             };
 
       const stageResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        `${API_ENDPOINT}/admin/data_sources`,
         {
           method: "POST",
           headers: {
@@ -1886,7 +1887,7 @@ export default function DataSourceManagement() {
       );
 
       const stageResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        `${API_ENDPOINT}/admin/data_sources`,
         {
           method: "POST",
           headers: {
@@ -2001,7 +2002,7 @@ export default function DataSourceManagement() {
       );
 
       const stageResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/admin/data_sources`,
+        `${API_ENDPOINT}/admin/data_sources`,
         {
           method: "POST",
           headers: {

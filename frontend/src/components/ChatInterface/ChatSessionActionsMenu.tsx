@@ -20,6 +20,7 @@ import {
 import { useView } from "@/providers/view";
 import { isDemoMode } from "@/lib/demo";
 import { getPublicToken } from "@/lib/publicToken";
+import { API_ENDPOINT } from "@/lib/api";
 
 type ChatSessionActionsMenuProps = {
   chatSessionId: string;
@@ -125,7 +126,7 @@ export default function ChatSessionActionsMenu({
 
       const token = await getPublicToken();
 
-      const url = new URL(`${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/${chatSessionId}`);
+      const url = new URL(`${API_ENDPOINT}/chat_sessions/${chatSessionId}`);
       url.searchParams.set("user_id", userId);
 
       const response = await fetch(url.toString(), {

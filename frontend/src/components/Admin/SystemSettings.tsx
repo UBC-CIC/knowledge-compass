@@ -23,16 +23,26 @@ import {
   type RoutingMode,
   type SettingKey,
 } from "@/lib/assistantSettings";
+import { API_ENDPOINT } from "@/lib/api";
+import ServiceStatusCard from "@/components/Admin/ServiceStatusCard";
+import {
+  NORMAL_SERVICE_STATE,
+  serviceStateFromSettings,
+  type ServicePatch,
+  type ServiceState,
+} from "@/lib/serviceStatus";
 
 type Meta = { updated_at?: string; updated_by_email?: string | null };
+type ServiceFields = { service_status?: unknown; service_message?: unknown };
 
 // Demo mode keeps edits in memory for the session.
 let demoSettings: AssistantSettings = { ...RECOMMENDED };
 let demoMeta: Meta = {};
+let demoService: ServiceState = NORMAL_SERVICE_STATE;
 
 async function settingsFetch<T>(init: RequestInit = {}): Promise<T> {
   const token = await AuthService.getAdminIdToken();
-  const res = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/admin/system-settings`, {
+  const res = await fetch(`${API_ENDPOINT}/admin/system-settings`, {
     ...init,
     headers: { Authorization: token, "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
@@ -111,6 +121,7 @@ export default function SystemSettings() {
   const [saved, setSaved] = useState<AssistantSettings>(RECOMMENDED);
   const [draft, setDraft] = useState<AssistantSettings>(RECOMMENDED);
   const [meta, setMeta] = useState<Meta>({});
+  const [service, setService] = useState<ServiceState>(NORMAL_SERVICE_STATE);
   const [loading, setLoading] = useState(!isDemoMode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,14 +134,16 @@ export default function SystemSettings() {
       setSaved(demoSettings);
       setDraft(demoSettings);
       setMeta(demoMeta);
+      setService(demoService);
       return;
     }
     try {
       setLoading(true);
-      const data = await settingsFetch<Partial<Record<SettingKey, unknown>> & Meta>();
+      const data = await settingsFetch<Partial<Record<SettingKey, unknown>> & ServiceFields & Meta>();
       const s = fromApi(data);
       setSaved(s);
       setDraft(s);
+      setService(serviceStateFromSettings(data));
       setMeta({ updated_at: data.updated_at ?? undefined, updated_by_email: data.updated_by_email ?? null });
       setError(null);
     } catch (e) {
@@ -177,6 +190,20 @@ export default function SystemSettings() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // The service status saves on its own, so switching it off never waits on other edits.
+  const saveService = async (servicePatch: ServicePatch) => {
+    if (isDemoMode) {
+      demoService = {
+        status: servicePatch.service_status ?? demoService.status,
+        message: servicePatch.service_message === undefined ? demoService.message : servicePatch.service_message,
+      };
+      setService(demoService);
+      return;
+    }
+    const updated = await settingsFetch<ServiceFields>({ method: "PUT", body: JSON.stringify(servicePatch) });
+    setService(serviceStateFromSettings(updated));
   };
 
   const resetDeveloper = () => {
@@ -241,6 +268,8 @@ export default function SystemSettings() {
         </div>
       ) : (
         <>
+          <ServiceStatusCard saved={service} onSave={saveService} />
+
           <SettingsCard
             title="How the conversation flows"
             description="When the assistant stops asking questions and starts giving guidance."

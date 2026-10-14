@@ -9,6 +9,7 @@ import {
   readUserSession,
   saveUserSession,
 } from "@/lib/publicToken";
+import { API_ENDPOINT } from "@/lib/api";
 
 
 export function UserProvider({ children }: { children: ReactNode }) {
@@ -27,7 +28,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
       try {
         const token = await getPublicToken();
         const validateResp = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/${storedUserId}`,
+          `${API_ENDPOINT}/user/${storedUserId}`,
           {
             method: "GET",
             headers: {
@@ -61,7 +62,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         const token = await getPublicToken();
 
         // Create an anonymous session user — guardians do not sign in.
-        const response = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user`, {
+        const response = await fetch(`${API_ENDPOINT}/user`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

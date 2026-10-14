@@ -40,8 +40,13 @@ Optional:
   DB_SECRET_NAME        Secrets Manager secret id (required when DB_AUTH=secret)
   DB_PASSWORD           Password (required when DB_AUTH=password)
 
-  EMBED_MODEL_ID        Bedrock embedding model id (default: cohere.embed-english-v3)
-  EMBED_BATCH_SIZE      Max texts per embed call (default: 96)
+  EMBED_MODEL_ID        DEPRECATED fallback. The embedding model comes from the database
+                        (embedding_active_space / embedding_spaces, see
+                        get_active_embedding_space). ECS task definitions do NOT set
+                        this; it is read only when the database lookup is not
+                        available, for example standalone crawl-only runs on SageMaker
+                        without database access (default: cohere.embed-english-v3).
+  EMBED_BATCH_SIZE      DEPRECATED fallback, same rules as EMBED_MODEL_ID (default: 96)
 """
 
 import json
@@ -79,10 +84,12 @@ def get_region() -> str:
 
 
 def get_embed_model_id() -> str:
+    """DEPRECATED fallback: the model id comes from the active embedding space in the database."""
     return os.environ.get("EMBED_MODEL_ID", DEFAULT_EMBED_MODEL_ID)
 
 
 def get_embed_batch_size() -> int:
+    """DEPRECATED fallback: the batch size comes from the active embedding space in the database."""
     try:
         return int(os.environ.get("EMBED_BATCH_SIZE", DEFAULT_EMBED_BATCH_SIZE))
     except ValueError:
@@ -100,6 +107,65 @@ class DbSettings:
     sslmode: str
     ssl_root_cert: Optional[str]
     secret_name: Optional[str]
+
+
+_ACTIVE_SPACE_SQL = """
+    SELECT s.id::text, s.name, s.provider, s.model_id, s.invoke_target, s.dimensions,
+           s.version, s.status, s.min_score, s.split_threshold, s.settings
+    FROM embedding_active_space a
+    JOIN embedding_spaces s ON s.id = a.space_id
+    WHERE a.id = 1
+"""
+
+
+def get_active_embedding_space(conn) -> dict:
+    """
+    The embedding space ingestion must write to (migration 032), as a dict:
+    id, name, provider, model_id, invoke_target, dimensions, version, status,
+    min_score, split_threshold, settings. Containers get their embedding
+    configuration from here, never from the ECS task definition.
+
+    Raises ConfigError when no active space is registered. SQL errors
+    propagate: an ingestion run must not guess which model to embed with.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_ACTIVE_SPACE_SQL)
+        row = cur.fetchone()
+    if not row:
+        raise ConfigError(
+            "No active embedding space: embedding_active_space has no row. "
+            "Run the database migrations (032_embedding_spaces) first."
+        )
+    settings = row[10]
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    return {
+        "id": str(row[0]),
+        "name": row[1],
+        "provider": row[2],
+        "model_id": row[3],
+        "invoke_target": row[4],
+        "dimensions": int(row[5]),
+        "version": row[6],
+        "status": row[7],
+        "min_score": float(row[8]) if row[8] is not None else None,
+        "split_threshold": float(row[9]) if row[9] is not None else None,
+        "settings": settings if isinstance(settings, dict) else {},
+    }
+
+
+def spec_from_space(row: dict):
+    """The ModelSpec for a registry row (delegates to common/embeddings.py spec_from_row)."""
+    try:
+        from common import embeddings  # type: ignore
+    except ImportError:
+        import importlib.util
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embeddings.py")
+        spec = importlib.util.spec_from_file_location("kc_common_embeddings", path)
+        embeddings = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(embeddings)  # type: ignore
+    return embeddings.spec_from_row(row)
 
 
 def load_db_settings() -> DbSettings:

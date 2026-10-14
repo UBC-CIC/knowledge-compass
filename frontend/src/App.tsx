@@ -6,13 +6,14 @@ import AdminLogin from "./pages/Admin/AdminLogin";
 import AdminDashboard from "./pages/Admin/AdminDashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { Amplify } from "aws-amplify";
+import { API_ENDPOINT } from "@/lib/api";
 
 try {
   Amplify.configure({
     API: {
       REST: {
         MyApi: {
-          endpoint: import.meta.env.VITE_API_ENDPOINT || "http://localhost",
+          endpoint: API_ENDPOINT || "http://localhost",
         },
       },
     },

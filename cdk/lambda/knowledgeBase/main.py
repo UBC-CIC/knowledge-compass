@@ -19,6 +19,10 @@ from helpers.process_csv_links import process_csv_links
 from helpers.csv_links import get_data_source_links
 from helpers.guideline_document import process_guideline_document, reembed_guideline_sections
 from helpers.guideline_admin import handle_guideline_request, is_guideline_route
+from helpers.embedding_admin import handle_embedding_request, is_embedding_route
+from helpers.reembed_space import reembed_space
+from helpers.validate_space import validate_space
+from helpers.cutover import activate_space, rollback_space
 
 # Set up logging
 logger = logging.getLogger()
@@ -51,6 +55,13 @@ def _get_secret(secret_name: str, expect_json: bool = True):
     except Exception as e:
         logger.error(f"Error fetching secret '{secret_name}': {e}")
         raise
+
+_EMBEDDING_TASKS = {
+    "reembed_space": reembed_space,
+    "validate_space": validate_space,
+    "activate_space": activate_space,
+    "rollback_space": rollback_space,
+}
 
 def _connect_to_db():
     global connection
@@ -160,6 +171,17 @@ def handler(event, context=None):
                 return process_guideline_document(event=event, connection=connection, context=context)
             return reembed_guideline_sections(event=event, connection=connection)
 
+        # Async embedding-space workers (helpers/reembed_space.py, validate_space.py,
+        # cutover.py), fired by the /admin/embedding-spaces routes with
+        # InvocationType="Event" and by themselves to continue.
+        if event.get("task") in _EMBEDDING_TASKS:
+            try:
+                connection = _connect_to_db()
+            except Exception as e:
+                logger.error(f"Error connecting to database: {e}")
+                return {"error": "Error connecting to database"}
+            return _EMBEDDING_TASKS[event["task"]](event=event, connection=connection, context=context)
+
         # API Gateway path
         method = event.get("httpMethod", "")
         resource = event.get("resource", "")
@@ -198,6 +220,11 @@ def handler(event, context=None):
         # Routes: /admin/guideline* (guideline mode; helpers/guideline_admin.py)
         if is_guideline_route(event):
             return handle_guideline_request(event=event, body=body, connection=connection)
+
+        # Routes: /admin/embedding-spaces* and /admin/embedding-jobs/{id}
+        # (helpers/embedding_admin.py). Before the /admin/data_sources branches.
+        if is_embedding_route(event):
+            return handle_embedding_request(event=event, body=body, connection=connection)
 
         # Route: POST /admin/data_sources
         if method == "POST" and (

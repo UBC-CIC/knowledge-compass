@@ -15,6 +15,7 @@ import {
   setDemoSessionState,
 } from "@/lib/demo";
 import { getPublicToken as getUserToken } from "@/lib/publicToken";
+import { API_ENDPOINT } from "@/lib/api";
 
 const DEFAULT_WELCOME_MESSAGE =
   "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
@@ -76,7 +77,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
       const { token } = await getPublicToken();
 
       const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/system_message/${messageType}`,
+        `${API_ENDPOINT}/system_message/${messageType}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -113,7 +114,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
       const { token } = await getPublicToken();
 
       const response = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/user/${userId}`,
+        `${API_ENDPOINT}/chat_sessions/user/${userId}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -188,7 +189,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
       const { token } = await getPublicToken();
 
       const createResponse = await fetch(
-        `${import.meta.env.VITE_API_ENDPOINT}/chat_sessions`,
+        `${API_ENDPOINT}/chat_sessions`,
         {
           method: "POST",
           headers: {
@@ -263,7 +264,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
     try {
       const { token } = await getPublicToken();
 
-      const url = new URL(`${import.meta.env.VITE_API_ENDPOINT}/chat_sessions/${sessionId}`);
+      const url = new URL(`${API_ENDPOINT}/chat_sessions/${sessionId}`);
       url.searchParams.set("user_id", userId);
 
       const response = await fetch(url.toString(), {

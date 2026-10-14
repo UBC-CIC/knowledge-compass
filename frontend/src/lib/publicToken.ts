@@ -9,6 +9,7 @@
  * credential, /user/publicToken returns an anonymous token that can only
  * create a user and read public settings.
  */
+import { API_ENDPOINT } from "@/lib/api";
 
 const STORAGE_KEY = "knowledgeCompass_user_session";
 
@@ -66,7 +67,7 @@ let cached: { credential: string | null; token: string; fetchedAt: number } | nu
 let inFlight: { credential: string | null; promise: Promise<string> } | null = null;
 
 async function requestToken(credential: string | null): Promise<string> {
-  const response = await fetch(`${import.meta.env.VITE_API_ENDPOINT}/user/publicToken`, {
+  const response = await fetch(`${API_ENDPOINT}/user/publicToken`, {
     headers: credential ? { Authorization: `Bearer ${credential}` } : undefined,
   });
   if (response.status === 401 && credential) {

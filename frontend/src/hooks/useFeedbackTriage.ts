@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthService } from "@/functions/authService";
 import { isDemoMode } from "@/lib/demo";
+import { API_ENDPOINT } from "@/lib/api";
 
 /** A written feedback comment as returned by GET /admin/analytics. */
 export type FeedbackEntry = {
@@ -65,7 +66,7 @@ export function applyTriage(
 async function putTriage(chatSessionId: string, change: TriageChange): Promise<void> {
   const token = await AuthService.getAdminIdToken();
   const res = await fetch(
-    `${import.meta.env.VITE_API_ENDPOINT}/admin/feedback/${encodeURIComponent(chatSessionId)}`,
+    `${API_ENDPOINT}/admin/feedback/${encodeURIComponent(chatSessionId)}`,
     {
       method: "PUT",
       headers: { Authorization: token, "Content-Type": "application/json" },

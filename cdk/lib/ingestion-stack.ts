@@ -141,7 +141,23 @@ export class IngestionStack extends Stack {
 
     const region = this.region;
     const account = this.account;
-    const embeddingModelArn = `arn:aws:bedrock:${region}::foundation-model/cohere.embed-english-v3`;
+    // Embedding models the ingestion tasks may invoke. Which model is actually
+    // used is configuration on the embedding_spaces row (read from the DB at
+    // runtime), not task-definition env. The candidate grants below only enable
+    // those models; they do not assert availability in this region.
+    // Foundation-model ARNs for candidates use a wildcard region because a
+    // cross-region inference profile invokes the model in a destination region.
+    // Manually built ARNs on purpose (no CDK token references).
+    const embeddingModelArns = [
+      `arn:aws:bedrock:${region}::foundation-model/cohere.embed-english-v3`,
+      // Amazon Titan Text Embeddings V2
+      `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`,
+      `arn:aws:bedrock:${region}:${account}:inference-profile/*amazon.titan-embed-text-v2*`,
+      // Cohere Embed v4 (model id suffix not verified: grant both forms)
+      `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
+      `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
+      `arn:aws:bedrock:${region}:${account}:inference-profile/*cohere.embed-v4*`,
+    ];
 
     // Task role: what the container code (crawler/transcriber) may do at runtime.
     const makeTaskRole = (name: string, includeS3Read: boolean): iam.Role => {
@@ -153,7 +169,7 @@ export class IngestionStack extends Stack {
       role.addToPolicy(new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel"],
-        resources: [embeddingModelArn],
+        resources: embeddingModelArns,
       }));
       // RDS IAM auth (DB_AUTH=iam in the containers). Scope to the app DB user.
       // NOTE: dbi-resource-id is only known post-deploy; scope tightened during synth review.

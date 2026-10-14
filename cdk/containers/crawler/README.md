@@ -37,8 +37,8 @@ Copy `../.env.example` to `.env` and fill in real values, or export them directl
 | `DB_PORT` | no | `5432` | |
 | `DB_SSLMODE` | no | `verify-full` | |
 | `DB_SSL_ROOT_CERT` | no | system trust | Path to RDS CA bundle |
-| `EMBED_MODEL_ID` | no | `cohere.embed-english-v3` | |
-| `EMBED_BATCH_SIZE` | no | `96` | Cohere per-call limit |
+| `EMBED_MODEL_ID` | no | `cohere.embed-english-v3` | Deprecated fallback; the model comes from the active embedding space in the database. Used only when the database cannot be read and the run does not write to it |
+| `EMBED_BATCH_SIZE` | no | `96` | Deprecated fallback, same rule as `EMBED_MODEL_ID` |
 
 ## CLI Usage
 
@@ -70,7 +70,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 | `--max-words` | 300 | Max words per chunk before splitting |
 | `--write-db` | false | Embed and write to DB |
 | `--semantic` | false | Use semantic chunking (embeds sentences to detect topic boundaries) |
-| `--semantic-threshold` | 0.6 | Cosine similarity threshold for topic boundary detection |
+| `--semantic-threshold` | active space's `split_threshold`, else 0.6 | Cosine similarity threshold for topic boundary detection. Passing it explicitly always wins |
 | `--output` | crawl_output.json | Local JSON output file |
 
 ---

@@ -106,7 +106,7 @@ this pipeline:
 - `url`: canonical URL (web page URL or YouTube link)
 
 **`chunks` table:** one row per embedded text chunk.
-- `embedding vector(1024)`: Cohere embed-english-v3 via Amazon Bedrock
+- `embedding vector(1024)`: legacy column, no longer written by the ingestion containers (kept until the cleanup migration). Vectors live in `chunk_embeddings`, one row per (chunk, embedding space), written by the crawler and transcriber for the ACTIVE space only. The model, dimension, batch size and `split_threshold` come from the database (`embedding_active_space` / `embedding_spaces`), not from the ECS task definition; `EMBED_MODEL_ID` / `EMBED_BATCH_SIZE` are deprecated fallbacks for standalone crawl-only runs without database access
 - `metadata jsonb`: type-specific fields — web: `{"heading_path": "..."}`, video: `{"chunk_start": "HH:MM:SS", "chunk_end": "HH:MM:SS"}`
 - `content_hash`: sha256 first 16 hex chars of body — used for change detection on re-ingest
 

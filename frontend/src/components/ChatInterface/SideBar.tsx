@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { isDemoMode } from "@/lib/demo";
 import { getPublicToken } from "@/lib/publicToken";
+import { API_ENDPOINT } from "@/lib/api";
 
 type UserProfile = {
   id: string;
@@ -56,7 +57,7 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
       try {
         const token = await getPublicToken();
         const response = await fetch(
-          `${import.meta.env.VITE_API_ENDPOINT}/user/${userId}`,
+          `${API_ENDPOINT}/user/${userId}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
