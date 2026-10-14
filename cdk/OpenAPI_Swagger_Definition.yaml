@@ -3130,6 +3130,29 @@ paths:
                   type: object
                   nullable: true
                   additionalProperties: true
+                eval:
+                  type: object
+                  nullable: true
+                  description: >-
+                    Optional evaluation-harness tag (evals/, migration 035). Verified
+                    server-side with an HMAC over userId.run_id.mode.exp using the
+                    EvalStack signing secret. A valid tag marks the session as test
+                    traffic (excluded from admin analytics) and sets its prompt mode;
+                    an invalid or unverifiable tag is ignored and a normal session is
+                    created. Never echoed in the response.
+                  properties:
+                    run_id:
+                      type: string
+                      pattern: "^[A-Za-z0-9_-]{1,64}$"
+                    mode:
+                      type: string
+                      enum: [standard, guideline]
+                    exp:
+                      type: integer
+                      description: Expiry, epoch seconds (at most 24 hours ahead)
+                    sig:
+                      type: string
+                      description: Lowercase hex HMAC-SHA256
       responses:
         "201":
           description: Chat session created

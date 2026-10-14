@@ -56,7 +56,7 @@ const fakeToken = (payload, secret = "test-jwt-secret") =>
 /** Claims of a fake-signed token. */
 const decodeFakeToken = (token) => JSON.parse(token.slice("signed:".length));
 
-function stubs(sql) {
+function stubs(sql, secrets = {}) {
   class FakeCommand {
     constructor(input) {
       this.input = input;
@@ -66,7 +66,15 @@ function stubs(sql) {
     postgres: () => sql,
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
-        async send() {
+        async send(command) {
+          // Per-secret overrides (options.secrets): a string is the
+          // SecretString, an Error is thrown as a failed fetch.
+          const secretId = command?.input?.SecretId;
+          if (secretId && Object.prototype.hasOwnProperty.call(secrets, secretId)) {
+            const value = secrets[secretId];
+            if (value instanceof Error) throw value;
+            return { SecretString: value };
+          }
           return {
             SecretString: JSON.stringify({
               port: 5432, username: "test", password: "test", dbname: "test", jwtSecret: "test-jwt-secret",
@@ -93,8 +101,10 @@ function stubs(sql) {
 /**
  * Fresh-require `handlers/<name>.js` (and its utils) wired to `sql`.
  * ALLOWED_ORIGIN_PARAM is unset so CORS resolves to "*" without SSM.
+ * options.secrets maps a Secrets Manager SecretId to its SecretString (or an
+ * Error to throw); other ids return the default DB credentials.
  */
-function loadHandler(name, sql) {
+function loadHandler(name, sql, options = {}) {
   delete process.env.ALLOWED_ORIGIN_PARAM;
   const handlersDir = path.resolve(__dirname, "..");
   for (const key of Object.keys(require.cache)) {
@@ -103,7 +113,7 @@ function loadHandler(name, sql) {
     }
   }
 
-  const fakes = stubs(sql);
+  const fakes = stubs(sql, options.secrets);
   const originalLoad = Module._load;
   Module._load = function patchedLoad(request, ...rest) {
     if (Object.prototype.hasOwnProperty.call(fakes, request)) return fakes[request];

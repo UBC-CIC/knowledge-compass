@@ -6,6 +6,7 @@ const {
   sanitizeString,
 } = require("./utils/validation.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
+const { resolveEvalTag } = require("./utils/evalTag.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -157,7 +158,25 @@ exports.handler = async (event) => {
 
         const chatSessionId = crypto.randomUUID();
 
-        const inserted = await sqlConnection`
+        // Evaluation-harness tag (top-level `eval`, never metadata). Only a
+        // correctly signed tag for this user sets the server-only columns;
+        // anything else creates a normal session (see utils/evalTag.js).
+        const evalTag = await resolveEvalTag(body, userId);
+
+        const inserted = evalTag
+          ? await sqlConnection`
+          INSERT INTO chat_sessions (
+            id, user_id, title, created_at, last_active_at, metadata,
+            eval_run_id, prompt_mode_override
+          )
+          VALUES (
+            ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata},
+            ${evalTag.runId}, ${evalTag.mode}
+          )
+          RETURNING id, user_id, title, created_at, last_active_at,
+                    metadata - 'guide_state' AS metadata
+        `
+          : await sqlConnection`
           INSERT INTO chat_sessions (
             id, user_id, title, created_at, last_active_at, metadata
           )
