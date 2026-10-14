@@ -1774,6 +1774,11 @@ export class ApiGatewayStack extends cdk.Stack {
       apiId: this.webSocketApi?.apiId,
       stageName: "prod",
       autoDeploy: true,
+      // Stage-wide backstop against anonymous message floods (all routes, all clients).
+      defaultRouteSettings: {
+        throttlingRateLimit: 20,
+        throttlingBurstLimit: 40,
+      },
       accessLogSettings: {
         destinationArn: wsAccessLogGroup.logGroupArn,
         format: JSON.stringify({
