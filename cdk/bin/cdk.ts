@@ -7,6 +7,7 @@ import { DBFlowStack } from "../lib/dbFlow-stack";
 import { AmplifyStack } from "../lib/amplify-stack";
 import { CICDStack } from "../lib/cicd-stack";
 import { IngestionStack } from "../lib/ingestion-stack";
+import { EvalJobsStack, EvalStack, evalSigningSecretName } from "../lib/eval-stack";
 
 const app = new cdk.App();
 
@@ -20,6 +21,18 @@ const environment = app.node.tryGetContext("environment");
 const version = app.node.tryGetContext("versionNumber");
 const githubRepo = app.node.tryGetContext("githubRepo");
 const githubBranch = app.node.tryGetContext("githubBranch") || "main";
+
+// Evaluation harness (evals/): opt-in with `-c enableEval=true`.
+//   evalJobRegion   Region for Bedrock evaluation jobs (default: stack Region)
+//   evalJudgeModels comma-separated judge model / inference profile ids
+const enableEval = ["true", true].includes(app.node.tryGetContext("enableEval"));
+const evalJobRegion: string | undefined = app.node.tryGetContext("evalJobRegion") || env.region;
+const evalJudgeModels: string[] = String(
+  app.node.tryGetContext("evalJudgeModels") || "us.anthropic.claude-opus-4-6-v1",
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const vpcStack = new VpcStack(app, `${StackPrefix}-VpcStack`, {
   env,
@@ -104,6 +117,9 @@ const apiStack = new ApiGatewayStack(
       grantBucketAccess: (principal) =>
         ingestionStack.ingestBucket.grantReadWrite(principal),
     },
+    // Plain name (no EvalStack reference); verification fails closed when the
+    // EvalStack is not deployed.
+    evalSigningSecretName: evalSigningSecretName(StackPrefix || "KC"),
   },
 );
 apiStack.addDependency(cicdStack);
@@ -132,7 +148,7 @@ const stackTags = {
   ManagedBy: "CDK",
 };
 
-const stacks = [
+const stacks: cdk.Stack[] = [
   vpcStack,
   dbStack,
   dbFlowStack,
@@ -141,6 +157,25 @@ const stacks = [
   apiStack,
   amplifyStack,
 ];
+
+if (enableEval) {
+  const jobsInStackRegion = !evalJobRegion || evalJobRegion === env.region;
+  const evalStack = new EvalStack(app, `${StackPrefix}-Eval`, {
+    env,
+    stackPrefix: StackPrefix || "KC",
+    judgeModelIds: evalJudgeModels,
+    includeJobResources: jobsInStackRegion,
+  });
+  stacks.push(evalStack);
+  if (!jobsInStackRegion) {
+    stacks.push(
+      new EvalJobsStack(app, `${StackPrefix}-EvalJobs`, {
+        env: { account: env.account, region: evalJobRegion },
+        judgeModelIds: evalJudgeModels,
+      }),
+    );
+  }
+}
 
 stacks.forEach((stack) => {
   Object.entries(stackTags).forEach(([key, value]) => {

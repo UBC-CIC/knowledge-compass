@@ -36,6 +36,11 @@ interface ApiGatewayStackProps extends cdk.StackProps {
     grantRunTasks: (principal: iam.IGrantable & { addToRolePolicy?: (s: iam.PolicyStatement) => void }) => void;
     grantBucketAccess: (principal: iam.IGrantable) => void;
   };
+  // Name of the evaluation-harness signing secret (EvalStack, evals/). A plain
+  // string, not a token: the grant below uses a hand-built ARN so this stack
+  // never depends on EvalStack. If the secret does not exist, eval tags fail
+  // closed and every session is a normal one.
+  evalSigningSecretName?: string;
 }
 
 export class ApiGatewayStack extends cdk.Stack {
@@ -1440,6 +1445,22 @@ export class ApiGatewayStack extends cdk.Stack {
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
+
+    // Evaluation-harness session tags (handlers/utils/evalTag.js). Read-only
+    // access to the one signing secret; "-??????" is the random suffix Secrets
+    // Manager appends to secret ARNs. Note: this function uses the shared
+    // postgres lambdaRole (which already reads the DB and JWT secrets), so the
+    // grant lands on that role; only chatSessionHandler reads the secret.
+    if (props.evalSigningSecretName) {
+      lambdaChatSessionFunction.addEnvironment("EVAL_SIGNING_SECRET_NAME", props.evalSigningSecretName);
+      lambdaChatSessionFunction.addToRolePolicy(new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${props.evalSigningSecretName}-??????`,
+        ],
+      }));
+    }
 
 
     const cfnLambda_chatSession = lambdaChatSessionFunction.node
