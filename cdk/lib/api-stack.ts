@@ -636,6 +636,9 @@ export class ApiGatewayStack extends cdk.Stack {
         // dedicated cap a single client can mint unlimited identities and
         // sidestep every per-user limit. A legitimate first visit needs ~3 of
         // these calls and each 15-minute refresh needs 1.
+        // Paths are URL-decoded and matched with an optional trailing slash so
+        // variants such as `/prod/user/` or `/prod/user%2FpublicToken` that API
+        // Gateway may still route to the same resource cannot skip this cap.
         {
           name: "LimitIdentityMinting",
           priority: 6,
@@ -651,22 +654,20 @@ export class ApiGatewayStack extends cdk.Stack {
                 orStatement: {
                   statements: [
                     {
-                      byteMatchStatement: {
-                        searchString: "/user/publicToken",
+                      regexMatchStatement: {
+                        regexString: "/user/publicToken/?$",
                         fieldToMatch: { uriPath: {} },
-                        textTransformations: [{ priority: 0, type: "NONE" }],
-                        positionalConstraint: "ENDS_WITH",
+                        textTransformations: [{ priority: 0, type: "URL_DECODE" }],
                       },
                     },
                     {
                       andStatement: {
                         statements: [
                           {
-                            byteMatchStatement: {
-                              searchString: "/user",
+                            regexMatchStatement: {
+                              regexString: "/user/?$",
                               fieldToMatch: { uriPath: {} },
-                              textTransformations: [{ priority: 0, type: "NONE" }],
-                              positionalConstraint: "ENDS_WITH",
+                              textTransformations: [{ priority: 0, type: "URL_DECODE" }],
                             },
                           },
                           {
