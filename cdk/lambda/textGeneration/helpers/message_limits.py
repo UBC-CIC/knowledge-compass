@@ -10,6 +10,79 @@ logger = logging.getLogger(__name__)
 GLOBAL_LIMIT_REASON = "global_daily_messages"
 
 
+def claim_generation_slot(user_id: str, request_id: str, db_connection) -> bool:
+    """
+    Claims the user's single in-flight generation slot (table
+    user_inflight_generations, migration 037) for `request_id`.
+
+    One atomic INSERT ... ON CONFLICT (user_id) DO UPDATE ... WHERE statement:
+    the row is taken over only when the held slot is stale (older than 90
+    seconds, above the 60 second textGeneration Lambda timeout, so a live
+    generation is never displaced) or already belongs to the same request id
+    (a retried invocation), so two parallel requests
+    from one user cannot both claim it. Only the request id and start time are
+    stored, never message text.
+
+    Raises on DB errors (after rolling back) so the caller fails closed.
+
+    Returns:
+        True if this request now holds the slot, False if another generation
+        for the user is still in flight.
+    """
+    try:
+        with db_connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_inflight_generations (user_id, request_id, started_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (user_id) DO UPDATE
+                   SET request_id = EXCLUDED.request_id,
+                       started_at = now()
+                 WHERE user_inflight_generations.started_at < now() - interval '90 seconds'
+                    OR user_inflight_generations.request_id = EXCLUDED.request_id
+                RETURNING request_id
+                """,
+                (user_id, request_id),
+            )
+            claimed = cur.fetchone() is not None
+        db_connection.commit()
+        return claimed
+    except Exception as e:
+        db_connection.rollback()
+        logger.error("Generation slot claim failed: %s", type(e).__name__)
+        raise
+
+
+def release_generation_slot(user_id: str, request_id: str, db_connection) -> None:
+    """
+    Releases the slot claimed by `request_id`. Deletes only this request's own
+    row, so a slot that was taken over as stale is left alone.
+
+    Never raises: it runs in a `finally`. If the connection is in an aborted
+    transaction (a DB error during generation), it rolls back and tries once
+    more; if that fails too, the slot expires after the stale window.
+    """
+    for attempt in range(2):
+        try:
+            with db_connection.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM user_inflight_generations
+                    WHERE user_id = %s AND request_id = %s
+                    """,
+                    (user_id, request_id),
+                )
+            db_connection.commit()
+            return
+        except Exception as e:
+            try:
+                db_connection.rollback()
+            except Exception:
+                pass
+            if attempt == 1:
+                logger.error("Generation slot release failed: %s", type(e).__name__)
+
+
 def reserve_daily_characters(
     user_id: str,
     char_count: int,

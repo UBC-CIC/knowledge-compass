@@ -4,6 +4,7 @@ import json
 from helpers.cors import get_cors_headers
 import logging
 import os
+import uuid
 import boto3
 from helpers.chat import get_response
 from helpers.crud import fetch_service_status
@@ -11,7 +12,12 @@ from helpers.embedding_space import EmbeddingSpaceError
 from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import resolve_caller_user_id, validate_session_ownership, sanitize_session_id
-from helpers.message_limits import reserve_daily_characters, GLOBAL_LIMIT_REASON
+from helpers.message_limits import (
+    reserve_daily_characters,
+    GLOBAL_LIMIT_REASON,
+    claim_generation_slot,
+    release_generation_slot,
+)
 from helpers.kill_switch import is_public_chat_enabled
 
 logger = logging.getLogger()
@@ -32,6 +38,12 @@ GLOBAL_DAILY_LIMIT_MESSAGE = "The assistant is very busy today. Please try again
 # Ops kill switch (SSM /<stack id>/PublicChatEnabled = "false").
 PUBLIC_CHAT_PAUSED_ERROR = "PUBLIC_CHAT_PAUSED"
 PUBLIC_CHAT_PAUSED_MESSAGE = "The assistant is taking a short break. Please check back a little later."
+# One in-flight generation per user (user_inflight_generations, migration 037).
+GENERATION_IN_PROGRESS_ERROR = "GENERATION_IN_PROGRESS"
+GENERATION_IN_PROGRESS_MESSAGE = (
+    "The assistant is still working on your last message. "
+    "Please wait for that answer before sending another."
+)
 
 
 def _daily_limit_message(char_usage):
@@ -155,6 +167,9 @@ def handler(event, context=None):
         return fail(400, 'Invalid session ID')
 
     conn = None
+    # Set once this request holds the user's in-flight generation slot; the
+    # `finally` below releases it on every exit path.
+    slot_request_id = None
     try:
         conn = get_db_connection()
 
@@ -181,6 +196,18 @@ def handler(event, context=None):
 
         # Load dynamic configuration from DB
         config.load_config(conn)
+
+        # One in-flight generation per user. Claimed before the daily
+        # reservation so a rejected parallel message is not counted. The Lambda
+        # request id is reused by a retried invocation, which may re-claim its
+        # own slot; without a Lambda context a fresh id is used. A DB error
+        # here raises into the generic 500 below (fail closed).
+        generation_request_id = getattr(context, 'aws_request_id', None) or uuid.uuid4().hex
+        if not claim_generation_slot(user_id, generation_request_id, conn):
+            logger.info("Generation already in progress for this user")
+            return fail(429, GENERATION_IN_PROGRESS_ERROR, GENERATION_IN_PROGRESS_MESSAGE,
+                        extra={'message': GENERATION_IN_PROGRESS_MESSAGE})
+        slot_request_id = generation_request_id
 
         # Daily character allowance (per user, per UTC day, across all of the
         # user's sessions). Counted on receipt, before the guardrail, retrieval
@@ -281,3 +308,6 @@ def handler(event, context=None):
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return fail(500, 'Internal server error')
+    finally:
+        if slot_request_id:
+            release_generation_slot(user_id, slot_request_id, conn)

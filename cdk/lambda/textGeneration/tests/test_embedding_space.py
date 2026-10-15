@@ -380,6 +380,8 @@ class MainEmbeddingSpaceErrorTests(unittest.TestCase):
                 mock.patch.object(m, "validate_session_ownership", return_value=True), \
                 mock.patch.object(m, "sanitize_session_id", side_effect=lambda s: s), \
                 mock.patch.object(m.config, "load_config"), \
+                mock.patch.object(m, "claim_generation_slot", return_value=True), \
+                mock.patch.object(m, "release_generation_slot"), \
                 mock.patch.object(m, "reserve_daily_characters", return_value=(True, {})), \
                 mock.patch.object(m, "get_response", side_effect=error):
             response = m.handler(event)

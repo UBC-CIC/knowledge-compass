@@ -165,6 +165,8 @@ class MainKillSwitchTests(KillSwitchTestCase):
             mock.patch.object(main, "validate_session_ownership", return_value=True),
             mock.patch.object(main, "fetch_service_status", return_value={"status": "normal", "message": None}),
             mock.patch.object(main.config, "load_config"),
+            mock.patch.object(main, "claim_generation_slot", return_value=True),
+            mock.patch.object(main, "release_generation_slot"),
             mock.patch.object(main, "reserve_daily_characters", return_value=(True, {})),
             mock.patch.object(main, "get_response", self.get_response),
         ]
