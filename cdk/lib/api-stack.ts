@@ -84,6 +84,8 @@ export class ApiGatewayStack extends cdk.Stack {
   public readonly apiGW_basedURL: string;
   public readonly secret: secretsmanager.ISecret;
   public readonly allowedOriginsParamName: string;
+  // Operational alarm topic; the CostStack sends budget and anomaly alerts here too.
+  public readonly opsAlarmTopic: sns.ITopic;
   public getEndpointUrl = () => this.api.url;
   public getUserPoolId = () => this.userPool.userPoolId;
   public getUserPoolClientId = () => this.appClient.userPoolClientId;
@@ -1010,6 +1012,35 @@ export class ApiGatewayStack extends cdk.Stack {
     if (props.alarmEmail) {
       opsAlarmTopic.addSubscription(new subscriptions.EmailSubscription(props.alarmEmail));
     }
+    // Service publishers, each limited to this account. The first resource-policy
+    // statement replaces the default topic policy, so CloudWatch alarms are granted
+    // explicitly. AWS Budgets and Cost Anomaly Detection (CostStack) publish here too.
+    // Same-account IAM principals still publish through their identity policies.
+    opsAlarmTopic.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'CloudWatchAlarmsPublish',
+      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [opsAlarmTopic.topicArn],
+      conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
+    }));
+    opsAlarmTopic.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'BudgetsPublish',
+      principals: [new iam.ServicePrincipal('budgets.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [opsAlarmTopic.topicArn],
+      conditions: {
+        StringEquals: { 'aws:SourceAccount': this.account },
+        ArnLike: { 'aws:SourceArn': `arn:${this.partition}:budgets::${this.account}:*` },
+      },
+    }));
+    opsAlarmTopic.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'CostAnomalyDetectionPublish',
+      principals: [new iam.ServicePrincipal('costalerts.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [opsAlarmTopic.topicArn],
+      conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
+    }));
+    this.opsAlarmTopic = opsAlarmTopic;
     const opsAlarmAction = new cwActions.SnsAction(opsAlarmTopic);
 
     // Concurrency thresholds are re-based to 8: the account's Lambda concurrency limit

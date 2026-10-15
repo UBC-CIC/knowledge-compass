@@ -8,6 +8,7 @@ import { AmplifyStack } from "../lib/amplify-stack";
 import { CICDStack } from "../lib/cicd-stack";
 import { IngestionStack } from "../lib/ingestion-stack";
 import { EvalJobsStack, EvalStack, evalSigningSecretName } from "../lib/eval-stack";
+import { CostStack } from "../lib/cost-stack";
 
 const app = new cdk.App();
 
@@ -24,6 +25,13 @@ const githubBranch = app.node.tryGetContext("githubBranch") || "main";
 // Optional `-c alarmEmail=<address>`: subscribes the address to the operational
 // alarm topic. Without it the topic and alarm actions exist with no subscriber.
 const alarmEmail: string | undefined = app.node.tryGetContext("alarmEmail") || undefined;
+// Optional `-c monthlyBudgetUsd=<amount>`: monthly AWS Budget (50/80/100% alerts to
+// the alarm topic). Without it the budget is skipped; cost anomaly alerts still deploy.
+const monthlyBudgetUsdContext = app.node.tryGetContext("monthlyBudgetUsd");
+const monthlyBudgetUsd: number | undefined =
+  monthlyBudgetUsdContext === undefined || monthlyBudgetUsdContext === ""
+    ? undefined
+    : Number(monthlyBudgetUsdContext);
 
 // Evaluation harness (evals/): opt-in with `-c enableEval=true`.
 //   evalJobRegion   Region for Bedrock evaluation jobs (default: stack Region)
@@ -144,6 +152,14 @@ const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
 amplifyStack.addDependency(apiStack);
 amplifyStack.addDependency(ingestionStack);
 
+// Imports the Api stack's alarm topic ARN (one-way: Cost depends on Api).
+const costStack = new CostStack(app, `${StackPrefix}-Cost`, {
+  env,
+  alarmTopic: apiStack.opsAlarmTopic,
+  monthlyBudgetUsd,
+});
+costStack.addDependency(apiStack);
+
 const resolvedPrefix = StackPrefix || "KC";
 const stackTags = {
   Project: resolvedPrefix,
@@ -160,6 +176,7 @@ const stacks: cdk.Stack[] = [
   ingestionStack,
   apiStack,
   amplifyStack,
+  costStack,
 ];
 
 if (enableEval) {
