@@ -168,6 +168,79 @@ test("missing secret configuration fails closed", async () => {
   assert.ok(!tagged(out.insert));
 });
 
+// Secrets map whose eval entry counts every Secrets Manager lookup.
+function countingSecrets(value) {
+  const secrets = {};
+  const counter = { calls: 0 };
+  Object.defineProperty(secrets, SECRET_NAME, {
+    enumerable: true,
+    get() {
+      counter.calls += 1;
+      return value;
+    },
+  });
+  return { secrets, counter };
+}
+
+// Several POST /chat_sessions on ONE warm handler (no reload between calls).
+async function createSessionsOnWarmHandler(bodies, secrets) {
+  process.env.EVAL_SIGNING_SECRET_NAME = SECRET_NAME;
+  const sql = createSql();
+  const { handler } = loadHandler("chatSessionHandler", sql, { secrets });
+  try {
+    for (const body of bodies) {
+      await captured(() =>
+        handler({
+          httpMethod: "POST",
+          resource: "/chat_sessions",
+          requestContext: { authorizer: { userId: USER, role: "user", jti: "j" } },
+          body: JSON.stringify(body),
+        }),
+      );
+    }
+    return sql.queries().filter((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+  } finally {
+    delete process.env.EVAL_SIGNING_SECRET_NAME;
+  }
+}
+
+test("a missing signing secret is cached, not looked up on every request", async () => {
+  const notFound = Object.assign(new Error("not found"), { name: "ResourceNotFoundException" });
+  const { secrets, counter } = countingSecrets(notFound);
+  const inserts = await createSessionsOnWarmHandler(
+    [{ eval: tagFor(USER) }, { eval: tagFor(USER) }, { eval: tagFor(USER) }],
+    secrets,
+  );
+  assert.equal(counter.calls, 1);
+  assert.equal(inserts.length, 3);
+  assert.ok(inserts.every((q) => !tagged(q)));
+});
+
+test("an unusable signing key is cached too", async () => {
+  const { secrets, counter } = countingSecrets(JSON.stringify({ signingKey: "short" }));
+  await createSessionsOnWarmHandler([{ eval: tagFor(USER) }, { eval: tagFor(USER) }], secrets);
+  assert.equal(counter.calls, 1);
+});
+
+test("malformed tags never trigger a secret lookup", async () => {
+  const { secrets, counter } = countingSecrets(JSON.stringify({ signingKey: KEY }));
+  const inserts = await createSessionsOnWarmHandler(
+    [{ eval: 1 }, { eval: "x" }, { eval: [] }, { eval: {} }, { eval: { ...tagFor(USER), sig: "zz" } },
+     { eval: { ...tagFor(USER), mode: "admin" } }],
+    secrets,
+  );
+  assert.equal(counter.calls, 0);
+  assert.equal(inserts.length, 6);
+  assert.ok(inserts.every((q) => !tagged(q)));
+});
+
+test("a valid key is fetched once and reused", async () => {
+  const { secrets, counter } = countingSecrets(JSON.stringify({ signingKey: KEY }));
+  const inserts = await createSessionsOnWarmHandler([{ eval: tagFor(USER) }, { eval: tagFor(USER) }], secrets);
+  assert.equal(counter.calls, 1);
+  assert.ok(inserts.every(tagged));
+});
+
 test("a tag placed inside metadata is ignored", async () => {
   const tag = tagFor(USER);
   const { insert } = await createSession({ metadata: { eval: tag, eval_run_id: tag.run_id } });

@@ -117,9 +117,10 @@ const apiStack = new ApiGatewayStack(
       grantBucketAccess: (principal) =>
         ingestionStack.ingestBucket.grantReadWrite(principal),
     },
-    // Plain name (no EvalStack reference); verification fails closed when the
-    // EvalStack is not deployed.
-    evalSigningSecretName: evalSigningSecretName(StackPrefix || "KC"),
+    // Plain name (no EvalStack reference). Only wired with -c enableEval=true,
+    // so without the EvalStack the API neither reads nor is granted a secret at
+    // this predictable name (nobody can plant one to forge eval tags).
+    evalSigningSecretName: enableEval ? evalSigningSecretName(StackPrefix || "KC") : undefined,
   },
 );
 apiStack.addDependency(cicdStack);
