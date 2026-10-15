@@ -32,6 +32,12 @@ const monthlyBudgetUsd: number | undefined =
   monthlyBudgetUsdContext === undefined || monthlyBudgetUsdContext === ""
     ? undefined
     : Number(monthlyBudgetUsdContext);
+// Opt-in `-c enableReservedConcurrency=true`: reserves concurrency for the public
+// Lambdas (see ApiGatewayStack). Default off: Lambda keeps at least 100 unreserved,
+// so any reservation fails the deploy until the account concurrency quota is raised.
+const enableReservedConcurrency = ["true", true].includes(
+  app.node.tryGetContext("enableReservedConcurrency"),
+);
 
 // Evaluation harness (evals/): opt-in with `-c enableEval=true`.
 //   evalJobRegion   Region for Bedrock evaluation jobs (default: stack Region)
@@ -132,6 +138,7 @@ const apiStack = new ApiGatewayStack(
     // EvalStack is not deployed.
     evalSigningSecretName: evalSigningSecretName(StackPrefix || "KC"),
     alarmEmail: alarmEmail ? String(alarmEmail) : undefined,
+    enableReservedConcurrency,
   },
 );
 apiStack.addDependency(cicdStack);

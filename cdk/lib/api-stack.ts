@@ -72,6 +72,10 @@ interface ApiGatewayStackProps extends cdk.StackProps {
   // Optional email subscribed to the operational alarm topic (context `alarmEmail`).
   // Without it the topic and every alarm action still exist, with no subscriber.
   alarmEmail?: string;
+  // Reserve concurrency for the public Lambdas (context `enableReservedConcurrency`).
+  // Off by default: needs an account concurrency quota of at least 350 (100 must
+  // stay unreserved), otherwise the deploy fails.
+  enableReservedConcurrency?: boolean;
 }
 
 export class ApiGatewayStack extends cdk.Stack {
@@ -107,7 +111,11 @@ export class ApiGatewayStack extends cdk.Stack {
   ) {
     super(scope, id, props);
 
-    
+    // Reserved concurrency for a public Lambda, or undefined (unreserved) when the
+    // opt-in flag is off.
+    const reservedConcurrency = (executions: number) =>
+      props.enableReservedConcurrency ? executions : undefined;
+
     this.layerList = {};
     /**
      *
@@ -1100,7 +1108,7 @@ export class ApiGatewayStack extends cdk.Stack {
         handler: "userAuthorizerFunction.handler",
         timeout: Duration.seconds(30),
         memorySize: 256,
-        // reservedConcurrentExecutions: 50,
+        reservedConcurrentExecutions: reservedConcurrency(50),
         layers: [jwt],
         role: lambdaRole,
         environment: {
@@ -1213,7 +1221,7 @@ export class ApiGatewayStack extends cdk.Stack {
         code: lambda.Code.fromAsset("lambda/textGeneration"),
         timeout: cdk.Duration.seconds(60),
         role: lambdaRole,
-        // reservedConcurrentExecutions: 100,
+        reservedConcurrentExecutions: reservedConcurrency(50),
         layers: [psycopgLayer, powertoolsLayer],
         vpc: vpcStack.vpc,
         tracing: lambda.Tracing.ACTIVE,
@@ -1821,7 +1829,7 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       functionName: `${id}-userFunction`,
       memorySize: 512,
-      // reservedConcurrentExecutions: 50,
+      reservedConcurrentExecutions: reservedConcurrency(25),
       layers: [postgres, jwt],
       role: lambdaRole,
       tracing: lambda.Tracing.ACTIVE,
@@ -1934,6 +1942,7 @@ export class ApiGatewayStack extends cdk.Stack {
         },
         functionName: `${id}-chatSessionFunction`,
         memorySize: 512,
+        reservedConcurrentExecutions: reservedConcurrency(25),
         layers: [postgres],
         role: lambdaRole,
         tracing: lambda.Tracing.ACTIVE,
@@ -2039,7 +2048,7 @@ export class ApiGatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset("lambda/websocket"),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      // reservedConcurrentExecutions: 50,
+      reservedConcurrentExecutions: reservedConcurrency(50),
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         JWT_SECRET: jwtSecret.secretArn,
@@ -2086,7 +2095,7 @@ export class ApiGatewayStack extends cdk.Stack {
       code: lambda.Code.fromAsset("lambda/websocket"),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      // reservedConcurrentExecutions: 50,
+      reservedConcurrentExecutions: reservedConcurrency(50),
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         TEXT_GEN_FUNCTION_NAME: lambdaTextGen.functionName,
