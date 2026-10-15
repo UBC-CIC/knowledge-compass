@@ -21,6 +21,9 @@ const environment = app.node.tryGetContext("environment");
 const version = app.node.tryGetContext("versionNumber");
 const githubRepo = app.node.tryGetContext("githubRepo");
 const githubBranch = app.node.tryGetContext("githubBranch") || "main";
+// Optional `-c alarmEmail=<address>`: subscribes the address to the operational
+// alarm topic. Without it the topic and alarm actions exist with no subscriber.
+const alarmEmail: string | undefined = app.node.tryGetContext("alarmEmail") || undefined;
 
 // Evaluation harness (evals/): opt-in with `-c enableEval=true`.
 //   evalJobRegion   Region for Bedrock evaluation jobs (default: stack Region)
@@ -120,6 +123,7 @@ const apiStack = new ApiGatewayStack(
     // Plain name (no EvalStack reference); verification fails closed when the
     // EvalStack is not deployed.
     evalSigningSecretName: evalSigningSecretName(StackPrefix || "KC"),
+    alarmEmail: alarmEmail ? String(alarmEmail) : undefined,
   },
 );
 apiStack.addDependency(cicdStack);

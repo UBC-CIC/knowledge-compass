@@ -69,6 +69,9 @@ interface ApiGatewayStackProps extends cdk.StackProps {
   // never depends on EvalStack. If the secret does not exist, eval tags fail
   // closed and every session is a normal one.
   evalSigningSecretName?: string;
+  // Optional email subscribed to the operational alarm topic (context `alarmEmail`).
+  // Without it the topic and every alarm action still exist, with no subscriber.
+  alarmEmail?: string;
 }
 
 export class ApiGatewayStack extends cdk.Stack {
@@ -995,14 +998,30 @@ export class ApiGatewayStack extends cdk.Stack {
       new iam.ServicePrincipal("apigateway.amazonaws.com")
     );
 
+    // --- Operational alarm notifications ---------------------------------------------
+    // Every cloudwatch.Alarm in this stack notifies this topic. The subscription address is
+    // the optional `alarmEmail` context value (cdk/bin/cdk.ts); no address is hard-coded.
+    // Without it the topic has no subscriber and alarms are only visible in CloudWatch.
+    // Self-contained: the topic takes no token from any Lambda, so no new cycle.
+    const opsAlarmTopic = new sns.Topic(this, 'OpsAlarmTopic', {
+      topicName: `${id}-OpsAlarms`,
+      displayName: 'Knowledge Compass operational alarms',
+    });
+    if (props.alarmEmail) {
+      opsAlarmTopic.addSubscription(new subscriptions.EmailSubscription(props.alarmEmail));
+    }
+    const opsAlarmAction = new cwActions.SnsAction(opsAlarmTopic);
+
+    // Concurrency thresholds are re-based to 8: the account's Lambda concurrency limit
+    // is 10 today. Revisit once the quota increase lands.
     new cloudwatch.Alarm(this, 'AdminAuthorizerConcurrencyAlarm', {
       metric: adminAuthorizationFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 80,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'Admin authorizer approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
 
     const apiGW_authorizationFunction = adminAuthorizationFunction.node
       .defaultChild as lambda.CfnFunction;
@@ -1033,12 +1052,12 @@ export class ApiGatewayStack extends cdk.Stack {
 
     new cloudwatch.Alarm(this, 'UserAuthorizerConcurrencyAlarm', {
       metric: userAuthFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 40,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'User authorizer approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
 
     const apiGW_userauthorizationFunction = userAuthFunction.node
       .defaultChild as lambda.CfnFunction;
@@ -1116,6 +1135,11 @@ export class ApiGatewayStack extends cdk.Stack {
 
 
 
+    // Main chat (answer) model: a US cross-region inference profile id. Same value as the
+    // documented /KC/LLM/SonnetArn parameter; also the ModelId dimension of the Bedrock
+    // token alarms below.
+    const generationModelId = 'us.anthropic.claude-sonnet-4-6';
+
     const lambdaTextGen = new lambda.Function(
       this,
       `${id}-lambdaTextGen`,
@@ -1135,7 +1159,7 @@ export class ApiGatewayStack extends cdk.Stack {
           RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
           REGION: this.region,
           LLM_REGION: this.region,
-          BEDROCK_MODEL_ID: `us.anthropic.claude-sonnet-4-6`,
+          BEDROCK_MODEL_ID: generationModelId,
           USE_PGVECTOR_RETRIEVAL: "true",
         },
       }
@@ -1262,12 +1286,122 @@ export class ApiGatewayStack extends cdk.Stack {
 
     new cloudwatch.Alarm(this, 'TextGenConcurrencyAlarm', {
       metric: lambdaTextGen.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 80,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'Text Generation Lambda approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
+
+    // --- Usage and abuse alarms ------------------------------------------------------
+    // Thresholds are starting values pending decision D4; tune them from real traffic.
+    // All metrics here are referenced by namespace/name/dimension or come from constructs
+    // this stack already depends on (lambdaTextGen, the REST API, the db prop), so no new
+    // cycle is introduced.
+
+    // Bedrock throttles, all models. AWS/Bedrock publishes runtime metrics both with and
+    // without the ModelId dimension, and requests that fail before a model is resolved only
+    // appear without it, so the dimensionless series is the complete count.
+    new cloudwatch.Alarm(this, 'BedrockInvocationThrottlesAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Bedrock',
+        metricName: 'InvocationThrottles',
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Amazon Bedrock throttled at least one model invocation in 5 minutes; chat answers may be failing',
+    }).addAlarmAction(opsAlarmAction);
+
+    // Hourly token usage of the main chat model (dominant Bedrock cost). The dimension value
+    // is the inference profile id the Lambda passes as modelId.
+    new cloudwatch.Alarm(this, 'BedrockInputTokensHourlyAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Bedrock',
+        metricName: 'InputTokenCount',
+        dimensionsMap: { ModelId: generationModelId },
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.hours(1),
+      }),
+      threshold: 2_000_000,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: `More than 2,000,000 input tokens in one hour on ${generationModelId}; check for abuse or runaway usage`,
+    }).addAlarmAction(opsAlarmAction);
+
+    new cloudwatch.Alarm(this, 'BedrockOutputTokensHourlyAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Bedrock',
+        metricName: 'OutputTokenCount',
+        dimensionsMap: { ModelId: generationModelId },
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.hours(1),
+      }),
+      threshold: 250_000,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: `More than 250,000 output tokens in one hour on ${generationModelId}; check for abuse or runaway usage`,
+    }).addAlarmAction(opsAlarmAction);
+
+    new cloudwatch.Alarm(this, 'TextGenInvocationsAlarm', {
+      metric: lambdaTextGen.metricInvocations({
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 100,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Text Generation Lambda invoked more than 100 times in 5 minutes; check for a chat flood',
+    }).addAlarmAction(opsAlarmAction);
+
+    // REST API server errors (ApiName dimension is the plain restApiName string).
+    new cloudwatch.Alarm(this, 'RestApi5XXErrorAlarm', {
+      metric: this.api.metricServerError({
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'REST API returned more than 5 server (5XX) errors in 5 minutes',
+    }).addAlarmAction(opsAlarmAction);
+
+    // WAF blocks across all rules. The WebACL dimension is the web ACL's metric name.
+    new cloudwatch.Alarm(this, 'WafBlockedRequestsAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/WAFV2',
+        metricName: 'BlockedRequests',
+        dimensionsMap: { WebACL: 'KC-firewall', Region: this.region, Rule: 'ALL' },
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 100,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'WAF blocked more than 100 requests in 5 minutes; possible attack or a rule blocking real users',
+    }).addAlarmAction(opsAlarmAction);
+
+    // RDS connections, from the db prop (a cross-stack metric, not a Lambda reference).
+    // db.t4g.medium allows roughly 400 connections by default.
+    new cloudwatch.Alarm(this, 'DatabaseConnectionsAlarm', {
+      metric: db.dbInstance.metricDatabaseConnections({
+        statistic: cloudwatch.Stats.MAXIMUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 300,
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      alarmDescription: 'RDS database connections above 300 for 10 minutes; check RDS Proxy pooling and Lambda concurrency',
+    }).addAlarmAction(opsAlarmAction);
 
     // The embedding-space consistency check in textGeneration (helpers/embedding_space.py)
     // writes this metric as a CloudWatch Embedded Metric Format log line, so no
@@ -1343,6 +1477,9 @@ export class ApiGatewayStack extends cdk.Stack {
 
     embeddingSpaceCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
     postFlipCheckFailedAlarm.addAlarmAction(new cwActions.SnsAction(lifecycleTopic));
+    // Also notify the operational topic, so one `alarmEmail` subscriber sees every alarm.
+    embeddingSpaceCheckFailedAlarm.addAlarmAction(opsAlarmAction);
+    postFlipCheckFailedAlarm.addAlarmAction(opsAlarmAction);
 
     // Own role, least privilege. bedrock:ListFoundationModels has no resource-level scoping.
     // The two SSM parameters are the generation-model names the app already reads
@@ -1623,12 +1760,12 @@ export class ApiGatewayStack extends cdk.Stack {
     // (stage-throttled and WAF rate-limited); watch for floods.
     new cloudwatch.Alarm(this, 'UserFunctionConcurrencyAlarm', {
       metric: lambdaUserFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 40,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'User Lambda (incl. public token exchange) approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
 
     lambdaUserFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     lambdaUserFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -1840,12 +1977,12 @@ export class ApiGatewayStack extends cdk.Stack {
 
     new cloudwatch.Alarm(this, 'ConnectFunctionConcurrencyAlarm', {
       metric: connectFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 40,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'WebSocket Connect Lambda approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
 
     connectFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     connectFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -1891,12 +2028,12 @@ export class ApiGatewayStack extends cdk.Stack {
 
     new cloudwatch.Alarm(this, 'DefaultFunctionConcurrencyAlarm', {
       metric: defaultFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),
-      threshold: 40,
+      threshold: 8,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       alarmDescription: 'WebSocket Default Lambda approaching concurrency limit',
-    });
+    }).addAlarmAction(opsAlarmAction);
 
     defaultFunction.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     defaultFunction.addToRolePolicy(new iam.PolicyStatement({
