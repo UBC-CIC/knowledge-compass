@@ -746,6 +746,39 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
+    // WAF logging. The name must start with "aws-waf-logs-". Only BLOCK
+    // decisions are kept so normal traffic is not stored, and the
+    // Authorization header is redacted so tokens never reach the logs.
+    const wafLogGroup = new logs.LogGroup(this, `${id}-WafLogs`, {
+      logGroupName: `aws-waf-logs-${id}`,
+      retention: logs.RetentionDays.THREE_MONTHS,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new wafv2.CfnLoggingConfiguration(this, `${id}-waf-logging`, {
+      resourceArn: waf.attrArn,
+      // WAF rejects the ":*" suffix that LogGroup.logGroupArn carries.
+      logDestinationConfigs: [
+        cdk.Stack.of(this).formatArn({
+          service: "logs",
+          resource: "log-group",
+          resourceName: wafLogGroup.logGroupName,
+          arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+        }),
+      ],
+      redactedFields: [{ singleHeader: { Name: "authorization" } }],
+      loggingFilter: {
+        DefaultBehavior: "DROP",
+        Filters: [
+          {
+            Behavior: "KEEP",
+            Requirement: "MEETS_ANY",
+            Conditions: [{ ActionCondition: { Action: "BLOCK" } }],
+          },
+        ],
+      },
+    });
+
     const adminRole = new iam.Role(this, `${id}-AdminRole`, {
       assumedBy: new iam.FederatedPrincipal(
         "cognito-identity.amazonaws.com",
