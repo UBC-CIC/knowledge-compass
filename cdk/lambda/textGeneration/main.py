@@ -12,6 +12,7 @@ from helpers.db_connection import get_db_connection
 import helpers.config as config
 from helpers.session_security import resolve_caller_user_id, validate_session_ownership, sanitize_session_id
 from helpers.message_limits import reserve_daily_characters, GLOBAL_LIMIT_REASON
+from helpers.kill_switch import is_public_chat_enabled
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -28,6 +29,9 @@ DAILY_LIMIT_PARTIAL_MESSAGE = (
 # Service-wide daily message budget (system_settings.max_messages_per_day_global).
 GLOBAL_DAILY_LIMIT_ERROR = "GLOBAL_DAILY_LIMIT_EXCEEDED"
 GLOBAL_DAILY_LIMIT_MESSAGE = "The assistant is very busy today. Please try again tomorrow."
+# Ops kill switch (SSM /<stack id>/PublicChatEnabled = "false").
+PUBLIC_CHAT_PAUSED_ERROR = "PUBLIC_CHAT_PAUSED"
+PUBLIC_CHAT_PAUSED_MESSAGE = "The assistant is taking a short break. Please check back a little later."
 
 
 def _daily_limit_message(char_usage):
@@ -107,6 +111,13 @@ def handler(event, context=None):
 
     if not isinstance(body, dict):
         return fail(400, 'Invalid JSON body')
+
+    # Public chat kill switch, checked before any DB or Bedrock work. Fails open
+    # on an SSM error (see helpers/kill_switch.py).
+    if not is_public_chat_enabled():
+        logger.warning("Public chat is paused by the kill switch")
+        return fail(429, PUBLIC_CHAT_PAUSED_ERROR, PUBLIC_CHAT_PAUSED_MESSAGE,
+                    extra={'message': PUBLIC_CHAT_PAUSED_MESSAGE})
 
     query = body.get('query')
 

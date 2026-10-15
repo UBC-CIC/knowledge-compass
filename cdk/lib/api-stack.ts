@@ -1416,6 +1416,24 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
+    // Public chat kill switch: set to "false" to pause public chat (textGeneration
+    // refuses new turns with PUBLIC_CHAT_PAUSED; read is cached 60 s and fails open).
+    // CloudFormation only rewrites the value when the template value changes, so a
+    // manual flip survives normal deploys. The name and ARN are plain strings (no
+    // token references), matching the AllowedOrigins pattern above.
+    const publicChatEnabledParamName = `/${id}/PublicChatEnabled`;
+    new ssm.StringParameter(this, 'PublicChatEnabledParam', {
+      parameterName: publicChatEnabledParamName,
+      stringValue: 'true',
+      description: 'Public chat kill switch: "false" pauses public chat',
+    });
+    lambdaTextGen.addEnvironment('PUBLIC_CHAT_ENABLED_PARAM', publicChatEnabledParamName);
+    lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${publicChatEnabledParamName}`],
+    }));
+
 
     AutoSignupLambda.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     AutoSignupLambda.addToRolePolicy(new iam.PolicyStatement({
