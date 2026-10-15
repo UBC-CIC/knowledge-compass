@@ -115,6 +115,50 @@ class CliTest(unittest.TestCase):
         job = json.loads((self.results / "run_b" / "bedrock" / "standard.json").read_text(encoding="utf-8"))
         self.assertEqual(job["status"], "Completed")
         self.assertEqual(bedrock.create_evaluation_job.call_args.kwargs["roleArn"], ENV["KC_EVAL_ROLE_ARN"])
+        started = bedrock.create_evaluation_job.call_count
+        self.assertEqual(started, 2)  # one job per mode
+
+        clients = lambda svc, region_name=None: bedrock if svc == "bedrock" else s3
+        # Starting again is refused (it would pay for duplicate jobs).
+        with mock.patch("boto3.client", side_effect=clients):
+            with self.assertRaises(SystemExit) as ctx:
+                run_cli(["bedrock-eval", "--run", "run_b", "--scenarios", str(FIXTURES / "scenarios")])
+        self.assertIn("--collect", str(ctx.exception))
+        self.assertEqual(bedrock.create_evaluation_job.call_count, started)
+
+        # --collect reads status/results of the existing job without starting one.
+        line = json.dumps({"metricName": "Builtin.Correctness", "result": 0.5})
+        s3.list_objects_v2.return_value = {"Contents": [{"Key": "output/run_b/standard/j/u/out.jsonl"}]}
+        s3.get_object.return_value = {"Body": mock.Mock(read=lambda: line.encode())}
+        path = self.results / "run_b" / "bedrock" / "standard.json"
+        stale = json.loads(path.read_text(encoding="utf-8"))
+        stale.update(status="Timeout", metrics=None)
+        path.write_text(json.dumps(stale), encoding="utf-8")
+        with mock.patch("boto3.client", side_effect=clients):
+            code, out = run_cli(["bedrock-eval", "--run", "run_b", "--collect"])
+        self.assertEqual(code, 0)
+        self.assertEqual(bedrock.create_evaluation_job.call_count, started)
+        job = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(job["status"], "Completed")
+        self.assertEqual(job["metrics"]["Builtin.Correctness"], {"mean": 0.5, "count": 1})
+        self.assertIn("standard: Completed (1 metrics)", out)
+
+        # --collect on an in-progress job records the status and no metrics.
+        bedrock.get_evaluation_job.return_value = {"status": "InProgress"}
+        stale.update(status=None, metrics=None)
+        path.write_text(json.dumps(stale), encoding="utf-8")
+        with mock.patch("boto3.client", side_effect=clients):
+            run_cli(["bedrock-eval", "--run", "run_b", "--collect"])
+        job = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(job["status"], "InProgress")
+        self.assertFalse(job.get("metrics"))
+
+        # --new starts a second set with a distinct job name.
+        with mock.patch("boto3.client", side_effect=clients):
+            run_cli(["bedrock-eval", "--run", "run_b", "--scenarios", str(FIXTURES / "scenarios"), "--new"])
+        self.assertEqual(bedrock.create_evaluation_job.call_count, started * 2)
+        names = [c.kwargs["jobName"] for c in bedrock.create_evaluation_job.call_args_list]
+        self.assertEqual(len(set(names)), len(names))
 
     def test_smoke(self):
         backend = FakeBackend()

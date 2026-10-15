@@ -150,7 +150,12 @@ API change is inert.
    `judge/` and `bedrock/`.
 7. You can re-score or rebuild an existing run:
    - `judge --run <id> [--force]`
-   - `bedrock-eval --run <id> --wait`
+   - `bedrock-eval --run <id> [--wait]` starts the Bedrock jobs. It refuses if the run already
+     has jobs, so you never pay twice by accident; pass `--new` to start a fresh set.
+   - `bedrock-eval --run <id> --collect [--wait]` starts nothing. It checks the run's existing
+     jobs, fetches the metrics of completed ones and updates the report. Use it after `--wait`
+     gives up (4 hours per job) or when you started the jobs without `--wait`. Large jobs
+     (40+ records) can take several hours.
    - `report --run <id>`
 
 ## What is measured

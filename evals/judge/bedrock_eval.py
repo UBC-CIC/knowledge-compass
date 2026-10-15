@@ -247,6 +247,14 @@ class BedrockEvaluation:
         return {"mode": mode, "job_name": name, "job_arn": arn, "records": len(records),
                 "output_prefix": f"output/{run_id}/{mode}/"}
 
+    def status(self, job_arn: str) -> Dict[str, Any]:
+        """Current status of an existing job (no waiting)."""
+        job = self.bedrock.get_evaluation_job(jobIdentifier=job_arn)
+        out = {"status": job.get("status")}
+        if job.get("failureMessages"):
+            out["failure_messages"] = job["failureMessages"]
+        return out
+
     def wait(self, job_arn: str, poll_seconds: float = 60.0, timeout_seconds: float = 4 * 3600) -> Dict[str, Any]:
         waited = 0.0
         while True:

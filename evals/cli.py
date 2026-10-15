@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -217,37 +218,83 @@ def cmd_judge(args) -> int:
     return 0
 
 
-def _bedrock_eval(run_dir: Path, scenarios_by_id, settings, wait: bool) -> List[dict]:
+def _bedrock_client(settings):
     import boto3
 
-    from evals.judge.bedrock_eval import BedrockEvaluation, build_datasets
+    from evals.judge.bedrock_eval import BedrockEvaluation
 
     settings.require("eval_bucket", "eval_role_arn")
     region = settings.eval_job_region or settings.aws_region
+    return BedrockEvaluation(
+        boto3.client("bedrock", region_name=region), boto3.client("s3", region_name=region),
+        settings.eval_bucket, settings.eval_role_arn, settings.judge_model,
+    )
+
+
+def _existing_jobs(run_dir: Path) -> List[dict]:
+    out_dir = run_dir / "bedrock"
+    if not out_dir.exists():
+        return []
+    jobs = []
+    for path in sorted(out_dir.glob("*.json")):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if job.get("job_arn"):
+            jobs.append(job)
+    return jobs
+
+
+def _finish_jobs(run_dir: Path, evaluation, jobs: List[dict], wait: bool) -> None:
+    """Wait for (optional) and record each job's status, reading metrics once Completed."""
+    out_dir = run_dir / "bedrock"
+    for job in jobs:
+        if wait and job.get("status") not in ("Completed", "Failed", "Stopped"):
+            print(f"waiting for {job['job_name']} (large jobs can take hours)...")
+            job.update(evaluation.wait(job["job_arn"]))
+        else:
+            job.update(evaluation.status(job["job_arn"]))
+        if job.get("status") == "Completed" and not job.get("metrics"):
+            job["metrics"] = evaluation.results(job["output_prefix"])
+        (out_dir / f"{job['mode']}.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
+        print(f"{job['mode']}: {job.get('status')}" + (f" ({len(job['metrics'])} metrics)" if job.get("metrics") else ""))
+
+
+def _bedrock_eval(run_dir: Path, scenarios_by_id, settings, wait: bool, new: bool = False) -> List[dict]:
+    from evals.judge.bedrock_eval import build_datasets
+
+    existing = _existing_jobs(run_dir)
+    if existing and not new:
+        names = ", ".join(f"{j['mode']} ({j.get('status') or 'started'})" for j in existing)
+        raise SystemExit(
+            f"this run already has Bedrock jobs: {names}. Use --collect to fetch their results, "
+            "or --new to start (and pay for) new jobs."
+        )
     transcripts = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((run_dir / "journeys").glob("*.json"))]
     datasets = build_datasets(scenarios_by_id, transcripts)
     if not datasets:
         print("no transcripts with a reply to evaluate")
         return []
-    evaluation = BedrockEvaluation(
-        boto3.client("bedrock", region_name=region), boto3.client("s3", region_name=region),
-        settings.eval_bucket, settings.eval_role_arn, settings.judge_model,
-    )
+    evaluation = _bedrock_client(settings)
     out_dir = run_dir / "bedrock"
     out_dir.mkdir(exist_ok=True)
     jobs = []
+    suffix = f"-{int(time.time())}" if existing else ""
     for mode, records in sorted(datasets.items()):
-        job = evaluation.start(run_dir.name, mode, records)
+        job = evaluation.start(run_dir.name, mode, records, suffix=suffix)
         (out_dir / f"{mode}.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
         jobs.append(job)
     if wait:
-        for job in jobs:
-            print(f"waiting for {job['job_name']} (jobs usually take 15-60 minutes)...")
-            job.update(evaluation.wait(job["job_arn"]))
-            if job.get("status") == "Completed":
-                job["metrics"] = evaluation.results(job["output_prefix"])
-            (out_dir / f"{job['mode']}.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
-            print(f"{job['mode']}: {job.get('status')}")
+        _finish_jobs(run_dir, evaluation, jobs, wait=True)
+    return jobs
+
+
+def _collect(run_dir: Path, settings, wait: bool) -> List[dict]:
+    jobs = _existing_jobs(run_dir)
+    if not jobs:
+        raise SystemExit(f"no Bedrock jobs recorded in {run_dir / 'bedrock'}; run bedrock-eval first")
+    _finish_jobs(run_dir, _bedrock_client(settings), jobs, wait=wait)
     return jobs
 
 
@@ -256,8 +303,11 @@ def cmd_bedrock_eval(args) -> int:
 
     settings = config_mod.Settings.from_env()
     run_dir = _run_dir(args.run)
-    scenarios = {s.story_id: s for s in load_scenarios(Path(args.scenarios))}
-    _bedrock_eval(run_dir, scenarios, settings, wait=args.wait)
+    if args.collect:
+        _collect(run_dir, settings, wait=args.wait)
+    else:
+        scenarios = {s.story_id: s for s in load_scenarios(Path(args.scenarios))}
+        _bedrock_eval(run_dir, scenarios, settings, wait=args.wait, new=args.new)
     report.write(run_dir)
     return 0
 
@@ -404,7 +454,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("bedrock-eval", help="Bedrock Evaluations jobs for a run")
     p.add_argument("--run", required=True)
     p.add_argument("--scenarios", default=str(SCENARIOS_DIR))
-    p.add_argument("--wait", action="store_true")
+    p.add_argument("--wait", action="store_true", help="wait for the jobs to finish")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--collect", action="store_true",
+                       help="do not start jobs; check the run's existing jobs and fetch results of completed ones")
+    group.add_argument("--new", action="store_true", help="start new jobs even if this run already has some")
     p.set_defaults(func=cmd_bedrock_eval)
 
     p = sub.add_parser("report", help="rebuild a run's report")
