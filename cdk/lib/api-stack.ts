@@ -1229,6 +1229,14 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     )
 
+    // Async invocations (the WebSocket default route invokes text generation as an Event)
+    // must not be retried: a retry re-runs a paid Bedrock call and re-streams to the client.
+    // The EventInvokeConfig only references the function, so no circular dependency is added.
+    lambdaTextGen.configureAsyncInvoke({
+      retryAttempts: 0,
+      maxEventAge: Duration.seconds(60),
+    });
+
     // Grant SSM parameter access for HaikuArn and SonnetArn
       lambdaTextGen.addToRolePolicy(
         new iam.PolicyStatement({
