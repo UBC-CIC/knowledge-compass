@@ -186,8 +186,118 @@ def to_markdown(report: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _turn_meta(turn: Dict[str, Any]) -> str:
+    """One italic line of routing/phase metadata for a transcript turn."""
+    routing = turn.get("routing") or {}
+    parts = [f"phase {turn.get('phase') or '–'}"]
+    if routing:
+        parts.append(f"routed {routing.get('journey') or '–'}/{routing.get('situation') or '–'}")
+        if routing.get("confidence"):
+            parts.append(f"confidence {routing['confidence']}")
+        if routing.get("mode"):
+            parts.append(f"mode {routing['mode']}")
+        if routing.get("urgent"):
+            parts.append("urgent")
+    if isinstance(turn.get("elapsed"), (int, float)):
+        parts.append(f"{turn['elapsed']:.1f}s")
+    return "_" + " · ".join(parts) + "_"
+
+
+def _assistant_block(turn: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    if turn.get("error"):
+        lines.append(f"> Error: {turn.get('error')} {turn.get('error_message') or ''}".rstrip())
+    elif turn.get("limited"):
+        lines.append("> Request was rate-limited.")
+    response = (turn.get("response") or "").strip()
+    if response:
+        # Quote the reply so its own Markdown (lists, bold, rules) stays visually inside the turn.
+        lines += [f"> {line}" if line else ">" for line in response.splitlines()]
+    if turn.get("warning"):
+        lines += ["", f"Grounding warning: {turn['warning']}"]
+    sources = turn.get("sources") or []
+    if sources:
+        lines += ["", "Sources:"]
+        for s in sources:
+            title = s.get("title") or s.get("url") or "untitled"
+            lines.append(f"- [{title}]({s['url']})" if s.get("url") else f"- {title}")
+    return lines
+
+
+def transcripts_markdown(run_dir: Path) -> str:
+    """Readable chat transcripts for a run: every journey (with judge notes) and every probe."""
+    data = load_run(run_dir)
+    run_id = data["manifest"].get("run_id") or Path(run_dir).name
+    judged = {(j.get("story_id"), j.get("mode") or "standard"): j for j in data["judge"]}
+    lines = [f"# Chat transcripts: {run_id}", "",
+             "Synthetic parent conversations from this eval run. Users are simulated; no real family data.", ""]
+
+    journeys = sorted(data["journeys"], key=lambda j: (str(j.get("story_id")), j.get("mode") or ""))
+    if journeys:
+        lines += ["## Journeys", ""]
+    current_story = None
+    for j in journeys:
+        story = j.get("story_id")
+        scenario = j.get("scenario") or {}
+        if story != current_story:
+            current_story = story
+            lines += [f"### Story {story}", ""]
+            if scenario.get("story_text"):
+                lines.append(f"Story: {scenario['story_text']}")
+            if scenario.get("journey_name"):
+                lines.append(f"Journey: {scenario.get('journey_number')}. {scenario['journey_name']}")
+            expected = j.get("expected") or {}
+            if expected:
+                lines.append(f"Expected routing: {expected.get('journey_key')}/{', '.join(expected.get('clusters') or [])}")
+            lines.append("")
+        mode = j.get("mode") or "standard"
+        outcome = j.get("outcome") or {}
+        lines += [f"#### {story} · {mode}", "",
+                  f"Outcome: stopped on {outcome.get('stopped') or '–'}, {_fmt(outcome.get('turns'))} turn(s) total"
+                  + (f", guidance at turn {outcome['guidance_turn'] + 1}" if isinstance(outcome.get("guidance_turn"), int) else ""),
+                  ""]
+        for turn in j.get("turns") or []:
+            n = (turn.get("index") or 0) + 1
+            lines += [f"**Turn {n} · Parent**", "", (turn.get("user") or "").strip(), "",
+                      f"**Turn {n} · Assistant**", "", _turn_meta(turn), ""]
+            lines += _assistant_block(turn) + [""]
+        verdict = judged.get((story, mode))
+        if verdict:
+            scores = verdict.get("scores") or {}
+            assessment = verdict.get("assessment") or {}
+            lines.append("**Judge**")
+            lines.append("")
+            if verdict.get("error"):
+                lines.append(f"Judge error: {verdict['error']}")
+            else:
+                lines.append(", ".join(f"{k} {_fmt(scores.get(k))}" for k in SCORE_KEYS))
+                failures = scores.get("product_rule_failures") or []
+                if failures:
+                    notes = {r.get("rule"): r.get("note") for r in assessment.get("product_rules") or []}
+                    lines += ["", "Product rule failures:"] + [f"- {f}: {notes.get(f) or ''}".rstrip(": ") for f in failures]
+                if assessment.get("overall_note"):
+                    lines += ["", assessment["overall_note"]]
+            lines.append("")
+
+    probe_files = sorted(data["probes"], key=lambda p: str(p.get("story_id")))
+    if any(p.get("probes") for p in probe_files):
+        lines += ["## Routing probes", "", "Single opening messages sent in a fresh session to check routing.", ""]
+        for pf in probe_files:
+            expected = pf.get("expected") or {}
+            lines += [f"### Story {pf.get('story_id')} probes", "",
+                      f"Expected routing: {expected.get('journey_key')}/{', '.join(expected.get('clusters') or [])}", ""]
+            for p in pf.get("probes") or []:
+                lines += [f"**{p.get('kind') or 'probe'} · {p.get('mode') or 'standard'}**"
+                          + (f" ({p['description']})" if p.get("description") else ""), "",
+                          f"Parent: {(p.get('user') or p.get('message') or '').strip()}", "",
+                          _turn_meta(p), ""]
+                lines += _assistant_block(p) + [""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def write(run_dir: Path) -> Dict[str, Any]:
     report = build(run_dir)
     (Path(run_dir) / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (Path(run_dir) / "report.md").write_text(to_markdown(report), encoding="utf-8")
+    (Path(run_dir) / "transcripts.md").write_text(transcripts_markdown(run_dir), encoding="utf-8")
     return report

@@ -160,6 +160,39 @@ class CliTest(unittest.TestCase):
         names = [c.kwargs["jobName"] for c in bedrock.create_evaluation_job.call_args_list]
         self.assertEqual(len(set(names)), len(names))
 
+    def test_transcripts(self):
+        backend = FakeBackend()
+        client, _ = make_client(backend)
+        with mock.patch.object(cli, "_clients", return_value=(client, _keys(), FakeSimulator())), \
+                mock.patch("evals.bedrock.runtime_client", return_value=_judge_client()):
+            run_cli(["run", "--scenarios", str(FIXTURES / "scenarios"), "--modes", "standard,guideline",
+                     "--run-id", "run_t1", "--yes"])
+            run_cli(["run", "--scenarios", str(FIXTURES / "scenarios"), "--journeys-only", "--run-id", "run_t2", "--yes"])
+        out = Path(self.tmp.name) / "t.md"
+        code, printed = run_cli(["transcripts", "--scenarios", str(FIXTURES / "scenarios"), "--out", str(out)])
+        self.assertEqual(code, 0)
+        self.assertIn("Wrote 2 conversations (1 stories)", printed)
+        md = out.read_text(encoding="utf-8")
+        self.assertIn("synthetic test persona", md)
+        self.assertIn("### Story X01", md)
+        self.assertIn("#### Standard mode", md)
+        self.assertIn("#### Guideline mode", md)
+        self.assertIn("**Turn 1, Parent:** My daughter keeps getting sent home before lunch", md)
+        self.assertIn("· routed J1/A, HIGH", md)
+        self.assertIn("Sources: [Guide](https://example.org)", md)
+        self.assertIn("**Rule fail: no_blame**", md)
+        self.assertIn("Criterion not met: *encourage documentation*", md)  # expectation text, not an index
+        self.assertIn("#### Routing probes (expected J1 / A, B)", md)
+        self.assertIn("| negative |", md)
+        # The latest run wins when a story/mode ran more than once.
+        self.assertIn("run `run_t2`", md)
+        self.assertNotIn("run `run_t1`", md)
+        self.assertNotIn("no_blame**:", md)  # no dangling colon when a note is empty
+        # One run only.
+        code, printed = run_cli(["transcripts", "--run", "run_t1", "--scenarios", str(FIXTURES / "scenarios"),
+                                 "--out", str(out)])
+        self.assertNotIn("run_t2", out.read_text(encoding="utf-8"))
+
     def test_smoke(self):
         backend = FakeBackend()
         client, _ = make_client(backend, admin_id_token="admin-token")

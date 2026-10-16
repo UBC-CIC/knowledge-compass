@@ -8,6 +8,7 @@ python -m evals <command>
   judge         score a run's journey transcripts with the direct LLM judge
   bedrock-eval  start (and optionally wait for) Bedrock Evaluations jobs for a run
   report        rebuild report.md / report.json for a run
+  transcripts   one readable Markdown file of conversations, scores and judge notes
 
 Settings come from environment variables (see evals/README.md); --env-file
 loads them from a file such as evals/.env.
@@ -376,9 +377,27 @@ def cmd_run(args) -> int:
         _bedrock_eval(run_dir, by_id, settings, wait=args.wait)
     rep = report.write(run_dir)
     print(f"Report: {run_dir / 'report.md'}")
+    print(f"Transcripts: {run_dir / 'transcripts.md'}")
     print(json.dumps({"routing": {k: rep["routing"][k] for k in ("probes", "negatives")}, "judge": rep["judge"]}, indent=2))
     if manifest.get("cleanup_failed"):
         print(f"WARNING: {len(manifest['cleanup_failed'])} session(s) could not be deleted (eval_run_id={run_id}).")
+    return 0
+
+
+def cmd_transcripts(args) -> int:
+    from evals import transcripts
+
+    run_dirs = [_run_dir(r) for r in args.run] if args.run else sorted(
+        p for p in RESULTS_DIR.iterdir() if p.is_dir()
+    ) if RESULTS_DIR.exists() else []
+    if not run_dirs:
+        raise SystemExit(f"no runs in {RESULTS_DIR}")
+    scenarios = {s.story_id: s for s in load_scenarios(Path(args.scenarios))}
+    stamp = __import__("datetime").datetime.now().strftime("%Y%m%d")
+    out = Path(args.out) if args.out else RESULTS_DIR / f"transcripts_{stamp}.md"
+    info = transcripts.write(run_dirs, scenarios, out)
+    print(f"Wrote {info['conversations']} conversations ({info['stories']} stories) and "
+          f"{info['probe_files']} probe tables from {len(info['runs'])} run(s) to {info['path']}")
     return 0
 
 
@@ -388,6 +407,7 @@ def cmd_report(args) -> int:
     run_dir = _run_dir(args.run)
     rep = report.write(run_dir)
     print(f"Report: {run_dir / 'report.md'}")
+    print(f"Transcripts: {run_dir / 'transcripts.md'}")
     print(json.dumps(rep["judge"], indent=2))
     return 0
 
@@ -461,7 +481,13 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--new", action="store_true", help="start new jobs even if this run already has some")
     p.set_defaults(func=cmd_bedrock_eval)
 
-    p = sub.add_parser("report", help="rebuild a run's report")
+    p = sub.add_parser("transcripts", help="one combined Markdown file of conversations, scores and judge notes across runs")
+    p.add_argument("--run", action="append", help="run id (repeatable); default: every run in evals/results")
+    p.add_argument("--scenarios", default=str(SCENARIOS_DIR))
+    p.add_argument("--out", help="output file (default: evals/results/transcripts_<date>.md)")
+    p.set_defaults(func=cmd_transcripts)
+
+    p = sub.add_parser("report", help="rebuild a run's report.md, report.json and transcripts.md")
     p.add_argument("--run", required=True)
     p.set_defaults(func=cmd_report)
     return parser
