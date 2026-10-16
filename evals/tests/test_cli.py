@@ -193,6 +193,47 @@ class CliTest(unittest.TestCase):
                                  "--out", str(out)])
         self.assertNotIn("run_t2", out.read_text(encoding="utf-8"))
 
+    def test_transcripts_xlsx(self):
+        from openpyxl import load_workbook
+
+        def reply(session, message, exchange):
+            out = FakeBackend.default_reply(session, message, exchange)
+            if exchange == 0:
+                out["response"] = "=HYPERLINK(\"http://x\")\x07 - first reply"  # formula-like + control char
+            return out
+        backend = FakeBackend(reply=reply)
+        client, _ = make_client(backend)
+        with mock.patch.object(cli, "_clients", return_value=(client, _keys(), FakeSimulator())), \
+                mock.patch("evals.bedrock.runtime_client", return_value=_judge_client()):
+            run_cli(["run", "--scenarios", str(FIXTURES / "scenarios"), "--modes", "standard,guideline",
+                     "--run-id", "run_x1", "--yes"])
+        out = Path(self.tmp.name) / "t.xlsx"
+        code, printed = run_cli(["transcripts", "--scenarios", str(FIXTURES / "scenarios"), "--out", str(out)])
+        self.assertEqual(code, 0)
+        self.assertIn("Wrote 2 conversations (1 stories, 6 turns)", printed)
+        wb = load_workbook(out)
+        self.assertEqual(wb.sheetnames, ["About", "Summary", "Turns", "Judge notes", "Probes"])
+        summary = list(wb["Summary"].values)
+        self.assertEqual(summary[0][:5], ("Journey", "Feature", "Story", "Story text", "Mode"))
+        self.assertEqual([r[4] for r in summary[1:]], ["standard", "guideline"])
+        self.assertEqual(summary[1][10], 0.5)  # criteria score kept numeric
+        self.assertEqual(summary[1][16], "no_blame")
+        turns = list(wb["Turns"].values)
+        first = turns[1]
+        self.assertEqual(first[:3], ("X01", "standard", 1))
+        self.assertTrue(first[4].startswith("=HYPERLINK"))  # stored as text, control char removed
+        self.assertNotIn("\x07", first[4])
+        self.assertEqual(wb["Turns"]["E2"].data_type, "s")
+        self.assertEqual(turns[3][9], "yes")  # guidance turn marked
+        self.assertIn("Guide (https://example.org)", turns[3][10])
+        notes = list(wb["Judge notes"].values)
+        self.assertIn(("X01", "standard", "Product rule", "fail", "no_blame", None), notes)
+        self.assertTrue(any(n[2] == "Acceptance criterion" and n[4] == "encourage documentation" for n in notes))
+        probes = list(wb["Probes"].values)
+        self.assertEqual([p[1] for p in probes[1:]], ["opening", "variant", "negative"])
+        self.assertEqual(probes[3][9], "false positive")
+        self.assertEqual(wb["Summary"].freeze_panes, "A2")
+
     def test_smoke(self):
         backend = FakeBackend()
         client, _ = make_client(backend, admin_id_token="admin-token")

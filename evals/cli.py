@@ -394,7 +394,16 @@ def cmd_transcripts(args) -> int:
         raise SystemExit(f"no runs in {RESULTS_DIR}")
     scenarios = {s.story_id: s for s in load_scenarios(Path(args.scenarios))}
     stamp = __import__("datetime").datetime.now().strftime("%Y%m%d")
-    out = Path(args.out) if args.out else RESULTS_DIR / f"transcripts_{stamp}.md"
+    suffix = ".xlsx" if args.xlsx else ".md"
+    out = Path(args.out) if args.out else RESULTS_DIR / f"transcripts_{stamp}{suffix}"
+    if out.suffix.lower() == ".xlsx":
+        from evals import spreadsheet
+
+        info = spreadsheet.write(run_dirs, scenarios, out)
+        print(f"Wrote {info['conversations']} conversations ({info['stories']} stories, {info['turns']} turns), "
+              f"{info['judge_notes']} judge notes and {info['probes']} probes from {len(info['runs'])} run(s) "
+              f"to {info['path']}")
+        return 0
     info = transcripts.write(run_dirs, scenarios, out)
     print(f"Wrote {info['conversations']} conversations ({info['stories']} stories) and "
           f"{info['probe_files']} probe tables from {len(info['runs'])} run(s) to {info['path']}")
@@ -484,7 +493,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("transcripts", help="one combined Markdown file of conversations, scores and judge notes across runs")
     p.add_argument("--run", action="append", help="run id (repeatable); default: every run in evals/results")
     p.add_argument("--scenarios", default=str(SCENARIOS_DIR))
-    p.add_argument("--out", help="output file (default: evals/results/transcripts_<date>.md)")
+    p.add_argument("--out", help="output file; a .xlsx name writes an Excel workbook "
+                                 "(default: evals/results/transcripts_<date>.md)")
+    p.add_argument("--xlsx", action="store_true", help="write an Excel workbook (default name transcripts_<date>.xlsx)")
     p.set_defaults(func=cmd_transcripts)
 
     p = sub.add_parser("report", help="rebuild a run's report.md, report.json and transcripts.md")

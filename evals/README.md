@@ -164,6 +164,12 @@ call, so `eval` fields from other clients cost nothing.
      gives up (4 hours per job) or when you started the jobs without `--wait`. Large jobs
      (40+ records) can take several hours.
    - `report --run <id>`
+8. Share the conversations:
+   - `transcripts [--run <id> ...] --out evals/results/transcripts.md` writes one readable Markdown file.
+   - `transcripts [--run <id> ...] --out evals/results/transcripts.xlsx` (or `--xlsx`) writes an Excel
+     workbook with About, Summary (one row per story and mode), Turns (every message), Judge notes and
+     Probes sheets, filterable by story and mode.
+   - Without `--run`, every run in `evals/results/` is included; the latest run wins per story and mode.
 
 ## What is measured
 
