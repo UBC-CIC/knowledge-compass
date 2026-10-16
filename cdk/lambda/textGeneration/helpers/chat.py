@@ -4,7 +4,7 @@ import re
 from typing import Dict, Any, Optional, List, Tuple
 
 from helpers.crud import (
-    fetch_recent_messages, ensure_session_exists, insert_message, update_last_active_session,
+    fetch_recent_messages, insert_message, update_last_active_session,
     get_exchange_count, get_session_title, update_session_title, save_journey_state,
     get_session_context, save_routing_state, get_guide_state, save_guide_state,
     get_prompt_mode_override
@@ -26,7 +26,7 @@ from helpers.citations import (
 )
 from helpers.intervention import assess_response
 import helpers.config as config
-from helpers.message_limits import check_limit, record_message_sent
+from helpers.message_limits import reserve_daily_message
 from helpers.guardrail import invoke_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,6 @@ def _prepare_conversation(
     # 3. Save User Message
     try:
         if save_user_message:
-            ensure_session_exists(db_connection, chat_session_id, user_id)
             insert_message(
                 db_connection,
                 chat_session_id,
@@ -351,7 +350,9 @@ def get_response(
 
     try:
         if user_id:
-            is_under_limit, usage_info = check_limit(user_id, db_connection)
+            # Check and count in one atomic step, before the guardrail and any
+            # Bedrock call. A user without a users row is refused.
+            is_under_limit, usage_info = reserve_daily_message(user_id, db_connection)
             if not is_under_limit:
                 return {
                     "response": "Daily message limit exceeded. Please try again tomorrow.",
@@ -382,7 +383,6 @@ def get_response(
         if guardrail_result['action'] == ACTION_BLOCKED:
             denial_text = guardrail_result['text']
             try:
-                ensure_session_exists(db_connection, chat_session_id, user_id)
                 insert_message(db_connection, chat_session_id, 'user', query, sources=None, warning=None)
                 update_last_active_session(db_connection, chat_session_id)
                 db_connection.commit()
@@ -415,9 +415,6 @@ def get_response(
             db_connection,
             save_user_message=save_user_message
         )
-
-        if user_id and save_user_message:
-            usage_info = record_message_sent(user_id, db_connection)
 
     except EmbeddingSpaceError:
         # Fail loud: main.py turns this into an `error` event. Never answer from

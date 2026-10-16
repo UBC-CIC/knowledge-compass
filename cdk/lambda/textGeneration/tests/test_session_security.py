@@ -46,8 +46,9 @@ class ResolveCallerUserIdTests(unittest.TestCase):
 
 
 class FakeCursor:
-    def __init__(self, row):
+    def __init__(self, row, error=None):
         self.row = row
+        self.error = error
 
     def __enter__(self):
         return self
@@ -56,6 +57,8 @@ class FakeCursor:
         return False
 
     def execute(self, sql, params):
+        if self.error:
+            raise self.error
         self.params = params
 
     def fetchone(self):
@@ -63,11 +66,12 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, row):
+    def __init__(self, row, error=None):
         self.row = row
+        self.error = error
 
     def cursor(self):
-        return FakeCursor(self.row)
+        return FakeCursor(self.row, self.error)
 
 
 class ValidateSessionOwnershipTests(unittest.TestCase):
@@ -78,8 +82,28 @@ class ValidateSessionOwnershipTests(unittest.TestCase):
     def test_other_owner_refused(self):
         self.assertFalse(validate_session_ownership(FakeConnection((OTHER_USER,)), SESSION, USER))
 
-    def test_new_session_allowed(self):
-        self.assertTrue(validate_session_ownership(FakeConnection(None), SESSION, USER))
+    def test_missing_session_refused(self):
+        # Sessions are created only by POST /chat_sessions; a session id the
+        # caller made up gets the same refusal as someone else's session.
+        self.assertFalse(validate_session_ownership(FakeConnection(None), SESSION, USER))
+
+    def test_db_error_refused(self):
+        conn = FakeConnection(None, error=RuntimeError(f"boom {USER} {SESSION}"))
+        self.assertFalse(validate_session_ownership(conn, SESSION, USER))
+
+    def test_logs_carry_no_ids(self):
+        cases = (
+            FakeConnection(None),
+            FakeConnection((OTHER_USER,)),
+            FakeConnection(None, error=RuntimeError(f"boom {USER} {SESSION}")),
+        )
+        for conn in cases:
+            with self.subTest(row=conn.row, error=conn.error):
+                with self.assertLogs(level="WARNING") as logs:
+                    validate_session_ownership(conn, SESSION, USER)
+                text = "\n".join(logs.output)
+                for value in (USER, OTHER_USER, SESSION):
+                    self.assertNotIn(value, text)
 
 
 if __name__ == "__main__":

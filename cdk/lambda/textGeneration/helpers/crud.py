@@ -65,39 +65,8 @@ def fetch_recent_messages(
 
     return messages
 
-def ensure_user_exists(db_connection, user_id: str) -> None:
-    try:
-        with db_connection.cursor() as cur:
-            # We use a dummy email for now as we don't have it from the token in all cases yet
-            dummy_email = f"user_{user_id[:8]}@example.com" 
-            cur.execute(
-                """
-                INSERT INTO users (id, email, display_name, role, created_at, last_seen_at, messages_sent, messages_window_started_at, metadata)
-                VALUES (%s, %s, %s, %s, NOW(), NOW(), 0, NOW(), '{}'::jsonb)
-                ON CONFLICT (id) DO NOTHING
-                """,
-                (user_id, dummy_email, "Student", "student")
-            )
-    except Exception as e:
-        logger.error(f"ensure_user_exists failed: {e}")
-        # Allow proceed as key constraint might be handled or user exists
-
-def ensure_session_exists(db_connection, chat_session_id: str, user_id: Optional[str]) -> None:
-    if not user_id:
-        return
-    ensure_user_exists(db_connection, user_id)
-    try:
-        with db_connection.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO chat_sessions (id, user_id, title, created_at, last_active_at)
-                VALUES (%s, %s, %s, NOW(), NOW())
-                ON CONFLICT (id) DO NOTHING
-                """,
-                (chat_session_id, user_id, "New Session")
-            )
-    except Exception as e:
-        logger.error(f"ensure_session_exists failed: {e}")
+# users and chat_sessions rows are never created here: only POST /user and
+# POST /chat_sessions create them, so generation requires both to exist.
 
 def insert_message(
     db_connection,

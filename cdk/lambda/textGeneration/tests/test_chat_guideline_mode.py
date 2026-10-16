@@ -103,7 +103,6 @@ class ChatModeTestBase(unittest.TestCase):
         self.routing_state = mock.Mock()
         self.patches = {
             "fetch_recent_messages": mock.Mock(return_value=[{"sender": "user", "content": "hi"}, {"sender": "AI", "content": "hello"}]),
-            "ensure_session_exists": mock.Mock(),
             "insert_message": mock.Mock(),
             "update_last_active_session": mock.Mock(),
             "get_exchange_count": mock.Mock(return_value=2),
