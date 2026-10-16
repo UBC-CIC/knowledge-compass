@@ -47,9 +47,12 @@ export class AuthService {
       // Clear auth cache on new sign in
       this.clearAuthCache();
 
+      // The admin app client allows only SRP (cdk/lib/api-stack.ts), so pin it
+      // here rather than rely on Amplify's default.
       const { isSignedIn, nextStep } = await signIn({
         username: email,
         password,
+        options: { authFlowType: "USER_SRP_AUTH" },
       });
       return { success: true, isSignedIn, nextStep };
     } catch (error) {

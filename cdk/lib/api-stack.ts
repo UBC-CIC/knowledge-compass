@@ -188,7 +188,18 @@ export class ApiGatewayStack extends cdk.Stack {
       signInAliases: {
         email: true,
       },
-      selfSignUpEnabled: true,
+      // Admins only: accounts are created by an existing admin (console or
+      // admin-create-user, see Docs/DEPLOYMENT_GUIDE.md), never self-registered.
+      selfSignUpEnabled: false,
+      // TOTP authenticator apps only. OPTIONAL rather than REQUIRED (decision
+      // D6). Users with TOTP enrolled are challenged at sign-in; the admin
+      // login page also handles the setup step should MFA become REQUIRED.
+      mfa: cognito.Mfa.OPTIONAL,
+      mfaSecondFactor: {
+        otp: true,
+        sms: false,
+      },
+      deletionProtection: true,
       autoVerify: {
         email: true,
       },
@@ -281,17 +292,19 @@ export class ApiGatewayStack extends cdk.Stack {
         requireSymbols: true,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Keep the pool (and every admin account) if the stack is deleted.
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // Create app client
     this.appClient = this.userPool.addClient(`${id}-pool`, {
       userPoolClientName: userPoolName,
+      // Amplify v6 signIn uses SRP by default (frontend/src/functions/authService.js)
+      // and the pool has no custom-auth triggers, so password and custom flows are off.
       authFlows: {
-        userPassword: true,
-        custom: true,
         userSrp: true,
       },
+      preventUserExistenceErrors: true,
     });
 
     this.identityPool = new cognito.CfnIdentityPool(

@@ -1,10 +1,37 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router";
-import { confirmSignIn } from "aws-amplify/auth";
+import { confirmSignIn, type SignInOutput } from "aws-amplify/auth";
 import { AuthService } from "@/functions/authService";
 import BrandMark from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/demo";
 import { API_ENDPOINT } from "@/lib/api";
+import {
+  type AdminSignInStep,
+  TOTP_ISSUER,
+  adminStepFor,
+  cleanTotpCode,
+  formatTotpSecret,
+  totpCodeError,
+} from "@/lib/adminSignIn";
+
+const STEP_COPY: Record<AdminSignInStep, { title: string; intro: string }> = {
+  credentials: {
+    title: "Sign in",
+    intro: "Manage the knowledge base, conversation prompts, and detective settings.",
+  },
+  newPassword: {
+    title: "Set a new password",
+    intro: "Please set a new password for your account.",
+  },
+  totpSetup: {
+    title: "Set up two-step sign-in",
+    intro: "Admin accounts use an authenticator app for a second sign-in step.",
+  },
+  totpCode: {
+    title: "Enter your code",
+    intro: "Open your authenticator app and enter the 6-digit code for Knowledge Compass.",
+  },
+};
 
 export default function AdminLogin() {
   const [email, setEmail] = useState("");
@@ -18,7 +45,10 @@ export default function AdminLogin() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
-  const [requiresNewPassword, setRequiresNewPassword] = useState(false);
+  const [step, setStep] = useState<AdminSignInStep>("credentials");
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
   const from =
@@ -65,6 +95,56 @@ export default function AdminLogin() {
     return res.json();
   };
 
+  const finishSignIn = async () => {
+    AuthService.clearAuthCache();
+    await updateAdminUser(email);
+    setSignedIn(true);
+    navigate(from, { replace: true });
+  };
+
+  // Moves to whatever Cognito asks for next: a new password, TOTP setup, or a
+  // TOTP code. Used after signIn and after every confirmSignIn.
+  const continueSignIn = async (
+    isSignedIn: boolean | undefined,
+    nextStep: SignInOutput["nextStep"] | undefined
+  ) => {
+    const next = isSignedIn ? "done" : adminStepFor(nextStep?.signInStep);
+
+    if (next === "done") {
+      await finishSignIn();
+      return;
+    }
+
+    if (next === null) {
+      setError(
+        "This account needs a sign-in step this page doesn't support. Contact another administrator for help."
+      );
+      return;
+    }
+
+    if (next === "totpSetup" && nextStep?.signInStep === "CONTINUE_SIGN_IN_WITH_TOTP_SETUP") {
+      const { totpSetupDetails } = nextStep;
+      setTotpSetup({
+        secret: totpSetupDetails.sharedSecret,
+        uri: totpSetupDetails.getSetupUri(TOTP_ISSUER, email.trim()).toString(),
+      });
+      setCopyStatus("");
+    }
+
+    setTotpCode("");
+    setStep(next);
+  };
+
+  const startOver = () => {
+    setStep("credentials");
+    setPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setTotpCode("");
+    setTotpSetup(null);
+    setError("");
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -99,17 +179,7 @@ export default function AdminLogin() {
         return;
       }
 
-      if (result.isSignedIn) {
-        AuthService.clearAuthCache();
-        await updateAdminUser(email);
-        setSignedIn(true);
-        navigate(from, { replace: true });
-      } else if (
-        result.nextStep?.signInStep ===
-        "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED"
-      ) {
-        setRequiresNewPassword(true);
-      }
+      await continueSignIn(result.isSignedIn, result.nextStep);
     } catch (err: unknown) {
       setError((err instanceof Error && err.message) || "Invalid email or password");
     } finally {
@@ -138,12 +208,7 @@ export default function AdminLogin() {
         challengeResponse: newPassword,
       });
 
-      if (user.isSignedIn) {
-        AuthService.clearAuthCache();
-        await updateAdminUser(email);
-        setSignedIn(true);
-        navigate(from, { replace: true });
-      }
+      await continueSignIn(user.isSignedIn, user.nextStep);
     } catch (err: unknown) {
       setError((err instanceof Error && err.message) || "Failed to set new password");
     } finally {
@@ -151,10 +216,52 @@ export default function AdminLogin() {
     }
   };
 
+  // Handles both TOTP steps: confirming the first code finishes authenticator
+  // setup; later sign-ins confirm the current code.
+  const handleTotpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    const code = cleanTotpCode(totpCode);
+    const codeError = totpCodeError(code);
+    if (codeError) {
+      setError(codeError);
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const user = await confirmSignIn({ challengeResponse: code });
+      await continueSignIn(user.isSignedIn, user.nextStep);
+    } catch (err: unknown) {
+      setTotpCode("");
+      setError(
+        (err instanceof Error && err.message) ||
+          "That code didn't work. Wait for a new code and try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const copySecret = async () => {
+    if (!totpSetup) return;
+    try {
+      await navigator.clipboard.writeText(totpSetup.secret);
+      setCopyStatus("Setup key copied.");
+    } catch {
+      setCopyStatus("Couldn't copy the key. Select it and copy it manually.");
+    }
+  };
+
   const ready = Boolean(email.trim() && password && !isLoading);
   const newPasswordReady = Boolean(
     newPassword && confirmPassword && !isLoading
   );
+  const isCodeStep = step === "totpSetup" || step === "totpCode";
+  const totpReady = Boolean(totpCode.trim() && !isLoading);
+  const copy = STEP_COPY[step];
 
   return (
     <div className="flex min-h-screen flex-col bg-muted">
@@ -169,18 +276,20 @@ export default function AdminLogin() {
         <div className="w-full max-w-[440px]">
           <div className="rounded-[14px] border border-foreground/12 bg-white px-[34px] pb-[30px] pt-[34px] shadow-md">
             <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
-              {requiresNewPassword ? "Set a new password" : "Sign in"}
+              {copy.title}
             </h1>
             <p className="mt-2 text-[15px] leading-relaxed text-foreground/80">
-              {requiresNewPassword
-                ? "Please set a new password for your account."
-                : isDemoMode
-                  ? "Local demo — any complete email and password will open the console."
-                  : "Manage the knowledge base, conversation prompts, and detective settings."}
+              {step === "credentials" && isDemoMode
+                ? "Local demo — any complete email and password will open the console."
+                : copy.intro}
             </p>
 
-            {error ? (
-              <div className="mt-5 rounded-[9px] border border-[oklch(0.82_0.08_25)] bg-[oklch(0.96_0.03_25)] px-3.5 py-3 text-sm leading-relaxed text-[oklch(0.38_0.13_25)]">
+            {/* On the code steps the error is shown under the code field instead. */}
+            {error && !isCodeStep ? (
+              <div
+                role="alert"
+                className="mt-5 rounded-[9px] border border-[oklch(0.82_0.08_25)] bg-[oklch(0.96_0.03_25)] px-3.5 py-3 text-sm leading-relaxed text-[oklch(0.38_0.13_25)]"
+              >
                 {error}
               </div>
             ) : null}
@@ -191,7 +300,7 @@ export default function AdminLogin() {
               </div>
             ) : null}
 
-            {!requiresNewPassword ? (
+            {step === "credentials" ? (
               <form onSubmit={handleSubmit} className="mt-[22px]">
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="kc-email" className="text-[13px] font-bold tracking-[0.01em]">
@@ -256,7 +365,7 @@ export default function AdminLogin() {
                   {isLoading ? "Signing in…" : "Sign in"}
                 </button>
               </form>
-            ) : (
+            ) : step === "newPassword" ? (
               <form onSubmit={handleNewPasswordSubmit} className="mt-[22px]">
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="newPassword" className="text-[13px] font-bold tracking-[0.01em]">
@@ -314,6 +423,105 @@ export default function AdminLogin() {
                   className="mt-5 min-h-12 w-full rounded-[9px] text-[15.5px] font-semibold disabled:bg-foreground/14 disabled:text-foreground/75 enabled:bg-primary enabled:text-white"
                 >
                   {isLoading ? "Setting Password..." : "Set New Password"}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleTotpSubmit} className="mt-[22px]" noValidate>
+                {step === "totpSetup" && totpSetup ? (
+                  <ol className="mb-5 flex list-decimal flex-col gap-3 pl-5 text-sm leading-relaxed text-foreground/85">
+                    <li>
+                      Open an authenticator app on your phone, such as Google
+                      Authenticator, Microsoft Authenticator or 1Password, and
+                      add a new account.
+                    </li>
+                    <li>
+                      Choose to enter a setup key, and type this key:
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <code
+                          className="rounded-[9px] border-[1.5px] border-foreground/20 bg-muted px-3 py-2 font-mono text-[14px] tracking-[0.04em] break-all text-foreground select-all"
+                        >
+                          {formatTotpSecret(totpSetup.secret)}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={copySecret}
+                          className="min-h-11 rounded-[9px] px-3.5 text-[13px] font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        >
+                          Copy key
+                        </button>
+                      </div>
+                      <p aria-live="polite" className="mt-1 text-[13px] text-foreground/75">
+                        {copyStatus}
+                      </p>
+                      <p className="mt-1">
+                        Using this device?{" "}
+                        <a
+                          href={totpSetup.uri}
+                          className="font-semibold text-primary underline underline-offset-2"
+                        >
+                          Open the setup link in your authenticator app
+                        </a>
+                        .
+                      </p>
+                    </li>
+                    <li>Enter the 6-digit code the app shows.</li>
+                  </ol>
+                ) : null}
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="kc-totp-code" className="text-[13px] font-bold tracking-[0.01em]">
+                    6-digit code
+                  </label>
+                  <input
+                    id="kc-totp-code"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9 ]*"
+                    maxLength={8}
+                    // The step only renders after the user submits the previous
+                    // form, so moving focus here is expected.
+                    autoFocus
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    required
+                    disabled={isLoading}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? "kc-totp-hint kc-totp-error" : "kc-totp-hint"}
+                    className="min-h-[46px] rounded-[9px] border-[1.5px] border-foreground/20 bg-white px-3.5 font-mono text-[18px] tracking-[0.2em] text-foreground outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary aria-invalid:border-[oklch(0.55_0.15_25)]"
+                  />
+                  <p id="kc-totp-hint" className="text-[13px] text-foreground/75">
+                    Codes change every 30 seconds.
+                  </p>
+                  {error ? (
+                    <p
+                      id="kc-totp-error"
+                      role="alert"
+                      className="text-sm leading-relaxed text-[oklch(0.38_0.13_25)]"
+                    >
+                      {error}
+                    </p>
+                  ) : null}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={!totpReady}
+                  className="mt-5 min-h-12 w-full rounded-[9px] text-[15.5px] font-semibold transition-colors disabled:bg-foreground/14 disabled:text-foreground/75 enabled:bg-primary enabled:text-white"
+                >
+                  {isLoading
+                    ? "Checking code…"
+                    : step === "totpSetup"
+                      ? "Verify and sign in"
+                      : "Sign in"}
+                </button>
+                <button
+                  type="button"
+                  onClick={startOver}
+                  disabled={isLoading}
+                  className="mt-3 min-h-11 w-full rounded-[9px] text-[14px] font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                >
+                  Start over
                 </button>
               </form>
             )}

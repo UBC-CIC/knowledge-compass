@@ -1,4 +1,4 @@
-import type { AuthSession, JWT } from "aws-amplify/auth";
+import type { AuthSession, JWT, SignInOutput } from "aws-amplify/auth";
 
 export interface AuthResult {
   success: boolean;
@@ -7,9 +7,7 @@ export interface AuthResult {
 
 export interface SignInResult extends AuthResult {
   isSignedIn?: boolean;
-  nextStep?: {
-    signInStep: string;
-  };
+  nextStep?: SignInOutput["nextStep"];
 }
 
 export interface UserResult extends AuthResult {
