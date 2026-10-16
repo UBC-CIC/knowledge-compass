@@ -58,7 +58,7 @@ async function createSession(body, { secrets = { [SECRET_NAME]: JSON.stringify({
       handler({
         httpMethod: "POST",
         resource: "/chat_sessions",
-        requestContext: { authorizer: { userId: USER, role: "user", jti: "j" } },
+        requestContext: { authorizer: { userId: USER, role: "user" } },
         body: JSON.stringify(body),
       }),
     );
@@ -193,7 +193,7 @@ async function createSessionsOnWarmHandler(bodies, secrets) {
         handler({
           httpMethod: "POST",
           resource: "/chat_sessions",
-          requestContext: { authorizer: { userId: USER, role: "user", jti: "j" } },
+          requestContext: { authorizer: { userId: USER, role: "user" } },
           body: JSON.stringify(body),
         }),
       );

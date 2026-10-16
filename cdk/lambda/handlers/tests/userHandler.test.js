@@ -16,7 +16,7 @@ const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 const HISTORY_ROUTE = "/user/{user_id}/chat_sessions/{chat_session_id}/chat_history";
 
 // What the user authorizer sets for a token bound to `userId` ("" = anonymous).
-const as = (userId) => ({ authorizer: { userId, role: "user", jti: "j" } });
+const as = (userId) => ({ authorizer: { userId, role: "user" } });
 
 async function invoke(sql, event) {
   const { handler } = loadHandler("userHandler", sql);
@@ -164,7 +164,9 @@ test("POST /user works with an anonymous token and returns a credential for the 
   assert.equal(res.body.role, "student");
   const signed = JSON.parse(res.body.credential.replace(/^signed:/, ""));
   const { iat, ...claims } = signed.payload;
-  assert.deepEqual(claims, { typ: "credential", sub: res.body.userId, ver: 0 });
+  assert.deepEqual(claims, {
+    typ: "credential", sub: res.body.userId, ver: 0, iss: "test-issuer", aud: "kc-token-exchange",
+  });
   assert.ok(Number.isInteger(iat));
   assert.equal(signed.secret, "test-jwt-secret");
   assert.equal(signed.options.algorithm, "HS256");

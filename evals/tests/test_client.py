@@ -1,4 +1,5 @@
 import unittest
+import urllib.parse
 
 from evals.config import Settings
 from evals.harness import signing
@@ -102,11 +103,22 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(frame["action"], "generate_text")
         self.assertIs(frame["is_intro_message"], False)
         self.assertEqual(self.backend.tokens[frame["token"]], self.user.user_id)
+        # The credential travels as a subprotocol, never in the URL.
+        self.assertEqual(urllib.parse.urlparse(self.backend.ws_urls[0]).query, "")
         routing = self.client.routing_snapshot(self.user, sid)
         self.assertEqual((routing["journey"], routing["situation"], routing["confidence"]), ("J1", "A", "HIGH"))
         self.assertEqual(routing["clusters_seen"], ["A"])
         self.assertEqual(self.user.messages_sent, 2)
         self.assertEqual(self.user.chars_sent, len("hello") + len("more"))
+
+    def test_frame_for_other_user_on_bound_socket_is_rejected(self):
+        other = self.client.create_user("run_1")
+        other_sid = self.client.create_session(other, None)
+        with self.client.chat(self.user) as chat:
+            chat.user = other  # frames now carry the other user's token and user_id
+            result = chat.send(other_sid, "hello")
+        self.assertEqual(result.error, "CONNECTION_USER_MISMATCH")
+        self.assertEqual(self.backend.sessions[other_sid]["messages"], [])
 
     def test_error_and_limit_events(self):
         def reply(session, message, exchange):

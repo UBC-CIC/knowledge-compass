@@ -16,7 +16,7 @@ const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 
 // What the user authorizer sets for a token bound to `userId` ("" = anonymous).
-const as = (userId) => ({ authorizer: { userId, role: "user", jti: "j" } });
+const as = (userId) => ({ authorizer: { userId, role: "user" } });
 
 async function invoke(sql, event) {
   const { handler } = loadHandler("chatSessionHandler", sql);

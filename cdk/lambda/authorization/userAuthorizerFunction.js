@@ -8,12 +8,20 @@ const secretsManager = new SecretsManagerClient();
 let cachedSecret;
 let cacheExpiry = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Must match ACCESS_AUDIENCE in handlers/utils/userCredential.js.
+const ACCESS_AUDIENCE = "kc-public-api";
 
 exports.handler = async (event) => {
   const token = event.authorizationToken?.replace("Bearer ", "");
 
   if (!token) {
     console.warn("No token provided");
+    throw new Error("Unauthorized");
+  }
+
+  const issuer = process.env.JWT_ISSUER;
+  if (!issuer) {
+    console.error("JWT_ISSUER is not configured");
     throw new Error("Unauthorized");
   }
 
@@ -28,10 +36,11 @@ exports.handler = async (event) => {
 
     const decoded = jwt.verify(token, cachedSecret, { algorithms: ["HS256"] });
 
-    // The long-lived per-user credential only buys access tokens from
-    // /user/publicToken; it must never authorize API calls itself.
-    if (decoded.typ === "credential") {
-      throw new Error("credential tokens are not access tokens");
+    // Only this deployment's access tokens authorize API calls. The long-lived
+    // per-user credential (typ "credential", aud "kc-token-exchange") only buys
+    // access tokens from /user/publicToken.
+    if (decoded?.typ !== "access" || decoded.iss !== issuer || decoded.aud !== ACCESS_AUDIENCE) {
+      throw new Error("not an access token for this API");
     }
 
     // Extract API Gateway ARN parts to create wildcard resource
@@ -51,7 +60,6 @@ exports.handler = async (event) => {
     policy.context = {
       userId: typeof decoded.sub === "string" ? decoded.sub : "",
       role: typeof decoded.role === "string" ? decoded.role : "user",
-      jti: typeof decoded.jti === "string" ? decoded.jti : "",
     };
     return policy;
   } catch (err) {

@@ -20,8 +20,12 @@
  *   anyone holding a stale copy lock the real user out, so it is not done.
  *   Bumping users.credential_version revokes all of a user's credentials.
  *
- * All tokens are HS256 with the shared JWT secret. The user authorizer refuses
- * "credential" tokens, so a credential cannot be used as an access token.
+ * All tokens are HS256 with the shared JWT secret and carry iss (JWT_ISSUER,
+ * the deployment) and aud: ACCESS_AUDIENCE for access tokens, CREDENTIAL_AUDIENCE
+ * for credentials. Every verifier (user authorizer, WebSocket $connect and
+ * $default, credential exchange) checks typ, iss and aud, so a credential
+ * cannot be used as an access token. There is no jti: revocation is
+ * users.credential_version, and access tokens expire after 15 minutes.
  */
 
 const {
@@ -29,7 +33,6 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const jwt = require("jsonwebtoken");
-const { randomUUID } = require("crypto");
 
 const CREDENTIAL_LIFETIME = "30d";
 const ACCESS_TOKEN_LIFETIME = "15m";
@@ -37,6 +40,8 @@ const ROTATE_AFTER_SECONDS = 24 * 60 * 60;
 const ROTATION_GRACE_SECONDS = 120;
 const SECRET_CACHE_TTL_MS = 5 * 60 * 1000;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ACCESS_AUDIENCE = "kc-public-api";
+const CREDENTIAL_AUDIENCE = "kc-token-exchange";
 
 const secretsManager = new SecretsManagerClient();
 let cachedSecret;
@@ -54,12 +59,20 @@ async function jwtSecret() {
   return cachedSecret;
 }
 
+/** The deployment's token issuer. Fails closed (500) when unset. */
+function issuer() {
+  const value = process.env.JWT_ISSUER;
+  if (!value) throw new Error("JWT_ISSUER is not configured");
+  return value;
+}
+
 /** Sign a credential for `userId` at credential `version`. */
 async function issueUserCredential(userId, version) {
   // Fail closed: a missing version (e.g. migration 033 not applied) must not
   // mint credentials the version check cannot track.
   if (!Number.isInteger(version)) throw new Error("credential_version is missing");
-  return jwt.sign({ typ: "credential", sub: userId, ver: version }, await jwtSecret(), {
+  const claims = { typ: "credential", sub: userId, ver: version, iss: issuer(), aud: CREDENTIAL_AUDIENCE };
+  return jwt.sign(claims, await jwtSecret(), {
     algorithm: "HS256",
     expiresIn: CREDENTIAL_LIFETIME,
   });
@@ -67,7 +80,7 @@ async function issueUserCredential(userId, version) {
 
 /** Sign a 15-minute access token, bound to `userId` when given. */
 async function issueAccessToken(userId) {
-  const claims = { role: "user", typ: "access", jti: randomUUID() };
+  const claims = { role: "user", typ: "access", iss: issuer(), aud: ACCESS_AUDIENCE };
   if (userId) claims.sub = userId;
   return jwt.sign(claims, await jwtSecret(), {
     algorithm: "HS256",
@@ -77,9 +90,16 @@ async function issueAccessToken(userId) {
 
 /** Verified credential claims, or null when the token is not a usable credential. */
 async function verifyCredential(credential) {
+  // Configuration and Secrets Manager failures throw (userHandler maps them to
+  // 500) instead of returning null, because null becomes 401 invalid_credential
+  // and the browser then discards its stored identity. A 500 keeps the
+  // credential for in-session callers; at page load UserContext.validateUser
+  // still treats any failure as invalid (pre-existing, tracked as a follow-up).
+  const iss = issuer();
+  const secret = await jwtSecret();
   let decoded;
   try {
-    decoded = jwt.verify(credential, await jwtSecret(), { algorithms: ["HS256"] });
+    decoded = jwt.verify(credential, secret, { algorithms: ["HS256"] });
   } catch {
     return null;
   }
@@ -92,6 +112,12 @@ async function verifyCredential(credential) {
     !Number.isInteger(decoded.iat)
   ) {
     return null;
+  }
+  if (decoded.iss !== undefined || decoded.aud !== undefined) {
+    if (decoded.iss !== iss || decoded.aud !== CREDENTIAL_AUDIENCE) return null;
+  } else {
+    // Issued before iss/aud existed: accepted once and rotated on this exchange.
+    decoded.legacy = true;
   }
   return decoded;
 }
@@ -119,7 +145,9 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
 
   if (claims.ver === current) {
     const ageSeconds = now / 1000 - claims.iat;
-    if (ageSeconds < ROTATE_AFTER_SECONDS) {
+    // TODO(after <deploy>+30d): drop the legacy branch; by then no credential
+    // without iss/aud can still be valid (CREDENTIAL_LIFETIME).
+    if (ageSeconds < ROTATE_AFTER_SECONDS && !claims.legacy) {
       return { token: await issueAccessToken(userId) };
     }
     // Rotate. The version guard makes concurrent exchanges rotate only once.
@@ -173,4 +201,6 @@ module.exports = {
   exchangeCredential,
   ROTATE_AFTER_SECONDS,
   ROTATION_GRACE_SECONDS,
+  ACCESS_AUDIENCE,
+  CREDENTIAL_AUDIENCE,
 };

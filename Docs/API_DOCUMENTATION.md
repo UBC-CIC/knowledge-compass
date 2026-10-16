@@ -1216,6 +1216,14 @@ wss://{websocket-api-id}.execute-api.{region}.amazonaws.com/prod
 
 The WebSocket URL is available as a CDK output after deployment.
 
+**Authentication:**
+
+```javascript
+const ws = new WebSocket(url, ["kc.v1", accessToken]);
+```
+
+`accessToken` is the user-bound access token from `GET /user/publicToken` (sent with the stored credential). It travels in the `Sec-WebSocket-Protocol` header, never in the URL; tokens in the query string are ignored. Non-browser clients may send `Authorization: Bearer <accessToken>` instead. The server echoes `kc.v1` and binds the connection to the token's user. Each `generate_text` frame also carries the current `token`, which must belong to that same user; a frame for another user gets an `error` event with `error: "CONNECTION_USER_MISMATCH"`. Frames on a connection with no binding get `error: "CONNECTION_NOT_AUTHORIZED"` and the server closes the socket; the client reconnects (or falls back to the REST text generation endpoint).
+
 ## Troubleshooting
 
 ### 401 Unauthorized

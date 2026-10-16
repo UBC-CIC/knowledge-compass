@@ -21,7 +21,7 @@ import {
   setDemoSessionState,
   type DemoFacts,
 } from "@/lib/demo";
-import { getPublicToken } from "@/lib/publicToken";
+import { getPublicToken, invalidatePublicToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
 import ServiceStatusBanner from "@/components/ChatInterface/ServiceStatusBanner";
 import {
@@ -201,94 +201,32 @@ export default function AIChatPage({
     }
   }, [isLoadingHistory, initialMessageLoadTime]);
 
-  const [webSocketToken, setWebSocketToken] = useState<string | null>(null);
-
   // WebSocket configuration
   const baseWebSocketUrl = useMemo(
     () => import.meta.env.VITE_WEBSOCKET_URL,
     []
   );
+  // The URL carries no credential: the access token travels in the
+  // Sec-WebSocket-Protocol header (see useWebSocket). Wait for a user, since
+  // $connect binds the socket to the token's user.
   const webSocketUrl = useMemo(() => {
-    if (!baseWebSocketUrl || !webSocketToken) {
-      return null;
-    }
-
+    if (isDemoMode || !baseWebSocketUrl || !userId) return null;
     try {
-      const url = new URL(baseWebSocketUrl);
-      url.searchParams.set("token", webSocketToken);
-      return url.toString();
-    } catch (error) {
-      console.error("[WebSocket] Invalid base URL:", error);
+      new URL(baseWebSocketUrl);
+      return baseWebSocketUrl;
+    } catch (e) {
+      console.error("[WebSocket] Invalid base URL:", e);
       return null;
     }
-  }, [baseWebSocketUrl, webSocketToken]);
+  }, [baseWebSocketUrl, userId]);
 
-  useEffect(() => {
-    if (!baseWebSocketUrl) {
-      console.warn("[WebSocket] Base URL not configured");
-      return;
-    }
-  }, [baseWebSocketUrl, webSocketToken]);
-
-  useEffect(() => {
-    const apiEndpoint = API_ENDPOINT;
-    if (isDemoMode || !apiEndpoint) {
-      return;
-    }
-
-    let isActive = true;
-    let refreshTimeoutId: number | undefined;
-    const refreshDelayMs = 14 * 60 * 1000;
-    const retryDelayMs = 30 * 1000;
-
-    async function fetchToken() {
-      if (!isActive) {
-        return;
-      }
-
-      try {
-        const token = await getPublicToken();
-        if (!isActive) {
-          return;
-        }
-
-        setWebSocketToken(token);
-        scheduleNext(refreshDelayMs);
-      } catch (error) {
-        console.error("[WebSocket] Failed to fetch streaming token:", error);
-        if (!isActive) {
-          return;
-        }
-
-        setWebSocketToken(null);
-        scheduleNext(retryDelayMs);
-      }
-    }
-
-    function scheduleNext(delay: number) {
-      if (!isActive) {
-        return;
-      }
-
-      if (refreshTimeoutId !== undefined) {
-        window.clearTimeout(refreshTimeoutId);
-      }
-
-      refreshTimeoutId = window.setTimeout(
-        fetchToken,
-        delay
-      ) as unknown as number;
-    }
-
-    fetchToken();
-
-    return () => {
-      isActive = false;
-      if (refreshTimeoutId !== undefined) {
-        window.clearTimeout(refreshTimeoutId);
-      }
-    };
+  // A fresh (re)connect reuses the cached access token unless the last
+  // handshake was refused.
+  const getWebSocketToken = useCallback(async (forceRefresh: boolean) => {
+    if (forceRefresh) invalidatePublicToken();
+    return getPublicToken();
   }, []);
+  const forceReconnectRef = useRef<() => void>(() => {});
 
   // WebSocket message handlers - memoized to prevent unnecessary reconnections
   const handleWebSocketMessage = useCallback(
@@ -361,6 +299,14 @@ export default function AIChatPage({
         case "error":
           setIsStreaming(false);
           streamingMessageIdRef.current = null;
+          // The socket has no (or another user's) binding: reconnect with a fresh
+          // handshake. The server's message still asks the user to resend.
+          if (
+            message.error === "CONNECTION_NOT_AUTHORIZED" ||
+            message.error === "CONNECTION_USER_MISMATCH"
+          ) {
+            forceReconnectRef.current();
+          }
           if (message.error === 'TOKEN_LIMIT_EXCEEDED') {
             setIsTokenLimitReached(true);
             if (message.token_usage?.reset_at) {
@@ -407,6 +353,8 @@ export default function AIChatPage({
     connectionState,
     forceReconnect,
   } = useWebSocket(webSocketUrl, {
+    getToken: getWebSocketToken,
+    identity: userId,
     onMessage: handleWebSocketMessage,
     onConnect: () => {
       console.log("[WebSocket] Connected");
@@ -421,6 +369,7 @@ export default function AIChatPage({
       console.log("Streaming: ", isStreaming);
     },
   });
+  forceReconnectRef.current = forceReconnect;
 
   const fetchMaxCharactersPerUserMessage = async () => {
     try {
@@ -458,19 +407,20 @@ export default function AIChatPage({
     fetchMaxCharactersPerUserMessage();
   }, []);
 
-  // Service status: once on load and then once a minute. It reuses the public-session token
-  // that the streaming connection already refreshes, so polling adds no unauthenticated
-  // requests (the WAF counts those per IP). A failed request keeps the last known state,
-  // which starts as normal, so it can never block chat on its own.
+  // Service status: once on load and then every SERVICE_POLL_MS. getPublicToken() reuses the
+  // cached user-bound access token (10 min), so polling adds no extra /user/publicToken calls
+  // and no unauthenticated requests (the WAF counts those per IP). A failed request keeps the
+  // last known state, which starts as normal, so it can never block chat on its own.
   useEffect(() => {
-    if (isDemoMode || !API_ENDPOINT || !webSocketToken) {
+    if (isDemoMode || !API_ENDPOINT || !userId) {
       return;
     }
     let active = true;
     const loadServiceStatus = async () => {
       try {
+        const token = await getPublicToken();
         const response = await fetch(`${API_ENDPOINT}/system-settings/service-status`, {
-          headers: { Authorization: `Bearer ${webSocketToken}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
         if (!response.ok) {
           throw new Error(`Service status request failed with status ${response.status}`);
@@ -491,7 +441,7 @@ export default function AIChatPage({
       active = false;
       window.clearInterval(timer);
     };
-  }, [webSocketToken]);
+  }, [userId]);
 
   useEffect(() => {
     // A dismissed warning belongs to the previous session's reply.
@@ -746,7 +696,6 @@ export default function AIChatPage({
         action: "generate_text",
         query: text,
         chat_session_id: sessionId,
-        user_id: userId,
         token: streamToken,
       });
 

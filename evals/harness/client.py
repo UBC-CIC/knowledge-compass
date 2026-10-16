@@ -5,7 +5,7 @@ Public chat API client used by the harness, mirroring the frontend:
   POST /user                                 -> {userId, credential}
   GET  /user/publicToken  (Bearer credential) -> user-bound 15-minute token
   POST /chat_sessions                        (+ signed eval tag)
-  WebSocket ?token=...  {"action": "generate_text", ...}
+  WebSocket (Sec-WebSocket-Protocol: kc.v1, <token>)  {"action": "generate_text", ...}
        events: start, chunk, complete, error
   GET  /chat_sessions/user/{user_id}         routing readback (metadata)
   DELETE /chat_sessions/{id}?user_id=        cleanup
@@ -237,13 +237,15 @@ class ChatSocket:
 
     def __enter__(self) -> "ChatSocket":
         token = self.client.access_token(self.user)
-        url = f"{self.client.settings.ws_url}?{urllib.parse.urlencode({'token': token})}"
         connect = self.client._ws_connect
         if connect is None:
             from websockets.sync.client import connect as ws_connect
 
             connect = ws_connect
-        self._ws = connect(url, open_timeout=30, close_timeout=5)
+        # The token travels as a subprotocol, never in the URL; $connect binds
+        # the connection to its user and selects "kc.v1".
+        self._ws = connect(self.client.settings.ws_url, subprotocols=["kc.v1", token],
+                           open_timeout=30, close_timeout=5)
         return self
 
     def __exit__(self, *exc) -> None:

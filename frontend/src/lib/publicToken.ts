@@ -115,3 +115,8 @@ export async function getPublicToken(): Promise<string> {
   inFlight = { credential, promise };
   return promise;
 }
+
+/** Drop the cached access token so the next getPublicToken() fetches a new one. */
+export function invalidatePublicToken(): void {
+  cached = null;
+}

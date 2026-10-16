@@ -7,6 +7,7 @@ import { Duration } from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import { Code, LayerVersion, Runtime } from "aws-cdk-lib/aws-lambda";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { VpcStack } from "./vpc-stack";
 import { DatabaseStack } from "./database-stack";
 import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
@@ -1029,6 +1030,9 @@ export class ApiGatewayStack extends cdk.Stack {
         passwordLength: 128,
       },
     });
+    // iss claim of every public token (userCredential.js); each verifier checks it.
+    // Not secret and not account-specific: it names this deployment.
+    const jwtIssuer = `${id}/public-auth`;
 
     const adminAuthorizationFunction = new lambda.Function(
       this,
@@ -1126,6 +1130,7 @@ export class ApiGatewayStack extends cdk.Stack {
         role: lambdaRole,
         environment: {
           JWT_SECRET: jwtSecret.secretArn,
+          JWT_ISSUER: jwtIssuer,
         },
         functionName: `${id}-userLambdaAuthorizer`,
       }
@@ -1839,6 +1844,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // Signs anonymous users' credentials (POST /user) and access tokens
         // (GET /user/publicToken).
         JWT_SECRET: jwtSecret.secretArn,
+        JWT_ISSUER: jwtIssuer,
       },
       functionName: `${id}-userFunction`,
       memorySize: 512,
@@ -2053,6 +2059,16 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
+    // connectionId -> verified anonymous user id, written by $connect, read by $default.
+    // TTL is past API Gateway's 2h connection limit; $disconnect deletes it earlier.
+    const wsConnectionsTable = new dynamodb.Table(this, `${id}-WsConnections`, {
+      partitionKey: { name: "connectionId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "expiresAt",
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // short-lived connection state only
+    });
+
     // Connect Lambda
     const connectFunction = new lambda.Function(this, `${id}-ConnectFunction`, {
       functionName: `${id}-ConnectFunction`,
@@ -2065,6 +2081,7 @@ export class ApiGatewayStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE,
       environment: {
         JWT_SECRET: jwtSecret.secretArn,
+        JWT_ISSUER: jwtIssuer,
       },
       layers: [jwt],
     });
@@ -2114,6 +2131,7 @@ export class ApiGatewayStack extends cdk.Stack {
         TEXT_GEN_FUNCTION_NAME: lambdaTextGen.functionName,
         // Each generate_text message's access token is verified here.
         JWT_SECRET: jwtSecret.secretArn,
+        JWT_ISSUER: jwtIssuer,
       },
       layers: [jwt],
       functionName: `${id}-DefaultFunction`,
@@ -2156,13 +2174,28 @@ export class ApiGatewayStack extends cdk.Stack {
     lambdaTextGen.addToRolePolicy(wsPolicy);
     connectFunction.addToRolePolicy(wsPolicy);
     disconnectFunction.addToRolePolicy(wsPolicy);
-    defaultFunction.addToRolePolicy(wsPolicy);
+    // defaultFunction gets a statement scoped to this API's stage below.
+
+    // Connection binding store: each function gets only the one action it uses.
+    // Each has its own role (no shared `role:`), so these grants stay per function.
+    for (const fn of [connectFunction, disconnectFunction, defaultFunction]) {
+      fn.addEnvironment("CONNECTIONS_TABLE_NAME", wsConnectionsTable.tableName);
+    }
+    wsConnectionsTable.grant(connectFunction, "dynamodb:PutItem");
+    wsConnectionsTable.grant(disconnectFunction, "dynamodb:DeleteItem");
+    wsConnectionsTable.grant(defaultFunction, "dynamodb:GetItem");
 
     jwtSecret.grantRead(connectFunction);
     // Grant the default function permission to invoke the text generation function
     lambdaTextGen.grantInvoke(defaultFunction);
 
     // Routes
+    // No API Gateway authorizer on these routes, deliberately. lambda/websocket/connect.js
+    // verifies the access token (Sec-WebSocket-Protocol "kc.v1, <token>" or Bearer),
+    // echoes the subprotocol and writes the connectionId -> user binding; default.js
+    // enforces that binding and re-verifies the frame token on every message. An
+    // authorizer could not echo the subprotocol or write the binding, so it would only
+    // add a second copy of the verification.
     new apigatewayv2.WebSocketRoute(this, `${id}-ConnectRoute`, {
       webSocketApi: this.webSocketApi,
       routeKey: "$connect",
@@ -2224,6 +2257,19 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     this.wsStage.node.addDependency(apiGatewayAccount);
+
+    // $default posts error events and closes sockets that have no connection record
+    // (DeleteConnection), on this API's stage only. Same manual ARN template as wsPolicy
+    // above; the only token is this WebSocket API's own id. The Api resource references
+    // nothing, so this adds no cycle (lambdaTextGen gets no new reference; see note below).
+    defaultFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["execute-api:ManageConnections"],
+      resources: [
+        `arn:aws:execute-api:${this.region}:${this.account}:${this.webSocketApi.apiId}/${this.wsStage.stageName}/POST/@connections/*`,
+        `arn:aws:execute-api:${this.region}:${this.account}:${this.webSocketApi.apiId}/${this.wsStage.stageName}/DELETE/@connections/*`,
+      ],
+    }));
 
     // Do not put webSocketApi.apiEndpoint on lambdaTextGen (or any OpenAPI
     // Lambda). Text gen already builds the management URL from requestContext.

@@ -21,6 +21,7 @@ class FakeBackend:
         self.tokens: Dict[str, Optional[str]] = {}
         self.requests: List[Dict[str, Any]] = []
         self.ws_frames: List[Dict[str, Any]] = []
+        self.ws_urls: List[str] = []
         self.reply = reply or self.default_reply
         self.fail_next: List[int] = []  # HTTP statuses to return before succeeding
         self.rotate_credentials = False
@@ -123,15 +124,24 @@ class FakeBackend:
     # -- WebSocket -----------------------------------------------------
 
     def ws_connect(self, url: str, **kwargs):
-        token = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query)).get("token")
+        # Like $connect: the token comes only from the subprotocol list
+        # ["kc.v1", <token>], never the URL, and binds the socket to its user.
+        self.ws_urls.append(url)
+        if urllib.parse.urlparse(url).query != "":
+            raise ConnectionError("401 at $connect")
+        subprotocols = kwargs.get("subprotocols") or []
+        if len(subprotocols) != 2 or subprotocols[0] != "kc.v1":
+            raise ConnectionError("401 at $connect")
+        token = subprotocols[1]
         if token not in self.tokens or self.tokens[token] is None:
             raise ConnectionError("401 at $connect")
-        return FakeSocket(self)
+        return FakeSocket(self, bound_user=self.tokens[token])
 
 
 class FakeSocket:
-    def __init__(self, backend: FakeBackend):
+    def __init__(self, backend: FakeBackend, bound_user: str):
         self.backend = backend
+        self.bound_user = bound_user
         self.queue: List[str] = []
         self.closed = False
 
@@ -141,6 +151,9 @@ class FakeSocket:
         caller = self.backend.tokens.get(frame.get("token"))
         if frame.get("action") != "generate_text" or not caller:
             self.queue.append(json.dumps({"type": "error", "error": "A valid user session token is required"}))
+            return
+        if caller != self.bound_user:
+            self.queue.append(json.dumps({"type": "error", "error": "CONNECTION_USER_MISMATCH", "message": "reconnect"}))
             return
         session = self.backend.sessions.get(frame["chat_session_id"])
         if not session or session["user_id"] != caller:

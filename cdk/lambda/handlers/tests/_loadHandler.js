@@ -8,6 +8,10 @@
 const Module = require("node:module");
 const path = require("node:path");
 
+// Every minted token carries iss (userCredential.js fails closed without it).
+// Tests that check the unset case delete it and restore it themselves.
+if (!process.env.JWT_ISSUER) process.env.JWT_ISSUER = "test-issuer";
+
 // Minimal stand-in for the postgres.js tagged-template client. `respond` maps
 // the joined SQL text + values to the rows a query returns. With
 // `rejectUndefined`, a query that binds `undefined` rejects the way postgres.js

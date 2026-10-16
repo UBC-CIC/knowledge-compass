@@ -74,13 +74,23 @@ class FakeConnection:
         return FakeCursor(self.row, self.error)
 
 
+class RaisingConnection:
+    def cursor(self):
+        raise RuntimeError("db down")
+
+
 class ValidateSessionOwnershipTests(unittest.TestCase):
+    def assert_no_ids(self, logs):
+        self.assertFalse(any(USER in line or SESSION in line or OTHER_USER in line for line in logs.output))
+
     def test_owner_and_uuid_typed_owner(self):
         self.assertTrue(validate_session_ownership(FakeConnection((USER,)), SESSION, USER))
         self.assertTrue(validate_session_ownership(FakeConnection((uuid.UUID(USER),)), SESSION, USER))
 
     def test_other_owner_refused(self):
-        self.assertFalse(validate_session_ownership(FakeConnection((OTHER_USER,)), SESSION, USER))
+        with self.assertLogs(level="INFO") as logs:
+            self.assertFalse(validate_session_ownership(FakeConnection((OTHER_USER,)), SESSION, USER))
+        self.assert_no_ids(logs)
 
     def test_missing_session_refused(self):
         # Sessions are created only by POST /chat_sessions; a session id the
@@ -104,6 +114,12 @@ class ValidateSessionOwnershipTests(unittest.TestCase):
                 text = "\n".join(logs.output)
                 for value in (USER, OTHER_USER, SESSION):
                     self.assertNotIn(value, text)
+
+    def test_db_error_not_owned(self):
+        with self.assertLogs(level="INFO") as logs:
+            self.assertFalse(validate_session_ownership(RaisingConnection(), SESSION, USER))
+        self.assert_no_ids(logs)
+        self.assertFalse(any("db down" in line for line in logs.output))  # only the exception type is logged
 
 
 if __name__ == "__main__":

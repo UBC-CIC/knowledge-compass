@@ -14,6 +14,8 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const path = require("node:path");
 
+const { dynamoFake } = require("../../websocket/tests/_loadWebsocket.js");
+
 const USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11";
 const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
@@ -46,10 +48,15 @@ class FakeCommand {
     this.input = input;
   }
 }
+class DeleteConnectionCommand extends FakeCommand {}
 
-function load(relativePath, extraFakes = {}) {
-  const jwt = fakeJwt();
-  const calls = { invokes: [], posts: [] };
+// Bound connection for the websocket cases ($connect wrote conn-1 -> USER).
+const boundConnections = () => ({
+  "@aws-sdk/client-dynamodb": dynamoFake(new Map([["conn-1", USER]])),
+});
+
+function load(relativePath, extraFakes = {}, jwt = fakeJwt()) {
+  const calls = { invokes: [], posts: [], deletes: [] };
   const fakes = {
     jsonwebtoken: jwt,
     "@aws-sdk/client-secrets-manager": {
@@ -80,10 +87,12 @@ function load(relativePath, extraFakes = {}) {
     "@aws-sdk/client-apigatewaymanagementapi": {
       ApiGatewayManagementApiClient: class {
         async send(command) {
-          calls.posts.push(JSON.parse(command.input.Data));
+          if (command instanceof DeleteConnectionCommand) calls.deletes.push(command.input);
+          else calls.posts.push(JSON.parse(command.input.Data));
         }
       },
       PostToConnectionCommand: FakeCommand,
+      DeleteConnectionCommand,
     },
     ...extraFakes,
   };
@@ -114,6 +123,24 @@ async function quietly(fn) {
   }
 }
 
+// ---------- shared token claims ----------
+
+const ISSUER = "test-issuer";
+const ACCESS = { role: "user", typ: "access", iss: ISSUER, aud: "kc-public-api" };
+
+let savedEnv;
+test.beforeEach(() => {
+  savedEnv = { JWT_ISSUER: process.env.JWT_ISSUER, CONNECTIONS_TABLE_NAME: process.env.CONNECTIONS_TABLE_NAME };
+  process.env.JWT_ISSUER = ISSUER;
+  process.env.CONNECTIONS_TABLE_NAME = "test-connections";
+});
+test.afterEach(() => {
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
 // ---------- userAuthorizerFunction ----------
 
 const methodArn = "arn:aws:execute-api:ca-central-1:123456789012:abc123/prod/GET/user/x";
@@ -122,33 +149,52 @@ const authorize = (mod, token) =>
 
 test("authorizer: bound access tokens expose their user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
-  const policy = await authorize(mod, jwt.sign({ role: "user", typ: "access", sub: USER, jti: "j1" }, SECRET, {}));
+  const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER }, SECRET, {}));
   assert.equal(policy.principalId, USER);
-  assert.deepEqual(policy.context, { userId: USER, role: "user", jti: "j1" });
+  assert.deepEqual(policy.context, { userId: USER, role: "user" });
   assert.equal(policy.policyDocument.Statement[0].Effect, "Allow");
 });
 
 test("authorizer: anonymous tokens carry no user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
-  const policy = await authorize(mod, jwt.sign({ role: "user", jti: "j2" }, SECRET, {}));
+  const policy = await authorize(mod, jwt.sign({ ...ACCESS }, SECRET, {}));
   assert.equal(policy.context.userId, "");
 });
 
-test("authorizer: credentials and bad tokens are unauthorized", async () => {
+test("authorizer: credentials, wrong typ/iss/aud and bad tokens are unauthorized", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
+  const without = (key) => {
+    const claims = { ...ACCESS, sub: USER };
+    delete claims[key];
+    return claims;
+  };
   for (const token of [
+    jwt.sign({ typ: "credential", sub: USER, iss: ISSUER, aud: "kc-token-exchange" }, SECRET, {}),
     jwt.sign({ typ: "credential", sub: USER }, SECRET, {}),
-    jwt.sign({ role: "user", sub: USER }, "other-secret", {}),
+    jwt.sign(without("typ"), SECRET, {}),
+    jwt.sign({ ...ACCESS, sub: USER, typ: "refresh" }, SECRET, {}),
+    jwt.sign(without("iss"), SECRET, {}),
+    jwt.sign({ ...ACCESS, sub: USER, iss: "other-deployment" }, SECRET, {}),
+    jwt.sign(without("aud"), SECRET, {}),
+    jwt.sign({ ...ACCESS, sub: USER, aud: "kc-token-exchange" }, SECRET, {}),
+    jwt.sign({ ...ACCESS, sub: USER }, "other-secret", {}),
     "garbage",
   ]) {
     await assert.rejects(authorize(mod, token), /Unauthorized/);
   }
 });
 
+test("authorizer: unset JWT_ISSUER refuses every token", async () => {
+  const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
+  const token = jwt.sign({ ...ACCESS, sub: USER }, SECRET, {});
+  delete process.env.JWT_ISSUER;
+  await assert.rejects(authorize(mod, token), /Unauthorized/);
+});
+
 test("authorizer: extra claims are not forwarded into the context", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
-  const policy = await authorize(mod, jwt.sign({ role: "user", sub: USER, jti: "j", admin: true, userId: OTHER_USER }, SECRET, {}));
-  assert.deepEqual(Object.keys(policy.context).sort(), ["jti", "role", "userId"]);
+  const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER, jti: "j", admin: true, userId: OTHER_USER }, SECRET, {}));
+  assert.deepEqual(Object.keys(policy.context).sort(), ["role", "userId"]);
   assert.equal(policy.context.userId, USER);
 });
 
@@ -159,9 +205,9 @@ const wsEvent = (message) => ({
   body: JSON.stringify({ action: "generate_text", query: "hello", chat_session_id: SESSION, ...message }),
 });
 
-test("websocket: text generation runs as the message token's user", async () => {
-  const { mod, jwt, calls } = load("websocket/default.js");
-  const token = jwt.sign({ role: "user", typ: "access", sub: USER }, SECRET, {});
+test("websocket: text generation runs as the bound user", async () => {
+  const { mod, jwt, calls } = load("websocket/default.js", boundConnections());
+  const token = jwt.sign({ ...ACCESS, sub: USER }, SECRET, {});
   const res = await quietly(() => mod.handler(wsEvent({ token, user_id: USER })));
   assert.equal(res.statusCode, 200);
   assert.equal(calls.invokes.length, 1);
@@ -170,14 +216,16 @@ test("websocket: text generation runs as the message token's user", async () => 
   assert.equal(JSON.parse(payload.body).user_id, undefined, "client user_id is not forwarded");
 });
 
-test("websocket: missing, anonymous, credential or mismatched tokens are refused with an error event", async () => {
-  const { mod, jwt, calls } = load("websocket/default.js");
+test("websocket: missing, anonymous, credential, untyped or mismatched tokens are refused with an error event", async () => {
+  const { mod, jwt, calls } = load("websocket/default.js", boundConnections());
   const cases = [
     [{}, 401],
-    [{ token: jwt.sign({ role: "user" }, SECRET, {}) }, 401],
-    [{ token: jwt.sign({ typ: "credential", sub: USER }, SECRET, {}) }, 401],
-    [{ token: jwt.sign({ role: "user", sub: USER }, "other-secret", {}) }, 401],
-    [{ token: jwt.sign({ role: "user", sub: USER }, SECRET, {}), user_id: OTHER_USER }, 403],
+    [{ token: jwt.sign({ ...ACCESS }, SECRET, {}) }, 401],
+    [{ token: jwt.sign({ typ: "credential", sub: USER, iss: ISSUER, aud: "kc-token-exchange" }, SECRET, {}) }, 401],
+    [{ token: jwt.sign({ ...ACCESS, sub: USER }, "other-secret", {}) }, 401],
+    [{ token: jwt.sign({ role: "user", sub: USER }, SECRET, {}), user_id: OTHER_USER }, 401],
+    [{ token: jwt.sign({ ...ACCESS, sub: USER }, SECRET, {}), user_id: OTHER_USER }, 403],
+    [{ token: jwt.sign({ ...ACCESS, sub: OTHER_USER }, SECRET, {}) }, 403],
   ];
   for (const [message, status] of cases) {
     const posts = calls.posts.length;
@@ -187,4 +235,35 @@ test("websocket: missing, anonymous, credential or mismatched tokens are refused
     assert.equal(calls.posts.at(-1).type, "error");
   }
   assert.equal(calls.invokes.length, 0);
+  assert.equal(calls.deletes.length, 0, "a bound socket is not closed");
+});
+
+test("websocket: a connection without a binding is refused and closed", async () => {
+  const { mod, jwt, calls } = load("websocket/default.js", {
+    "@aws-sdk/client-dynamodb": dynamoFake(new Map()),
+  });
+  const res = await quietly(() => mod.handler(wsEvent({ token: jwt.sign({ ...ACCESS, sub: USER }, SECRET, {}) })));
+  assert.equal(res.statusCode, 401);
+  assert.equal(calls.invokes.length, 0);
+  assert.equal(calls.posts.at(-1).error, "CONNECTION_NOT_AUTHORIZED");
+  assert.deepEqual(calls.deletes, [{ ConnectionId: "conn-1" }]);
+});
+
+// ---------- round trip ----------
+
+test("a token from issueAccessToken passes the REST authorizer and websocket/accessToken.js", async () => {
+  const jwt = fakeJwt();
+  const { mod: credentials } = load("handlers/utils/userCredential.js", {}, jwt);
+  const { mod: authorizer } = load("authorization/userAuthorizerFunction.js", {}, jwt);
+  const { mod: wsToken } = load("websocket/accessToken.js", {}, jwt);
+
+  const token = await credentials.issueAccessToken(USER);
+  const policy = await authorize(authorizer, token);
+  assert.deepEqual(policy.context, { userId: USER, role: "user" });
+  assert.equal(await wsToken.verifyAccessToken(token), USER);
+
+  // A credential is accepted by neither.
+  const credential = await credentials.issueUserCredential(USER, 0);
+  await assert.rejects(authorize(authorizer, credential), /Unauthorized/);
+  assert.equal(await wsToken.verifyAccessToken(credential), null);
 });
