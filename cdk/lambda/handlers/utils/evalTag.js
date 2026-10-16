@@ -62,11 +62,25 @@ function verifyEvalTag(tag, userId, key, nowSeconds = Math.floor(Date.now() / 10
   return { runId, mode };
 }
 
+/** Field formats only (no HMAC); verifyEvalTag repeats these checks. */
+function hasTagShape(tag) {
+  if (!tag || typeof tag !== "object" || Array.isArray(tag)) return false;
+  const { run_id: runId, mode, exp, sig } = tag;
+  return (
+    typeof runId === "string" && RUN_ID_PATTERN.test(runId)
+    && typeof mode === "string" && EVAL_MODES.includes(mode)
+    && Number.isInteger(exp)
+    && typeof sig === "string" && SIG_PATTERN.test(sig)
+  );
+}
+
 /** Signing key from Secrets Manager, cached per container. null = not configured. */
 async function getSigningKey() {
   const secretName = process.env.EVAL_SIGNING_SECRET_NAME;
   if (!secretName) return null;
-  if (cachedKey && Date.now() - cachedAt < SECRET_TTL_MS) return cachedKey;
+  // Gate on the fetch time, not the value, so "no usable key" is cached too;
+  // otherwise every request with an eval field would hit Secrets Manager.
+  if (cachedAt && Date.now() - cachedAt < SECRET_TTL_MS) return cachedKey;
   try {
     secretsClient = secretsClient || new SecretsManagerClient();
     const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
@@ -91,6 +105,8 @@ async function getSigningKey() {
 async function resolveEvalTag(body, userId) {
   const tag = body && typeof body === "object" ? body.eval : undefined;
   if (tag === undefined || tag === null) return null;
+  // Reject malformed tags before any secret lookup, so junk input costs nothing.
+  if (!hasTagShape(tag)) return null;
   try {
     const key = await getSigningKey();
     return verifyEvalTag(tag, userId, key);

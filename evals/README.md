@@ -82,8 +82,13 @@ Backend changes (already in source):
 Deploy in this order, after reviewing `cdk diff`:
 
 1. `KC-DBFlow` (runs migration 035)
-2. `KC-Api`
-3. `KC-Eval` (only with `-c enableEval=true`)
+2. `KC-Api` **with `-c enableEval=true`**
+3. `KC-Eval` with `-c enableEval=true`
+
+The API only gets the `EVAL_SIGNING_SECRET_NAME` variable and the read grant on the
+secret when `enableEval=true`, so pass the flag on every later `KC-Api` deploy too.
+Deploying `KC-Api` without it switches eval tags off again (sessions are created as
+normal ones).
 
 The EvalStack creates:
 
@@ -95,8 +100,10 @@ The bucket and role go in the stack Region. To use a different Region for evalua
 `-c evalJobRegion=us-west-2`, which adds a `KC-EvalJobs` stack there. Choose the judge models with
 `-c evalJudgeModels=<id>[,<id>]`.
 
-Without the EvalStack, tags fail closed and every session is a normal one, so the
-API change is inert.
+Without `enableEval`, the API has no secret name and no grant, tags fail closed and
+every session is a normal one, so the API change is inert. A missing or unusable key
+is cached for 5 minutes, and malformed tags are rejected before any Secrets Manager
+call, so `eval` fields from other clients cost nothing.
 
 ## Workflow
 
