@@ -859,15 +859,53 @@ export class ApiGatewayStack extends cdk.Stack {
       roleArn: adminRole.roleArn,
     });
 
+    // Least-privilege execution roles (security finding f-4597100e). Request-handling
+    // functions get only what their handler uses, and all carry this boundary: no IAM
+    // (except PassRole to the two ingestion services) and no Cognito admin APIs, whatever
+    // is granted to them later. Self-contained (no token references), so no new cycle.
+    const requestHandlerBoundary = new iam.ManagedPolicy(this, `${id}-RequestHandlerBoundary`, {
+      managedPolicyName: `${id}-RequestHandlerBoundary`,
+      description: "Permissions boundary for request-handling Lambda roles",
+      statements: [
+        new iam.PolicyStatement({
+          sid: "AllowAllExceptIamAndCognitoAdmin",
+          effect: iam.Effect.ALLOW,
+          notActions: ["iam:*", "cognito-idp:Admin*"],
+          resources: ["*"],
+        }),
+        // The knowledge-base role passes the ECS task/execution roles and the Transcribe
+        // data-access role (IngestionStack.grantRunTasks); its identity policy still pins
+        // the role ARNs.
+        new iam.PolicyStatement({
+          sid: "AllowPassRoleToIngestionServices",
+          effect: iam.Effect.ALLOW,
+          actions: ["iam:PassRole"],
+          resources: ["*"],
+          conditions: {
+            StringEquals: {
+              "iam:PassedToService": ["ecs-tasks.amazonaws.com", "transcribe.amazonaws.com"],
+            },
+          },
+        }),
+        new iam.PolicyStatement({
+          sid: "DenyCognitoAdmin",
+          effect: iam.Effect.DENY,
+          actions: ["cognito-idp:Admin*"],
+          resources: ["*"],
+        }),
+      ],
+    });
+
+    // Shared by systemMessagesFunction, chatSessionFunction and adminFunction only.
     const lambdaRole = new iam.Role(this, `${id}-postgresLambdaRole`, {
       roleName: `${id}-postgresLambdaRole`,
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      permissionsBoundary: requestHandlerBoundary,
     });
 
 
     // Grant access to specific secrets instead of '*'
     db.secretPathUser.grantRead(lambdaRole);
-    this.secret.grantRead(lambdaRole);
 
     // Grant access to EC2
     lambdaRole.addToPolicy(
@@ -912,28 +950,52 @@ export class ApiGatewayStack extends cdk.Stack {
       })
     );
 
-    // Inline policy to allow AdminAddUserToGroup action
-    const adminAddUserToGroupPolicyLambda = new iam.Policy(
-      this,
-      `${id}-adminAddUserToGroupPolicyLambda`,
-      {
-        statements: [
+    // Dedicated roles for the functions split off lambdaRole. VPC functions get
+    // AWSLambdaVPCAccessExecutionRole (ENIs + logs), the out-of-VPC user authorizer
+    // AWSLambdaBasicExecutionRole (logs). Traced functions get the same X-Ray statement
+    // as lambdaRole. Remaining grants are added per function below (addToRolePolicy /
+    // grantRead on the function follow its role).
+    const newExecutionRole = (name: string, opts: { vpc: boolean; xray: boolean }) => {
+      const role = new iam.Role(this, `${id}-${name}`, {
+        roleName: `${id}-${name}`,
+        assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+        managedPolicies: [
+          iam.ManagedPolicy.fromAwsManagedPolicyName(
+            opts.vpc
+              ? "service-role/AWSLambdaVPCAccessExecutionRole"
+              : "service-role/AWSLambdaBasicExecutionRole"
+          ),
+        ],
+        permissionsBoundary: requestHandlerBoundary,
+      });
+      if (opts.xray) {
+        role.addToPolicy(
           new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: [
-              "cognito-idp:AdminAddUserToGroup",
-              "cognito-idp:AdminRemoveUserFromGroup",
-              "cognito-idp:AdminGetUser",
-              "cognito-idp:AdminListGroupsForUser",
+              "xray:PutTraceSegments",
+              "xray:PutTelemetryRecords",
+              "xray:GetSamplingRules",
+              "xray:GetSamplingTargets",
             ],
-            resources: [
-              `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`,
-            ],
-          }),
-        ],
+            resources: ["*"],
+          })
+        );
       }
-    );
-    lambdaRole.attachInlinePolicy(adminAddUserToGroupPolicyLambda);
+      return role;
+    };
+
+    const adminAuthorizerRole = newExecutionRole("adminAuthorizerRole", { vpc: true, xray: false });
+    // SM_COGNITO_CREDENTIALS; the admin authorizer is the only reader of this secret.
+    this.secret.grantRead(adminAuthorizerRole);
+    const userAuthorizerRole = newExecutionRole("userAuthorizerRole", { vpc: false, xray: false });
+    // userFunction mints anonymous credentials and public tokens (POST /user, GET /user/publicToken).
+    const userFunctionRole = newExecutionRole("userFunctionRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(userFunctionRole);
+    const textGenRole = newExecutionRole("textGenRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(textGenRole);
+    const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(knowledgeBaseRole);
 
     const coglambdaRole = new iam.Role(
       this,
@@ -976,31 +1038,22 @@ export class ApiGatewayStack extends cdk.Stack {
       })
     );
 
-    // Grant permission to add users to an IAM group
-    coglambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["iam:AddUserToGroup"],
-        resources: [
-          `arn:aws:iam::${this.account}:user/*`,
-          `arn:aws:iam::${this.account}:group/*`,
-        ],
-      })
-    );
-
-    coglambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "cognito-idp:AdminAddUserToGroup",
-          "cognito-idp:AdminGetUser",
-          "cognito-idp:AdminListGroupsForUser",
-        ],
-        resources: [
-          `arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`,
-        ],
-      })
-    );
+    // addAdminOnSignUp.js only calls AdminListGroupsForUser, on this pool. Standalone
+    // iam.Policy on purpose, NOT coglambdaRole.addToPolicy: each trigger Lambda DependsOn
+    // the role's DefaultPolicy and the pool's LambdaConfig GetAtt's those Lambdas, so a
+    // pool ARN in the DefaultPolicy would close UserPool -> trigger -> DefaultPolicy ->
+    // UserPool. The functions do not depend on this separate policy, so the pool ARN
+    // token is cycle-free.
+    new iam.Policy(this, `${id}-postConfirmationGroupLookupPolicy`, {
+      roles: [coglambdaRole],
+      statements: [
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ["cognito-idp:AdminListGroupsForUser"],
+          resources: [this.userPool.userPoolArn],
+        }),
+      ],
+    });
 
     // Redundant secrets manager access block removed
 
@@ -1050,7 +1103,7 @@ export class ApiGatewayStack extends cdk.Stack {
         functionName: `${id}-adminLambdaAuthorizer`,
         memorySize: 512,
         layers: [jwt],
-        role: lambdaRole,
+        role: adminAuthorizerRole,
       }
     );
 
@@ -1127,7 +1180,7 @@ export class ApiGatewayStack extends cdk.Stack {
         memorySize: 256,
         reservedConcurrentExecutions: reservedConcurrency(50),
         layers: [jwt],
-        role: lambdaRole,
+        role: userAuthorizerRole,
         environment: {
           JWT_SECRET: jwtSecret.secretArn,
           JWT_ISSUER: jwtIssuer,
@@ -1238,7 +1291,7 @@ export class ApiGatewayStack extends cdk.Stack {
         handler: "main.handler",
         code: lambda.Code.fromAsset("lambda/textGeneration"),
         timeout: cdk.Duration.seconds(60),
-        role: lambdaRole,
+        role: textGenRole,
         reservedConcurrentExecutions: reservedConcurrency(50),
         layers: [psycopgLayer, powertoolsLayer],
         vpc: vpcStack.vpc,
@@ -1522,7 +1575,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // The knowledge-base Lambda's cutover job (helpers/cutover.py) writes this metric the same
     // way (CloudWatch Embedded Metric Format on stdout), so no PutMetricData permission is added
-    // to the shared lambdaRole. It fires when the golden-set check after a pointer flip fails.
+    // to the knowledge-base role. It fires when the golden-set check after a pointer flip fails.
     // The job does NOT roll back by itself: the alarm tells the operator to review and use the
     // Rollback action. Referenced by namespace/name only (no token to lambdaKnowledgeBase, which
     // would recreate the documented circular dependency). The SNS action is attached with the
@@ -1713,7 +1766,7 @@ export class ApiGatewayStack extends cdk.Stack {
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
 
-    // lambdaRole already has read access to db.secretPathUser through the stack-wide policy
+    // textGenRole reads db.secretPathUser (granted where the role is created).
 
 
 
@@ -1737,7 +1790,7 @@ export class ApiGatewayStack extends cdk.Stack {
       // Textract OCR waits are budgeted against this from the Lambda context;
       // work that doesn't fit continues in a fresh self-invocation.
       timeout: Duration.seconds(600),
-      role: lambdaRole,
+      role: knowledgeBaseRole,
       layers: [psycopgLayer],
       memorySize: 512,
       vpc: vpcStack.vpc,
@@ -1764,7 +1817,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // rest. These actions have no resource-level permissions. Textract reads
     // the ingest-bucket objects with this role's own S3 access
     // (grantBucketAccess below), so no Textract service role is needed. Like
-    // the other statements here, this lands on the shared lambdaRole.
+    // the other statements here, this lands on the dedicated knowledgeBaseRole.
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -1782,11 +1835,15 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
+    // Bedrock for the knowledge base: embeddings (Cohere v3 and the candidate
+    // embedding models) and Haiku Converse for guideline-mode labelling. It used
+    // to get these through the role shared with lambdaTextGen; with its own role
+    // it needs the statement explicitly. Same statement object, plain ARNs.
+    lambdaKnowledgeBase.addToRolePolicy(textGenBedrockPolicyStatement);
+
     // Guideline-mode section labelling reads the Haiku model id from SSM and
-    // calls Converse. lambdaKnowledgeBase shares lambdaRole with lambdaTextGen,
-    // which already holds the Bedrock Haiku statement (textGenBedrockPolicyStatement);
-    // this explicit SSM grant documents the dependency. Plain ARN strings, no
-    // token references back to the function (see the circular-dependency note below).
+    // calls Converse (Bedrock statement above). Plain ARN strings, no token
+    // references back to the function (see the circular-dependency note below).
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter"],
@@ -1795,12 +1852,11 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Self-invoke permission for the async document-ingestion worker
     // (trigger_document_batch -> lambda_client.invoke(InvocationType="Event")).
-    // Uses a manually-built ARN (not lambdaKnowledgeBase.functionArn) because
-    // lambdaKnowledgeBase shares lambdaRole with other functions; a live
-    // Fn::GetAtt reference back to lambdaKnowledgeBase here would make the
-    // shared role's policy depend on the function while the function also
-    // depends on the policy (auto-added by addToRolePolicy) — a circular
-    // dependency that fails changeset creation for the whole shared-role graph.
+    // Uses a manually-built ARN (not lambdaKnowledgeBase.functionArn): the
+    // function DependsOn its role's DefaultPolicy (auto-added by
+    // addToRolePolicy), so a live Fn::GetAtt reference back to
+    // lambdaKnowledgeBase in that policy would be a circular dependency that
+    // fails changeset creation. This holds with the dedicated knowledgeBaseRole too.
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["lambda:InvokeFunction"],
@@ -1829,7 +1885,7 @@ export class ApiGatewayStack extends cdk.Stack {
       sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin/*`,
     });
 
-    // lambdaRole already has read access to db.secretPathUser through the stack-wide policy
+    // userFunctionRole reads db.secretPathUser (granted where the role is created).
 
     const lambdaUserFunction = new lambda.Function(this, `${id}-userFunction`, {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -1850,7 +1906,7 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 512,
       reservedConcurrentExecutions: reservedConcurrency(25),
       layers: [postgres, jwt],
-      role: lambdaRole,
+      role: userFunctionRole,
       tracing: lambda.Tracing.ACTIVE,
     });
     jwtSecret.grantRead(lambdaUserFunction);
@@ -1985,8 +2041,8 @@ export class ApiGatewayStack extends cdk.Stack {
     // Evaluation-harness session tags (handlers/utils/evalTag.js). Read-only
     // access to the one signing secret; "-??????" is the random suffix Secrets
     // Manager appends to secret ARNs. Note: this function uses the shared
-    // postgres lambdaRole (which already reads the DB and JWT secrets), so the
-    // grant lands on that role; only chatSessionHandler reads the secret.
+    // postgres lambdaRole (which reads the DB user secret), so the grant lands
+    // on that role; only chatSessionHandler reads the secret.
     if (props.evalSigningSecretName) {
       lambdaChatSessionFunction.addEnvironment("EVAL_SIGNING_SECRET_NAME", props.evalSigningSecretName);
       lambdaChatSessionFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -2184,6 +2240,12 @@ export class ApiGatewayStack extends cdk.Stack {
     wsConnectionsTable.grant(connectFunction, "dynamodb:PutItem");
     wsConnectionsTable.grant(disconnectFunction, "dynamodb:DeleteItem");
     wsConnectionsTable.grant(defaultFunction, "dynamodb:GetItem");
+
+    // Anonymous surface: the WebSocket functions' auto-created roles carry the same
+    // boundary as the request-handling roles above.
+    for (const fn of [connectFunction, disconnectFunction, defaultFunction]) {
+      iam.PermissionsBoundary.of(fn).apply(requestHandlerBoundary);
+    }
 
     jwtSecret.grantRead(connectFunction);
     // Grant the default function permission to invoke the text generation function
