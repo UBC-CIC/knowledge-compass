@@ -1048,6 +1048,8 @@ paths:
                   warnings:
                     type: array
                     items: { type: string }
+                  deleted_page_count: { type: integer }
+                  retained_shared_page_count: { type: integer }
         "400":
           description: Invalid request
         "404":

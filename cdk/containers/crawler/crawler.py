@@ -176,6 +176,57 @@ def upsert_source(conn, url: str, name: str, source_type: str = "web") -> str:
         return str(cur.fetchone()[0])
 
 
+# ── Crawl provenance (migration 038 web_source_owners) ───────────────────────
+
+def ownership_enabled(conn) -> bool:
+    """True when the web_source_owners table exists (an older DB lacks it)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.web_source_owners') IS NOT NULL")
+        row = cur.fetchone()
+    return bool(row and row[0])
+
+
+def resolve_owning_data_source(conn, job_id: str, seed_url: str):
+    """
+    The website data source this crawl writes for: the data_source_id of the
+    adopted ingestion run (JOB_ID), else the website data source named by the
+    seed URL (standalone CLI). None when neither resolves.
+    """
+    with conn.cursor() as cur:
+        if job_id:
+            cur.execute(
+                "SELECT data_source_id FROM ingestion_runs WHERE id = %s::uuid",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0])
+        cur.execute(
+            """
+            SELECT id FROM data_sources
+            WHERE type = 'website'::data_source_type AND name = %s
+            ORDER BY created_at
+            LIMIT 1
+            """,
+            (seed_url,),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row and row[0] else None
+
+
+def record_source_owner(conn, source_id: str, data_source_id: str) -> None:
+    """Link a web sources row to the website that crawled it (additive; refreshes last_seen_at)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO web_source_owners (source_id, data_source_id)
+            VALUES (%s::uuid, %s::uuid)
+            ON CONFLICT (source_id, data_source_id) DO UPDATE SET last_seen_at = now()
+            """,
+            (source_id, data_source_id),
+        )
+
+
 def start_crawl_run(conn, source_id: str, job_id: str = None) -> str:
     """
     Begin (or adopt) an ingestion run in the unified `ingestion_runs` table.
@@ -498,8 +549,21 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
         # write_to_db is called on its own.
         space_id = (ACTIVE_SPACE or load_active_space(conn))["id"]
 
+        # Owning website data source, stamped on every row this crawl writes so
+        # deleting the website removes them (web_source_owners, migration 038).
+        if ownership_enabled(conn):
+            owner_id = resolve_owning_data_source(conn, job_id, seed_url)
+            if not owner_id:
+                print(f"[db] no owning website data source for JOB_ID={job_id}; "
+                      "pages will not be stamped", file=sys.stderr)
+        else:
+            owner_id = None
+            print("[db] web_source_owners table missing; pages will not be stamped", file=sys.stderr)
+
         # One source row for the seed domain (the website as a whole)
         seed_source_id = upsert_source(conn, seed_url, seed_url, source_type="web")
+        if owner_id:
+            record_source_owner(conn, seed_source_id, owner_id)
         conn.commit()
 
         run_id = start_crawl_run(conn, seed_source_id, job_id=job_id)
@@ -513,6 +577,8 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
 
             # Each page is its own source row
             page_source_id = upsert_source(conn, page["url"], page["title"] or page["url"], source_type="web")
+            if owner_id:
+                record_source_owner(conn, page_source_id, owner_id)
 
             # Change detection — only embed chunks whose body changed or that have
             # no current vector in the active embedding space

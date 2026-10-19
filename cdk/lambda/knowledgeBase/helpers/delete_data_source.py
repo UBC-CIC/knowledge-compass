@@ -4,6 +4,7 @@ import logging
 from helpers.cors import get_cors_headers
 from helpers.data_source_cleanup import plan_removal, remove_data_sources
 from helpers.upload_identity import delete_s3_objects
+from helpers.web_sources import delete_website_pages
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -29,6 +30,7 @@ def _fetch_data_source(connection, data_source_id: str) -> dict | None:
             FROM data_sources
             WHERE id = %s::uuid
             LIMIT 1
+            FOR UPDATE
             """,
             (data_source_id,),
         )
@@ -54,6 +56,13 @@ def delete_data_source(event, body, connection, data_source_id: str):
     - deletes the matching pgvector `sources` row (its chunks cascade) so they
       stop being served by retrieval, unless another data source still maps
       to the same url (e.g. two documents sharing one citation link)
+    - for a website, deletes every crawled page row (seed included) it solely
+      owns plus unowned legacy pages inside its site; pages another live
+      website also crawled are kept (helpers/web_sources.py). The counts are
+      returned as deleted_page_count / retained_shared_page_count.
+
+    The data_sources row is locked FOR UPDATE for the whole transaction; any
+    failure rolls everything back and returns 500.
 
     Then, after commit, best-effort deletes the underlying S3 object(s)
     (primary, companion, transcript). S3 failures are returned as warnings:
@@ -66,14 +75,13 @@ def delete_data_source(event, body, connection, data_source_id: str):
 
     plan = plan_removal(connection, [row])
 
+    page_result = {"deleted_page_count": 0, "retained_shared_page_count": 0}
     try:
-        remove_data_sources(connection, plan)
         if row["type"] == "website":
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM sources WHERE source_type = 'web'::source_type AND url = %s",
-                    (row["name"],),
-                )
+            page_result = delete_website_pages(
+                connection, data_source_id=row["id"], seed_url=row["name"]
+            )
+        remove_data_sources(connection, plan)
         connection.commit()
     except Exception as e:
         connection.rollback()
@@ -94,5 +102,6 @@ def delete_data_source(event, body, connection, data_source_id: str):
             "data_source_id": data_source_id,
             "deleted_data_source_ids": plan["ids"],
             "warnings": warnings,
+            **page_result,
         },
     )
