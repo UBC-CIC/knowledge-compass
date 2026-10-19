@@ -219,6 +219,140 @@ describe("API Lambda IAM least privilege", () => {
     expect([deny.Action].flat()).toEqual(["cognito-idp:Admin*"]);
   });
 
+  // --- Finding f-7f03f151: authenticated self-invokes and admin MFA ---------
+
+  const policyStatements = (): { roles: string[]; statement: any }[] =>
+    Object.values(resources)
+      .filter((p) => p.Type === "AWS::IAM::Policy")
+      .flatMap((p) =>
+        p.Properties.PolicyDocument.Statement.map((statement: any) => ({
+          roles: (p.Properties.Roles || []).map((x: any) => x.Ref),
+          statement,
+        }))
+      );
+
+  const workerInvokeSecretId = (): string => {
+    const hits = Object.entries(resources).filter(
+      ([, r]) =>
+        r.Type === "AWS::SecretsManager::Secret" && r.Properties.GenerateSecretString?.GenerateStringKey === "token"
+    );
+    expect(hits).toHaveLength(1);
+    return hits[0][0];
+  };
+
+  test("only the knowledge base role may invoke lambdaKnowledgeBase", () => {
+    const kbRole = roleOf("lambdaKnowledgeBase");
+    const invokers = policyStatements().filter(
+      ({ statement }) =>
+        statement.Effect === "Allow" &&
+        [statement.Action].flat().some((a: string) => a === "lambda:InvokeFunction" || a === "lambda:*") &&
+        JSON.stringify(statement.Resource).includes("lambdaKnowledgeBase")
+    );
+    expect(invokers.length).toBeGreaterThan(0);
+    for (const { roles } of invokers) expect(roles).toEqual([kbRole]);
+  });
+
+  test("the worker invoke secret is readable only by the knowledge base role and wired to it", () => {
+    const secretId = workerInvokeSecretId();
+    const readers = policyStatements().filter(({ statement }) =>
+      JSON.stringify(statement.Resource ?? "").includes(`"Ref":"${secretId}"`)
+    );
+    expect(readers.length).toBeGreaterThan(0);
+    for (const { roles, statement } of readers) {
+      expect(roles).toEqual([roleOf("lambdaKnowledgeBase")]);
+      expect([statement.Action].flat()).toContain("secretsmanager:GetSecretValue");
+    }
+    expect(resources.lambdaKnowledgeBase.Properties.Environment.Variables.WORKER_INVOKE_SECRET_ARN).toEqual({
+      Ref: secretId,
+    });
+  });
+
+  test("the admin user pool requires TOTP MFA and keeps its logical ID", () => {
+    const pools = Object.entries(resources).filter(([, r]) => r.Type === "AWS::Cognito::UserPool");
+    expect(pools).toHaveLength(1);
+    const [poolId, pool] = pools[0];
+    // Recorded before the MFA change; a different ID would mean pool replacement.
+    expect(poolId).toBe("KCApipoolA08D0866");
+    expect(pool.Properties.MfaConfiguration).toBe("ON");
+    expect(pool.Properties.EnabledMfas).toEqual(["SOFTWARE_TOKEN_MFA"]);
+    expect(pool.Properties.SmsConfiguration).toBeUndefined();
+    expect(pool.Properties.DeletionProtection).toBe("ACTIVE");
+    expect(pool.Properties.AdminCreateUserConfig.AllowAdminCreateUserOnly).toBe(true);
+    expect(pool.DeletionPolicy).toBe("Retain");
+    expect(pool.UpdateReplacePolicy).toBe("Retain");
+  });
+
+  // --- Finding f-81bbc719: identity pool role mapping ---------------------
+
+  const onlyOf = (type: string): [string, any] => {
+    const hits = Object.entries(resources).filter(([, r]) => r.Type === type);
+    expect(hits).toHaveLength(1);
+    return hits[0];
+  };
+
+  const adminGroupRoleId = (): string => {
+    const groups = Object.values(resources).filter(
+      (r) => r.Type === "AWS::Cognito::UserPoolGroup" && r.Properties.GroupName === "admin"
+    );
+    expect(groups).toHaveLength(1);
+    return groups[0].Properties.RoleArn["Fn::GetAtt"][0];
+  };
+
+  test("the identity pool issues no unauthenticated identities", () => {
+    const [, pool] = onlyOf("AWS::Cognito::IdentityPool");
+    expect(pool.Properties.AllowUnauthenticatedIdentities).toBe(false);
+  });
+
+  test("the default authenticated role is not the admin role and holds no permissions", () => {
+    const [, attachment] = onlyOf("AWS::Cognito::IdentityPoolRoleAttachment");
+    const authRoleId = attachment.Properties.Roles.authenticated["Fn::GetAtt"][0];
+    expect(authRoleId).not.toBe(adminGroupRoleId());
+    expect(statementsFor(authRoleId)).toEqual([]);
+    expect(resources[authRoleId].Properties.ManagedPolicyArns).toBeUndefined();
+    expect(resources[authRoleId].Properties.Policies).toBeUndefined();
+  });
+
+  test("user pool identities resolve roles from the token and deny when ambiguous", () => {
+    const [, attachment] = onlyOf("AWS::Cognito::IdentityPoolRoleAttachment");
+    const [poolId] = onlyOf("AWS::Cognito::UserPool");
+    const [clientId] = onlyOf("AWS::Cognito::UserPoolClient");
+    const mapping = attachment.Properties.RoleMappings.userPool;
+    expect(mapping.Type).toBe("Token");
+    expect(mapping.AmbiguousRoleResolution).toBe("Deny");
+    const provider = JSON.stringify(mapping.IdentityProvider);
+    expect(provider).toContain(`"Fn::GetAtt":["${poolId}","ProviderName"]`);
+    expect(provider).toContain(`"Ref":"${clientId}"`);
+  });
+
+  test("the admin role trusts only authenticated identities from this user pool", () => {
+    const [poolId] = onlyOf("AWS::Cognito::UserPool");
+    const [identityPoolId] = onlyOf("AWS::Cognito::IdentityPool");
+    const trust = resources[adminGroupRoleId()].Properties.AssumeRolePolicyDocument.Statement;
+    expect(trust).toHaveLength(1);
+    const cond = trust[0].Condition;
+    expect(cond.StringEquals["cognito-identity.amazonaws.com:aud"]).toEqual({ Ref: identityPoolId });
+    expect(cond["ForAnyValue:StringLike"]["cognito-identity.amazonaws.com:amr"]).toBe("authenticated");
+    expect(cond["ForAnyValue:StringEquals"]["cognito-identity.amazonaws.com:amr"]).toEqual({
+      "Fn::GetAtt": [poolId, "ProviderName"],
+    });
+  });
+
+  test("execute-api grants name this REST API and no stale /instructor/ path", () => {
+    const [apiId] = onlyOf("AWS::ApiGateway::RestApi");
+    const invokes = policyStatements().filter(({ statement }) =>
+      [statement.Action].flat().includes("execute-api:Invoke")
+    );
+    expect(invokes.length).toBeGreaterThan(0);
+    for (const { statement } of invokes) {
+      for (const arn of [statement.Resource].flat()) {
+        const json = JSON.stringify(arn);
+        expect(json).toContain(`"Ref":"${apiId}"`);
+        expect(json).not.toContain(":*/");
+        expect(json).not.toContain("/instructor/");
+      }
+    }
+  });
+
   test("no intra-stack dependency cycle", () => {
     const ids = new Set(Object.keys(resources));
     const refs = (node: any, out: Set<string>): Set<string> => {

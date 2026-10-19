@@ -17,6 +17,7 @@ import { Asset } from "aws-cdk-lib/aws-s3-assets";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as cr from "aws-cdk-lib/custom-resources";
@@ -192,10 +193,13 @@ export class ApiGatewayStack extends cdk.Stack {
       // Admins only: accounts are created by an existing admin (console or
       // admin-create-user, see Docs/DEPLOYMENT_GUIDE.md), never self-registered.
       selfSignUpEnabled: false,
-      // TOTP authenticator apps only. OPTIONAL rather than REQUIRED (decision
-      // D6). Users with TOTP enrolled are challenged at sign-in; the admin
-      // login page also handles the setup step should MFA become REQUIRED.
-      mfa: cognito.Mfa.OPTIONAL,
+      // TOTP authenticator apps are REQUIRED for every admin (finding
+      // f-7f03f151). The admin login page (pages/Admin/AdminLogin.tsx) runs the
+      // TOTP setup step at an admin's first sign-in after this change.
+      // MfaConfiguration is "Update requires: No interruption", and deletion
+      // protection + RETAIN guard against replacement. If Cognito rejects the
+      // change on the existing pool, revert to cognito.Mfa.OPTIONAL.
+      mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: {
         otp: true,
         sms: false,
@@ -312,7 +316,9 @@ export class ApiGatewayStack extends cdk.Stack {
       this,
       `${id}-identity-pool`,
       {
-        allowUnauthenticatedIdentities: true,
+        // No guest credentials: the frontend configures no identityPoolId and public
+        // users authenticate with the public-token JWT (finding f-81bbc719).
+        allowUnauthenticatedIdentities: false,
         identityPoolName: `${id}IdentityPool`,
         cognitoIdentityProviders: [
           {
@@ -371,9 +377,39 @@ export class ApiGatewayStack extends cdk.Stack {
 
     const data = Fn.transform("AWS::Include", { Location: asset.s3ObjectUrl });
 
+    // CMK for the API access-log and WAF log groups. The key policy names log groups
+    // by a pseudo-parameter ARN pattern only: referencing a LogGroup token here would
+    // create LogGroup -> KmsKeyId -> Key -> policy -> LogGroup (a cycle).
+    const apiLogsKey = new kms.Key(this, `${id}-ApiLogsKey`, {
+      description: `${id} API Gateway and WAF log encryption`,
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    apiLogsKey.addToResourcePolicy(new iam.PolicyStatement({
+      sid: "AllowCloudWatchLogsForThisAccountRegion",
+      principals: [new iam.ServicePrincipal(`logs.${this.region}.amazonaws.com`)],
+      actions: ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"],
+      resources: ["*"],
+      conditions: {
+        ArnLike: {
+          "kms:EncryptionContext:aws:logs:arn": `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:*`,
+        },
+      },
+    }));
+    // Investigation-appropriate default; lower deliberately if needed.
+    const apiLogRetention = logs.RetentionDays.ONE_YEAR;
+    // Defence in depth: CloudWatch masks email addresses that slip into these logs.
+    const apiLogDataProtection = new logs.DataProtectionPolicy({
+      name: `${id}-api-logs-data-protection`,
+      description: "Mask email addresses in API and WAF logs",
+      identifiers: [logs.DataIdentifier.EMAILADDRESS],
+    });
+
     const accessLogGroup = new logs.LogGroup(this, `${id}-ApiAccessLogs`, {
-      retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      retention: apiLogRetention,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryptionKey: apiLogsKey,
+      dataProtectionPolicy: apiLogDataProtection,
     });
 
     // Create the API Gateway REST API.
@@ -390,25 +426,42 @@ export class ApiGatewayStack extends cdk.Stack {
         stageName: "prod",
         tracingEnabled: true,
         description: "Deployment with flashcard support - Nov 18 2025",
-        loggingLevel: apigateway.MethodLoggingLevel.INFO,
-        dataTraceEnabled: true,
+        // Data trace would record full request and response bodies, including the
+        // token minted by GET /user/publicToken and chat bodies, so it stays off.
+        loggingLevel: apigateway.MethodLoggingLevel.ERROR,
+        dataTraceEnabled: false,
         metricsEnabled: true,
         
         accessLogDestination: new apigateway.LogGroupLogDestination(
           accessLogGroup
         ),
         
-        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
-          caller: true,
-          httpMethod: true,
-          ip: true,
-          protocol: true,
-          requestTime: true,
-          resourcePath: true,
-          responseLength: true,
-          status: true,
-          user: true,
-        }),
+        // The standard fields (same key names as jsonWithStandardFields, so existing
+        // queries keep working) plus the custom authorizers' identity. caller/user are
+        // empty under a TOKEN authorizer; the authorizer fields are what attribute a
+        // request (finding f-0d57a9d0): admin requests carry the Cognito sub and email
+        // (email is masked by apiLogDataProtection unless unmasked by an investigator),
+        // user-tier requests carry the bound guest id or "anonymous:<jti>" plus the
+        // access token's jti (tokenId). Never the token itself.
+        accessLogFormat: apigateway.AccessLogFormat.custom(
+          JSON.stringify({
+            requestId: apigateway.AccessLogField.contextRequestId(),
+            ip: apigateway.AccessLogField.contextIdentitySourceIp(),
+            caller: apigateway.AccessLogField.contextIdentityCaller(),
+            user: apigateway.AccessLogField.contextIdentityUser(),
+            requestTime: apigateway.AccessLogField.contextRequestTime(),
+            httpMethod: apigateway.AccessLogField.contextHttpMethod(),
+            resourcePath: apigateway.AccessLogField.contextResourcePath(),
+            status: apigateway.AccessLogField.contextStatus(),
+            protocol: apigateway.AccessLogField.contextProtocol(),
+            responseLength: apigateway.AccessLogField.contextResponseLength(),
+            authorizerPrincipalId: apigateway.AccessLogField.contextAuthorizerPrincipalId(),
+            authorizerUserId: apigateway.AccessLogField.contextAuthorizer("userId"),
+            authorizerRole: apigateway.AccessLogField.contextAuthorizer("role"),
+            authorizerEmail: apigateway.AccessLogField.contextAuthorizer("email"),
+            authorizerTokenId: apigateway.AccessLogField.contextAuthorizer("tokenId"),
+          })
+        ),
         
         methodOptions: {
           // Default for all endpoints
@@ -773,8 +826,10 @@ export class ApiGatewayStack extends cdk.Stack {
     // Authorization header is redacted so tokens never reach the logs.
     const wafLogGroup = new logs.LogGroup(this, `${id}-WafLogs`, {
       logGroupName: `aws-waf-logs-${id}`,
-      retention: logs.RetentionDays.THREE_MONTHS,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      retention: apiLogRetention,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryptionKey: apiLogsKey,
+      dataProtectionPolicy: apiLogDataProtection,
     });
 
     new wafv2.CfnLoggingConfiguration(this, `${id}-waf-logging`, {
@@ -811,6 +866,11 @@ export class ApiGatewayStack extends cdk.Stack {
           "ForAnyValue:StringLike": {
             "cognito-identity.amazonaws.com:amr": "authenticated",
           },
+          // Only identities that signed in through this user pool (finding f-81bbc719).
+          "ForAnyValue:StringEquals": {
+            "cognito-identity.amazonaws.com:amr":
+              this.userPool.userPoolProviderName,
+          },
         },
         "sts:AssumeRoleWithWebIdentity"
       ),
@@ -822,12 +882,12 @@ export class ApiGatewayStack extends cdk.Stack {
           createPolicyStatement(
             ["execute-api:Invoke"],
             [
-              // Wildcard API id: SpecRestApi already Refs these Lambdas in OpenAPI.
-              // Referencing this.api.restApiId here closes a CloudFormation cycle
-              // and KC-Api changeset creation fails.
-              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin/*`,
-              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/instructor/*`,
-              `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/user/*`,
+              // Scoped to this REST API (finding f-81bbc719). Safe from the documented
+              // cycle: this standalone AWS::IAM::Policy only adds Policy -> RestApi and
+              // nothing (Lambdas, RestApi, Stage, Role) depends on it. Lambdas must
+              // still never Ref this.api, since the SpecRestApi body Refs them.
+              `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/prod/*/admin/*`,
+              `arn:aws:execute-api:${this.region}:${this.account}:${this.api.restApiId}/prod/*/user/*`,
             ]
           ),
         ],
@@ -846,6 +906,27 @@ export class ApiGatewayStack extends cdk.Stack {
             },
             "ForAnyValue:StringLike": {
               "cognito-identity.amazonaws.com:amr": "unauthenticated",
+            },
+          },
+          "sts:AssumeRoleWithWebIdentity"
+        ),
+      }
+    );
+
+    // Default role for non-admin authenticated identities. Intentionally holds no
+    // permissions; admins receive adminRole only via the admin group's role claim.
+    const authenticatedRole = new iam.Role(
+      this,
+      `${id}-AuthenticatedRole`,
+      {
+        assumedBy: new iam.FederatedPrincipal(
+          "cognito-identity.amazonaws.com",
+          {
+            StringEquals: {
+              "cognito-identity.amazonaws.com:aud": this.identityPool.ref,
+            },
+            "ForAnyValue:StringLike": {
+              "cognito-identity.amazonaws.com:amr": "authenticated",
             },
           },
           "sts:AssumeRoleWithWebIdentity"
@@ -996,6 +1077,22 @@ export class ApiGatewayStack extends cdk.Stack {
     db.secretPathUser.grantRead(textGenRole);
     const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(knowledgeBaseRole);
+    // Shared token that authenticates lambdaKnowledgeBase self-invocations
+    // (helpers/worker_envelope.py, finding f-7f03f151): main.py runs a {task}
+    // payload only when it carries this value. Generated by Secrets Manager,
+    // never set in code, and readable ONLY by knowledgeBaseRole, so holding
+    // lambda:InvokeFunction on the function is not enough to run a worker.
+    const workerInvokeSecret = new secretsmanager.Secret(this, `${id}-WorkerInvokeSecret`, {
+      secretName: `${id}-KC-WorkerInvokeSecret`,
+      description: "Shared token that authenticates lambdaKnowledgeBase self-invocations (helpers/worker_envelope.py)",
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({}),
+        generateStringKey: "token",
+        excludePunctuation: true,
+        passwordLength: 64,
+      },
+    });
+    workerInvokeSecret.grantRead(knowledgeBaseRole);
 
     const coglambdaRole = new iam.Role(
       this,
@@ -1068,8 +1165,17 @@ export class ApiGatewayStack extends cdk.Stack {
     new cognito.CfnIdentityPoolRoleAttachment(this, `${id}-IdentityPoolRoles`, {
       identityPoolId: this.identityPool.ref,
       roles: {
-        authenticated: adminRole.roleArn,
+        authenticated: authenticatedRole.roleArn,
         unauthenticated: unauthenticatedRole.roleArn,
+      },
+      // Token mapping (finding f-81bbc719): adminRole is assumed only through the
+      // admin group's cognito:roles claim; a user with no group role is denied.
+      roleMappings: {
+        userPool: {
+          identityProvider: `${this.userPool.userPoolProviderName}:${this.appClient.userPoolClientId}`,
+          type: "Token",
+          ambiguousRoleResolution: "Deny",
+        },
       },
     });
 
@@ -1404,6 +1510,7 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       contentPolicyConfig: {
         filtersConfig: [
+          // outputStrength must be NONE: AWS applies PROMPT_ATTACK to user input only, and this guardrail is applied with source='INPUT' only.
           { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
         ],
       },
@@ -1804,6 +1911,8 @@ export class ApiGatewayStack extends cdk.Stack {
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         REGION: this.region,
         LAMBDA_FUNCTION_NAME: `${id}-lambdaKnowledgeBase`,
+        // Invoke token for self-invocations (helpers/worker_envelope.py).
+        WORKER_INVOKE_SECRET_ARN: workerInvokeSecret.secretArn,
         // PDF text extraction (helpers/pdf_text.py): "always" reads every PDF
         // with Amazon Textract, "auto" only PDFs without a usable text layer
         // (scans, image-only exports), "off" uses pypdf alone.
@@ -1861,6 +1970,8 @@ export class ApiGatewayStack extends cdk.Stack {
     // addToRolePolicy), so a live Fn::GetAtt reference back to
     // lambdaKnowledgeBase in that policy would be a circular dependency that
     // fails changeset creation. This holds with the dedicated knowledgeBaseRole too.
+    // IAM is not the only gate: every self-invoke payload must also carry the
+    // invoke_token from workerInvokeSecret (helpers/worker_envelope.py).
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["lambda:InvokeFunction"],
@@ -2303,8 +2414,10 @@ export class ApiGatewayStack extends cdk.Stack {
       this,
       `${id}-WebSocketAccessLogs`,
       {
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        retention: apiLogRetention,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        encryptionKey: apiLogsKey,
+        dataProtectionPolicy: apiLogDataProtection,
       }
     );
 
@@ -2317,15 +2430,20 @@ export class ApiGatewayStack extends cdk.Stack {
       defaultRouteSettings: {
         throttlingRateLimit: 20,
         throttlingBurstLimit: 40,
+        // Explicit: data trace would log the client frames.
+        dataTraceEnabled: false,
       },
       accessLogSettings: {
         destinationArn: wsAccessLogGroup.logGroupArn,
+        // No $context.message: the client frame holds the visitor's question and
+        // token, so it is never logged. No $context.authorizer.* either: this API has
+        // no API Gateway authorizer (websocket/connect.js verifies the token itself),
+        // so those fields would always be empty.
         format: JSON.stringify({
           requestId: "$context.requestId",
           requestTime: "$context.requestTime",
           routeKey: "$context.routeKey",
           connectionId: "$context.connectionId",
-          message: "$context.message",
           status: "$context.status",
         }),
       },
