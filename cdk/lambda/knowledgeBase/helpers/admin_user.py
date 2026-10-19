@@ -10,15 +10,25 @@ Mirrors cdk/lambda/authorization/staffIdentity.js (ensureStaffUser with
 role='admin', elevate=True); keep the algorithm and SQL in sync. An email
 match is only used to link a legacy 'cognito' row that has no sub and owns no
 chat sessions, or to take the verified address away from any other row. A
-guest row is never linked or returned.
+guest row is never linked or returned. (The JS-only `onWrite` hook, used for
+the promote_user admin_audit insert, has no Python counterpart.)
 
-Never logs email addresses or ids.
+Never logs email addresses or users ids. A privilege-changing write (admin
+row created, legacy row linked, or a non-admin row elevated) logs one
+structured line with the acting admin's Cognito sub and the outcome only
+(finding f-7f03f151).
 """
 
+import json
 import logging
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+def _log_provision(actor_sub: str, outcome: str) -> None:
+    """One audit line for an admin-row write: actor sub and outcome, nothing else."""
+    logger.info(json.dumps({"audit": "admin_user.provision", "actor_sub": actor_sub, "outcome": outcome}))
 
 
 def normalize_email(email: str | None) -> str:
@@ -96,6 +106,8 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
                 (next_email, user_id),
             )
             updated = cursor.fetchone()
+            if row[2] != "admin":
+                _log_provision(cognito_sub, "elevated")
             return str(updated[0]) if updated else user_id
 
         if normalized:
@@ -132,11 +144,11 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
                     (cognito_sub, legacy_id),
                 )
                 linked = cursor.fetchone()
+                _log_provision(cognito_sub, "linked")
                 return str(linked[0]) if linked else legacy_id
             if holders:
                 _detach_email(cursor, normalized, None)
 
-        logger.info("Creating missing admin users row")
         cursor.execute(
             """
             INSERT INTO users (
@@ -148,4 +160,5 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
             (normalized, normalized, cognito_sub),
         )
         created = cursor.fetchone()
+        _log_provision(cognito_sub, "created")
         return str(created[0]) if created else None

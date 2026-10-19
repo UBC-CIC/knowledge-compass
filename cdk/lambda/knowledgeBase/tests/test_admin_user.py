@@ -7,6 +7,7 @@ sub (finding f-23c5bf7c); an email match never returns a guest row.
 
 import _setup  # noqa: F401  (must precede helpers imports)
 
+import json
 import unittest
 
 from helpers import admin_user
@@ -127,6 +128,32 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
                 conn = FakeConnection(holders=[holder])
                 self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL), "new-row")
                 self.assertTrue(conn.sql_with("UPDATE users SET email = NULL"))
+
+    def _provision_lines(self, conn):
+        """(result, provision audit lines, all log output) for one call."""
+        with self.assertLogs(level="INFO") as logs:
+            admin_user.logger.info("marker")  # assertLogs needs at least one record
+            result = admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL)
+        lines = [json.loads(r.getMessage()) for r in logs.records
+                 if r.getMessage().startswith('{"audit": "admin_user.provision"')]
+        return result, lines, "\n".join(logs.output)
+
+    def test_privilege_changing_writes_log_the_actor_and_outcome_only(self):
+        cases = [
+            (FakeConnection(), "created"),
+            (FakeConnection(holders=[(ROW, "cognito", None, False)]), "linked"),
+            (FakeConnection(by_sub=(ROW, EMAIL, "user")), "elevated"),
+        ]
+        for conn, outcome in cases:
+            with self.subTest(outcome=outcome):
+                _, lines, output = self._provision_lines(conn)
+                self.assertEqual(lines, [{"audit": "admin_user.provision", "actor_sub": SUB, "outcome": outcome}])
+                self.assertNotIn(EMAIL, output)
+                self.assertNotIn(ROW, output)
+
+    def test_existing_admin_row_logs_no_provision_line(self):
+        _, lines, _ = self._provision_lines(FakeConnection(by_sub=(ROW, EMAIL, "admin")))
+        self.assertEqual(lines, [])
 
     def test_only_the_link_lookup_matches_on_email(self):
         conn = FakeConnection(holders=[(GUEST, "guest", None, False)])
