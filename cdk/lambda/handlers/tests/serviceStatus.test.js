@@ -16,7 +16,9 @@ async function invoke(handlerName, sql, event) {
   return { statusCode: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : null };
 }
 
-const adminContext = { authorizer: { role: "admin", email: "admin@example.com" } };
+const adminContext = {
+  authorizer: { role: "admin", email: "admin@example.com", userId: "11111111-2222-3333-4444-555555555555" },
+};
 
 // ── PUT / GET /admin/system-settings ─────────────────────────────────────────
 
@@ -151,9 +153,14 @@ test("PUT stays admin-only: non-admin callers are rejected before any query", as
     assert.equal(res.statusCode, 403);
     assert.equal(sql.calls.length, 0);
   }
-  // An admin role without the authorizer email is refused too.
+  // An admin role without the authorizer userId (Cognito sub) is refused too,
+  // even when it carries an email.
   const sql = settingsSql();
-  const res = await put(sql, { service_status: "banner", service_message: "x" }, { authorizer: { role: "admin" } });
+  const res = await put(
+    sql,
+    { service_status: "banner", service_message: "x" },
+    { authorizer: { role: "admin", email: "admin@example.com" } }
+  );
   assert.equal(res.statusCode, 401);
   assert.equal(updateQuery(sql), undefined);
 });

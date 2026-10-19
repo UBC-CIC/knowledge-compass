@@ -72,6 +72,9 @@ test("current, fresh credential: bound access token and no rotation", async () =
   assert.equal(decodeFakeToken(res.body.token).payload.sub, USER);
   assert.equal(res.body.credential, undefined);
   assert.equal(sql.state.row.credential_version, 0);
+  // Only guest rows can exchange a credential (staff rows never get a user token).
+  const select = sql.queries().find((q) => q.text.startsWith("SELECT credential_version"));
+  assert.ok(select.text.includes("identity_source = 'guest'"));
 });
 
 test("credential older than a day is rotated and a replacement returned", async () => {

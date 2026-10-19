@@ -109,7 +109,8 @@ class LockStateTest(unittest.TestCase):
 EVENT = {"headers": {}, "requestContext": {}}
 
 ENTRY_POINTS = {
-    # Each call, with an empty request, stops at its own 400 validation once the lock check passes.
+    # Each call, with an empty request, stops at its own validation once the lock check passes:
+    # 400 for bad input, or 401 because the empty request has no authorizer sub (admin_user.py).
     "start_ingestion_job": lambda conn: start.start_ingestion_job(EVENT, {}, conn),
     "stage_data_sources": lambda conn: stage.stage_data_sources(EVENT, {}, conn),
     "stage_data_sources_batch": lambda conn: batch.stage_data_sources_batch(EVENT, {}, conn),
@@ -132,19 +133,19 @@ class EntryPointTest(unittest.TestCase):
         for name, call in ENTRY_POINTS.items():
             with self.subTest(entry_point=name):
                 response = call(conn_with(UNLOCKED))
-                self.assertEqual(response["statusCode"], 400)   # their own validation, not the lock
+                self.assertIn(response["statusCode"], (400, 401))   # their own validation, not the lock
 
     def test_all_four_proceed_when_the_lock_has_expired(self):
         for name, call in ENTRY_POINTS.items():
             with self.subTest(entry_point=name):
-                self.assertEqual(call(conn_with(EXPIRED))["statusCode"], 400)
+                self.assertIn(call(conn_with(EXPIRED))["statusCode"], (400, 401))
 
     def test_all_four_proceed_when_the_table_is_missing(self):
         for name, call in ENTRY_POINTS.items():
             with self.subTest(entry_point=name):
                 conn = conn_with(UNLOCKED)
                 conn.fail_next(LOCK_SQL, PgError("42P01"))
-                self.assertEqual(call(conn)["statusCode"], 400)
+                self.assertIn(call(conn)["statusCode"], (400, 401))
 
 
 if __name__ == "__main__":

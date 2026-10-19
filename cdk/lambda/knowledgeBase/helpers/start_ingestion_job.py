@@ -3,7 +3,11 @@ import json
 import logging
 from uuid import uuid4
 
-from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
+from helpers.admin_user import (
+    admin_email_from_request,
+    admin_sub_from_request,
+    get_or_create_admin_user_id,
+)
 from helpers.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
 from helpers.process_crawler_batch import process_crawler_batch
@@ -86,11 +90,13 @@ def start_ingestion_job(event, body, connection):
     if locked:
         return locked
 
+    # Admin identity is the Cognito sub, never an email (see admin_user.py).
     created_by = admin_email_from_request(event, body)
-    if not created_by:
-        return _response(event, 400, {"error": "Missing created_by"})
+    admin_sub = admin_sub_from_request(event)
+    if not admin_sub:
+        return _response(event, 401, {"error": "Unauthorized"})
 
-    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, admin_sub, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
     connection.commit()

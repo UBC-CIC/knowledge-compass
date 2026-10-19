@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
+const { isStaffEmailDomain } = require("./utils/staffEmailDomains.js");
 const {
   exchangeCredential,
   issueAccessToken,
@@ -116,21 +117,22 @@ exports.handler = async (event) => {
         // Default role is student
         const role = "student";
         const userId = crypto.randomUUID();
-        const email = body.email || null;
         const displayName = body.display_name || body.displayName || null;
         const metadata = body.metadata || {};
 
         const now = new Date();
 
-        // Create a new row (email can be null)
+        // Create a guest row. body.email is never read: a guest must not
+        // pre-claim an address (staff identity is keyed on the Cognito sub,
+        // see authorization/staffIdentity.js).
         const result = await sqlConnection`
           INSERT INTO users (
-            id, email, display_name, role,
+            id, display_name, role, identity_source,
             created_at, last_seen_at,
             metadata
           )
           VALUES (
-            ${userId}, ${email}, ${displayName}, ${role},
+            ${userId}, ${displayName}, ${role}, 'guest',
             ${now}, ${now},
             ${metadata}
           )
@@ -242,10 +244,17 @@ exports.handler = async (event) => {
           break;
         }
 
+        // Staff sign-up domains are reserved for Cognito accounts.
+        if (await isStaffEmailDomain(normalizedEmail)) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: "This email address cannot be used" });
+          break;
+        }
+
         const existingUser = await sqlConnection`
           SELECT id
           FROM users
-          WHERE id = ${userId}
+          WHERE id = ${userId} AND identity_source = 'guest'
         `;
 
         if (existingUser.length === 0) {
@@ -260,7 +269,7 @@ exports.handler = async (event) => {
             SET
               email = ${normalizedEmail},
               last_seen_at = NOW()
-            WHERE id = ${userId}
+            WHERE id = ${userId} AND identity_source = 'guest'
             RETURNING
               id,
               email,

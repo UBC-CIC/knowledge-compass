@@ -3,7 +3,7 @@ const {
   CognitoIdentityProviderClient,
   AdminListGroupsForUserCommand,
 } = require("@aws-sdk/client-cognito-identity-provider");
-const { randomUUID } = require("crypto");
+const { ensureStaffUser } = require("./staffIdentity.js");
 
 const cognito = new CognitoIdentityProviderClient({});
 const { SM_DB_CREDENTIALS, RDS_PROXY_ENDPOINT } = process.env;
@@ -11,10 +11,9 @@ let sqlConnection = global.sqlConnection;
 
 exports.handler = async (event) => {
   console.log("Post-confirmation trigger:", {
-    userName:event.userName,
-    userPoolId: event.userPoolId, 
+    userPoolId: event.userPoolId,
     triggerSource: event.triggerSource,
-  })
+  });
 
   if (!sqlConnection) {
     await initializeConnection(SM_DB_CREDENTIALS, RDS_PROXY_ENDPOINT);
@@ -25,14 +24,17 @@ exports.handler = async (event) => {
 
   try {
     // Extract user attributes from the event
-    const userAttributes = request.userAttributes;
+    const userAttributes = request.userAttributes || {};
+    const sub = typeof userAttributes.sub === "string" ? userAttributes.sub.trim() : "";
     const email = (userAttributes.email || "").trim().toLowerCase();
     const givenName = userAttributes.given_name || "";
     const familyName = userAttributes.family_name || "";
     const displayName = `${givenName} ${familyName}`.trim() || email;
 
-    if (!email) {
-      console.error("Post-confirmation event is missing email; skipping users insert");
+    // The users row is keyed on the Cognito sub, never on email (a guest can
+    // write users.email; see staffIdentity.js).
+    if (!sub) {
+      console.error("Post-confirmation event is missing sub; skipping users insert");
       return event;
     }
 
@@ -54,28 +56,27 @@ exports.handler = async (event) => {
         role = "admin";
       }
     } catch (groupErr) {
-      console.error("Failed to look up Cognito group membership; defaulting to 'student':", groupErr);
+      console.error("Failed to look up Cognito group membership; defaulting to 'student':", groupErr?.message);
     }
 
-    console.log("Creating user:", { email, displayName, role });
-
-    // Insert the new user into the Users table. On re-confirmation of an
-    // existing account (e.g. an email change), leave their role untouched —
+    // Find (by sub), link (legacy staff row) or create the staff row. A guest
+    // row holding this email loses the address and is never captured. On
+    // re-confirmation of an existing account, leave the role untouched —
     // role changes go through POST /admin/promote_user, not this trigger.
-    const result = await sqlConnection`
-      INSERT INTO users (id, display_name, email, role, created_at, last_seen_at)
-      VALUES (${randomUUID()}, ${displayName}, ${email}, ${role}::user_role, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT (email) DO UPDATE
-      SET last_seen_at = CURRENT_TIMESTAMP
-      RETURNING id, email, role
-    `;
+    const result = await ensureStaffUser(sqlConnection, {
+      sub,
+      email: email || null,
+      displayName,
+      role,
+      elevate: false,
+    });
 
-    console.log("User created/updated:", result[0]);
+    console.log({ triggerSource: event.triggerSource, role: result.role, outcome: result.outcome });
 
     // IMPORTANT: For Cognito triggers, you must return the event object
     return event;
   } catch (err) {
-    console.error("Error inserting user into database:", err);
+    console.error("Error inserting user into database:", err?.message);
     // Even on error, return the event to allow sign-up to complete
     // The user can still authenticate, but won't be in the database yet
     return event;

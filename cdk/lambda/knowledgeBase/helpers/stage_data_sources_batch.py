@@ -2,7 +2,11 @@ import json
 import logging
 from helpers.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
-from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
+from helpers.admin_user import (
+    admin_email_from_request,
+    admin_sub_from_request,
+    get_or_create_admin_user_id,
+)
 from helpers.stage_data_sources import StageRejected, stage_file_pair
 from helpers.upload_identity import delete_s3_objects, upload_source_key
 
@@ -48,11 +52,13 @@ def stage_data_sources_batch(event, body, connection):
     if locked:
         return locked
 
+    # Admin identity is the Cognito sub, never an email (see admin_user.py).
     created_by = admin_email_from_request(event, body)
+    admin_sub = admin_sub_from_request(event)
     items = body.get("items")
 
-    if not created_by:
-        return _response(event, 400, {"error": "Missing created_by"})
+    if not admin_sub:
+        return _response(event, 401, {"error": "Unauthorized"})
 
     if not isinstance(items, list) or len(items) == 0:
         return _response(event, 400, {"error": "items must be a non-empty array"})
@@ -60,7 +66,7 @@ def stage_data_sources_batch(event, body, connection):
     if len(items) > 100:
         return _response(event, 400, {"error": "Too many items. Maximum is 100 per batch."})
 
-    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, admin_sub, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
     connection.commit()

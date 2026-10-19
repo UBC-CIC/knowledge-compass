@@ -21,6 +21,7 @@
  */
 
 const { validateUUID } = require("./validation.js");
+const { resolveAdminUser } = require("./adminIdentity.js");
 
 const KEY_PATTERN = /^[A-Z0-9_]{1,16}$/;
 const RESERVED_KEYS = new Set(["BOTH", "UNCLEAR", "UNKNOWN", "NONE"]);
@@ -268,13 +269,11 @@ function shapeFeedback(countRows, journeyRows, clusterRows, days) {
 // Database access
 // ------------------------------------------------------------------
 
+// Keyed on the Cognito sub, never users.email (see adminIdentity.js).
 async function resolveAdmin(sql, event) {
-  const email = event.requestContext?.authorizer?.email;
-  if (!email) throw new InputError("Unauthorized", 401);
-  const rows = await sql`SELECT id, role FROM users WHERE email = ${email} LIMIT 1`;
-  if (rows.length === 0) throw new InputError("Admin user not found", 404);
-  if (rows[0].role !== "admin") throw new InputError("User is not an admin", 403);
-  return rows[0].id;
+  const admin = await resolveAdminUser(sql, event);
+  if (admin.error) throw new InputError(admin.error, admin.statusCode);
+  return admin.id;
 }
 
 async function fetchTree(sql) {

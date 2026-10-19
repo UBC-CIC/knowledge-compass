@@ -134,10 +134,11 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
   if (!claims) return null;
   const userId = claims.sub;
 
+  // Guest rows only: a staff (Cognito) row never gets a user-tier token.
   const rows = await sql`
     SELECT credential_version, credential_rotated_at
     FROM users
-    WHERE id = ${userId}
+    WHERE id = ${userId} AND identity_source = 'guest'
   `;
   if (rows.length === 0) return null; // user deleted
   let current = rows[0].credential_version;
@@ -168,7 +169,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     const latest = await sql`
       SELECT credential_version, credential_rotated_at
       FROM users
-      WHERE id = ${userId}
+      WHERE id = ${userId} AND identity_source = 'guest'
     `;
     if (latest.length === 0) return null;
     current = latest[0].credential_version;

@@ -16,7 +16,8 @@ async function invoke(sql, event) {
   return { statusCode: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
 
-const adminContext = { authorizer: { role: "admin", email: "admin@example.com" } };
+const ADMIN_SUB = "11111111-2222-3333-4444-555555555555";
+const adminContext = { authorizer: { role: "admin", email: "admin@example.com", userId: ADMIN_SUB } };
 
 test("non-admin callers are rejected before any database access", async () => {
   for (const requestContext of [undefined, {}, { authorizer: { role: "user" } }, { authorizer: { role: "Admin " } }]) {
@@ -127,6 +128,94 @@ test("removed example endpoint and unknown routes are not served", async () => {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource, requestContext: adminContext });
     assert.notEqual(res.statusCode, 200, resource);
   }
+});
+
+// ── Admin identity is the Cognito sub, never users.email (finding f-23c5bf7c) ──
+
+const settingsPut = (sql, requestContext = adminContext) =>
+  invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext,
+    body: JSON.stringify({ max_messages_per_day: 50 }),
+  });
+
+test("admin re-check selects by the authorizer sub and never by email", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: "a1", role: "admin" }];
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1" }];
+    return [];
+  });
+  const res = await settingsPut(sql);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const lookup = sql.queries().find((q) => q.text.includes("FROM users WHERE cognito_sub"));
+  assert.ok(lookup, "looked up by cognito_sub");
+  assert.deepEqual(lookup.values, [ADMIN_SUB]);
+  assert.ok(!sql.queries().some((q) => /WHERE (lower\()?email/.test(q.text)), "no email-keyed lookup");
+  assert.ok(updateQuery(sql).values.includes("a1"));
+});
+
+test("admin re-check on a sub miss creates the cognito row instead of matching by email", async () => {
+  const sql = fakeSql((text, values) => {
+    if (text.startsWith("INSERT INTO users")) return [{ id: values[0], email: values[1], role: values[3] }];
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1" }];
+    return [];
+  });
+  sql.begin = async (fn) => fn(sql);
+  const res = await settingsPut(sql);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO users"));
+  assert.ok(insert.text.includes("'cognito'"));
+  assert.ok(insert.values.includes(ADMIN_SUB));
+  assert.equal(insert.values[3], "admin");
+});
+
+test("admin re-check: a row whose role is not admin is 403, a missing sub is 401", async () => {
+  const student = fakeSql((text) => (text.includes("FROM users") ? [{ id: "a1", role: "student" }] : []));
+  const res = await settingsPut(student);
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { error: "User is not an admin" });
+  assert.equal(updateQuery(student), undefined);
+
+  const noSub = fakeSql();
+  const res401 = await settingsPut(noSub, { authorizer: { role: "admin", email: "admin@example.com" } });
+  assert.equal(res401.statusCode, 401);
+  assert.equal(noSub.queries().length, 0);
+});
+
+test("promote_user acts only on the caller's sub and ignores body email and role", async () => {
+  const sql = fakeSql((text, values) => {
+    if (text.startsWith("INSERT INTO users")) return [{ id: "new-row", email: values[1], role: values[3] }];
+    if (text.startsWith("SELECT id, email, display_name, role")) return [{ id: values[0], role: "admin" }];
+    return [];
+  });
+  sql.begin = async (fn) => fn(sql);
+  const res = await invoke(sql, {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: adminContext,
+    body: JSON.stringify({ email: "other@example.com", role: "student", user_id: "victim" }),
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.id, "new-row");
+  for (const q of sql.queries()) {
+    const bound = JSON.stringify(q.values);
+    assert.ok(!bound.includes("other@example.com") && !bound.includes("victim"), q.text);
+    assert.ok(!q.text.includes("ON CONFLICT (email)"), q.text);
+  }
+  const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO users"));
+  assert.ok(insert.values.includes(ADMIN_SUB));
+  assert.equal(insert.values[3], "admin");
+
+  const noSub = fakeSql();
+  const res401 = await invoke(noSub, {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: { authorizer: { role: "admin", email: "admin@example.com" } },
+    body: "{}",
+  });
+  assert.equal(res401.statusCode, 401);
+  assert.equal(noSub.queries().length, 0);
 });
 
 // PUT /admin/system-settings is patch-style: the admin console sends only the

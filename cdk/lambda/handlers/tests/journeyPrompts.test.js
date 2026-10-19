@@ -27,7 +27,9 @@ function fakeSql(handler = () => []) {
 }
 
 const adminEvent = (overrides = {}) => ({
-  requestContext: { authorizer: { email: "admin@example.com", role: "admin" } },
+  requestContext: {
+    authorizer: { email: "admin@example.com", role: "admin", userId: "11111111-2222-3333-4444-555555555555" },
+  },
   ...overrides,
 });
 
@@ -142,13 +144,28 @@ test("validation errors return 400 before touching the database", async () => {
   assert.match(field.body.error, /field must be one of/);
 });
 
-test("missing admin email is 401", async () => {
-  const res = await call(
-    fakeSql(),
-    "POST /admin/journeys",
-    { requestContext: { authorizer: {} }, body: JSON.stringify({ key: "J3", name: "x" }) }
-  );
-  assert.equal(res.statusCode, 401);
+test("missing authorizer userId is 401", async () => {
+  for (const authorizer of [{}, { role: "admin", email: "admin@example.com" }]) {
+    const sql = fakeSql();
+    const res = await call(
+      sql,
+      "POST /admin/journeys",
+      { requestContext: { authorizer }, body: JSON.stringify({ key: "J3", name: "x" }) }
+    );
+    assert.equal(res.statusCode, 401);
+    assert.equal(sql.calls.length, 0);
+  }
+});
+
+test("resolveAdmin looks up the Cognito sub, never the email", async () => {
+  const sql = fakeSql((text) => (text.includes("FROM users") ? [{ id: UUID, role: "student" }] : []));
+  const res = await call(sql, "POST /admin/journeys", adminEvent({ body: JSON.stringify({ key: "J3", name: "x" }) }));
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { error: "User is not an admin" });
+  const lookup = sql.calls.find((c) => c.text.includes("FROM users"));
+  assert.match(lookup.text, /WHERE cognito_sub = \?/);
+  assert.deepEqual(lookup.values, ["11111111-2222-3333-4444-555555555555"]);
+  assert.ok(!sql.calls.some((c) => /WHERE (lower\()?email/.test(c.text)));
 });
 
 test("duplicate journey key is 409", async () => {

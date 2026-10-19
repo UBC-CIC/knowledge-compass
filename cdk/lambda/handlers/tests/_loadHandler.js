@@ -67,7 +67,7 @@ const fakeToken = (payload, secret = "test-jwt-secret") =>
 /** Claims of a fake-signed token. */
 const decodeFakeToken = (token) => JSON.parse(token.slice("signed:".length));
 
-function stubs(sql, secrets = {}) {
+function stubs(sql, secrets = {}, ssmParameters = {}) {
   class FakeCommand {
     constructor(input) {
       this.input = input;
@@ -100,7 +100,15 @@ function stubs(sql, secrets = {}) {
     jsonwebtoken: fakeJwt,
     "@aws-sdk/client-ssm": {
       SSMClient: class {
-        async send() {
+        async send(command) {
+          // Per-parameter overrides (options.ssmParameters): a string is the
+          // Value, an Error is thrown as a failed fetch.
+          const name = command?.input?.Name;
+          if (name && Object.prototype.hasOwnProperty.call(ssmParameters, name)) {
+            const value = ssmParameters[name];
+            if (value instanceof Error) throw value;
+            return { Parameter: { Value: value } };
+          }
           throw new Error("SSM is not available in unit tests");
         }
       },
@@ -114,6 +122,8 @@ function stubs(sql, secrets = {}) {
  * ALLOWED_ORIGIN_PARAM is unset so CORS resolves to "*" without SSM.
  * options.secrets maps a Secrets Manager SecretId to its SecretString (or an
  * Error to throw); other ids return the default DB credentials.
+ * options.ssmParameters maps an SSM parameter Name to its Value (or an Error
+ * to throw); other names throw.
  */
 function loadHandler(name, sql, options = {}) {
   delete process.env.ALLOWED_ORIGIN_PARAM;
@@ -124,7 +134,7 @@ function loadHandler(name, sql, options = {}) {
     }
   }
 
-  const fakes = stubs(sql, options.secrets);
+  const fakes = stubs(sql, options.secrets, options.ssmParameters);
   const originalLoad = Module._load;
   Module._load = function patchedLoad(request, ...rest) {
     if (Object.prototype.hasOwnProperty.call(fakes, request)) return fakes[request];

@@ -18,8 +18,13 @@ const HISTORY_ROUTE = "/user/{user_id}/chat_sessions/{chat_session_id}/chat_hist
 // What the user authorizer sets for a token bound to `userId` ("" = anonymous).
 const as = (userId) => ({ authorizer: { userId, role: "user" } });
 
-async function invoke(sql, event) {
-  const { handler } = loadHandler("userHandler", sql);
+// PUT /user reads the staff sign-up domains from this SSM parameter.
+const STAFF_DOMAINS_PARAM = "/KC/AllowedEmailDomains";
+process.env.ALLOWED_EMAIL_DOMAINS = STAFF_DOMAINS_PARAM;
+const STAFF_SSM = { ssmParameters: { [STAFF_DOMAINS_PARAM]: " staff.example ,, Board.Example" } };
+
+async function invoke(sql, event, options = STAFF_SSM) {
+  const { handler } = loadHandler("userHandler", sql, options);
   const res = await quietly(() => handler({ requestContext: as(USER), ...event }));
   return { statusCode: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
@@ -104,6 +109,82 @@ test("PUT /user validates and normalizes email", async () => {
   const ok = await put(JSON.stringify({ email: "  Parent@Example.COM " }));
   assert.equal(ok.statusCode, 200);
   assert.equal(ok.body.email, "parent@example.com");
+
+  // Only guest rows can be updated.
+  const select = sql.queries().find((q) => q.text.startsWith("SELECT id FROM users"));
+  const update = sql.queries().find((q) => q.text.startsWith("UPDATE users"));
+  assert.ok(select.text.includes("identity_source = 'guest'"));
+  assert.ok(update.text.includes("identity_source = 'guest'"));
+});
+
+const putEmail = (sql, email, options) =>
+  invoke(
+    sql,
+    { httpMethod: "PUT", resource: "/user/{user_id}", pathParameters: { user_id: USER }, body: JSON.stringify({ email }) },
+    options
+  );
+
+const guestSql = () =>
+  fakeSql((text, values) => {
+    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("UPDATE users")) return [{ id: USER, email: values[0] }];
+    return [];
+  });
+
+test("PUT /user refuses staff sign-up domains and their subdomains without writing", async () => {
+  for (const email of ["admin@staff.example", "Admin@STAFF.example", "x@hr.staff.example", "y@board.example"]) {
+    const sql = guestSql();
+    const res = await putEmail(sql, email);
+    assert.equal(res.statusCode, 400, email);
+    assert.deepEqual(res.body, { error: "This email address cannot be used" });
+    assert.equal(sql.queries().length, 0, email);
+  }
+  // A look-alike domain is not a subdomain.
+  assert.equal((await putEmail(guestSql(), "p@notstaff.example")).statusCode, 200);
+});
+
+test("PUT /user fails closed when the staff domain list cannot be read", async () => {
+  for (const options of [{ ssmParameters: { [STAFF_DOMAINS_PARAM]: new Error("ssm down") } }, { ssmParameters: { [STAFF_DOMAINS_PARAM]: " , " } }]) {
+    const sql = guestSql();
+    const res = await putEmail(sql, "parent@example.com", options);
+    assert.equal(res.statusCode, 500);
+    assert.ok(!sql.queries().some((q) => q.text.startsWith("UPDATE users")));
+  }
+  delete process.env.ALLOWED_EMAIL_DOMAINS;
+  try {
+    const sql = guestSql();
+    assert.equal((await putEmail(sql, "parent@example.com")).statusCode, 500);
+    assert.ok(!sql.queries().some((q) => q.text.startsWith("UPDATE users")));
+  } finally {
+    process.env.ALLOWED_EMAIL_DOMAINS = STAFF_DOMAINS_PARAM;
+  }
+});
+
+test("PUT /user on a non-guest row is 404 and nothing is updated", async () => {
+  const sql = fakeSql(() => []);
+  const res = await putEmail(sql, "parent@example.com");
+  assert.equal(res.statusCode, 404);
+  assert.ok(!sql.queries().some((q) => q.text.startsWith("UPDATE users")));
+});
+
+test("POST /user never binds a caller-supplied email and creates a guest row", async () => {
+  const sql = fakeSql((text, values) =>
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student", credential_version: 0 }] : [],
+  );
+  const res = await invoke(sql, {
+    httpMethod: "POST",
+    resource: "/user",
+    requestContext: as(""),
+    body: JSON.stringify({ email: "admin@staff.example", display_name: "Guest" }),
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!("email" in res.body) || res.body.email == null);
+  const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO users"));
+  assert.ok(insert.text.includes("'guest'"));
+  assert.ok(!/\bemail\b/.test(insert.text.split("RETURNING")[0]), "email is not inserted");
+  for (const q of sql.queries()) {
+    assert.ok(!JSON.stringify(q.values).includes("admin@staff.example"));
+  }
 });
 
 test("PUT /user maps a unique violation to 409", async () => {

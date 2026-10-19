@@ -11,9 +11,10 @@
  */
 
 const postgres = require("postgres");
-const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
 const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
+const { adminSubFromEvent, resolveAdminUser } = require("./utils/adminIdentity.js");
+const { ensureStaffUser, normalizeEmail } = require("../authorization/staffIdentity.js");
 const {
   handleFeedbackTriageRequest,
   isFeedbackTriageRoute,
@@ -145,47 +146,37 @@ exports.handler = async (event) => {
 
     // Handle different API endpoints using switch statement
     switch (pathData) {
-      // POST /admin/promote_user - Ensure the signed-in admin exists in users
+      // POST /admin/promote_user - Ensure the signed-in admin exists in users.
+      // Acts only on the caller, identified by the Cognito sub; body email,
+      // role and user_id are ignored (the authorizer already proved admin
+      // group membership). Never keyed on users.email, which guests can write.
       case "POST /admin/promote_user": {
-        let body;
         try {
-          body = parseBody(event.body);
+          parseBody(event.body);
         } catch (error) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: error.message });
           break;
         }
 
-        const email = (body?.email || event.requestContext?.authorizer?.email || "").trim().toLowerCase();
-        const role = body?.role || "admin";
-
-        if (!email) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "email is required" });
+        const adminSub = adminSubFromEvent(event);
+        if (!adminSub) {
+          response.statusCode = 401;
+          response.body = JSON.stringify({ error: "Unauthorized" });
           break;
         }
+        const adminEmail = normalizeEmail(event.requestContext?.authorizer?.email);
 
-        const validRoles = ["admin", "student"];
-        if (!validRoles.includes(role)) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "role must be 'admin' or 'student'" });
-          break;
-        }
+        const ensured = await ensureStaffUser(sqlConnection, {
+          sub: adminSub,
+          email: adminEmail,
+          displayName: adminEmail,
+          role: "admin",
+          elevate: true,
+        });
 
         const updated = await sqlConnection`
-          INSERT INTO users (id, email, display_name, role, created_at, last_seen_at)
-          VALUES (
-            ${randomUUID()}::uuid,
-            ${email},
-            ${email},
-            ${role}::user_role,
-            NOW(),
-            NOW()
-          )
-          ON CONFLICT (email) DO UPDATE SET
-            role = ${role}::user_role,
-            last_seen_at = NOW()
-          RETURNING
+          SELECT
             id,
             email,
             display_name,
@@ -195,6 +186,8 @@ exports.handler = async (event) => {
             messages_sent,
             messages_window_started_at,
             metadata
+          FROM users
+          WHERE id = ${ensured.id}
         `;
 
         response.statusCode = 200;
@@ -281,34 +274,15 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
+        // Find admin user id by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
-        // Find admin user id (ensure role is admin)
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
-          break;
-        }
-
-        const createdByUserId = adminRows[0].id;
+        const createdByUserId = admin.id;
 
         // Create new version, make it active, deactivate old
         try {
@@ -451,30 +425,11 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
-          break;
-        }
-
-        // Find admin user id
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
+        // Find admin user by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
@@ -584,30 +539,11 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
-          break;
-        }
-
-        // Find admin user id (ensure role is admin)
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
+        // Find admin user by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
@@ -1245,9 +1181,8 @@ exports.handler = async (event) => {
           break;
         }
 
-        // validate user
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
+        // validate user (Cognito sub from the admin authorizer)
+        if (!adminSubFromEvent(event)) {
           response.statusCode = 401;
           response.body = JSON.stringify({ error: "Unauthorized" });
           break;
@@ -1430,27 +1365,15 @@ exports.handler = async (event) => {
           patch.service_message = cleaned === "" ? null : cleaned;
         }
 
-        // get admin user ID and confirm role
-        const adminRows = await sqlConnection`
-          SELECT id, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
+        // get admin user ID by Cognito sub and confirm role
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
-          break;
-        }
-
-        const updatedByUserId = adminRows[0].id;
+        const updatedByUserId = admin.id;
 
         // A banner or read-only mode needs something to show. Judge the result of the
         // patch, so setting the status alone works when a message is already stored and
