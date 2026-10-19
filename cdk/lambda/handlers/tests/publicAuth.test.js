@@ -151,7 +151,7 @@ test("authorizer: bound access tokens expose their user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER }, SECRET, {}));
   assert.equal(policy.principalId, USER);
-  assert.deepEqual(policy.context, { userId: USER, role: "user" });
+  assert.deepEqual(policy.context, { userId: USER, role: "user", tokenId: "" });
   assert.equal(policy.policyDocument.Statement[0].Effect, "Allow");
 });
 
@@ -159,6 +159,20 @@ test("authorizer: anonymous tokens carry no user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS }, SECRET, {}));
   assert.equal(policy.context.userId, "");
+  assert.equal(policy.principalId, "anonymous");
+});
+
+const TOKEN_ID = "6a1f0e2d-3c4b-4a59-8e7f-0a1b2c3d4e5f";
+
+test("authorizer: an anonymous token's jti becomes tokenId and principalId, never userId", async () => {
+  const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
+  const policy = await authorize(mod, jwt.sign({ ...ACCESS, jti: TOKEN_ID }, SECRET, {}));
+  assert.equal(policy.principalId, `anonymous:${TOKEN_ID}`);
+  assert.deepEqual(policy.context, { userId: "", role: "user", tokenId: TOKEN_ID });
+
+  const bound = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER, jti: TOKEN_ID }, SECRET, {}));
+  assert.equal(bound.principalId, USER);
+  assert.deepEqual(bound.context, { userId: USER, role: "user", tokenId: TOKEN_ID });
 });
 
 test("authorizer: credentials, wrong typ/iss/aud and bad tokens are unauthorized", async () => {
@@ -194,8 +208,9 @@ test("authorizer: unset JWT_ISSUER refuses every token", async () => {
 test("authorizer: extra claims are not forwarded into the context", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER, jti: "j", admin: true, userId: OTHER_USER }, SECRET, {}));
-  assert.deepEqual(Object.keys(policy.context).sort(), ["role", "userId"]);
+  assert.deepEqual(Object.keys(policy.context).sort(), ["role", "tokenId", "userId"]);
   assert.equal(policy.context.userId, USER);
+  assert.equal(policy.context.tokenId, "", "a non-UUID jti is not forwarded");
 });
 
 // ---------- websocket/default.js ----------
@@ -221,6 +236,7 @@ test("websocket: missing, anonymous, credential, untyped or mismatched tokens ar
   const cases = [
     [{}, 401],
     [{ token: jwt.sign({ ...ACCESS }, SECRET, {}) }, 401],
+    [{ token: jwt.sign({ ...ACCESS, jti: TOKEN_ID }, SECRET, {}) }, 401],
     [{ token: jwt.sign({ typ: "credential", sub: USER, iss: ISSUER, aud: "kc-token-exchange" }, SECRET, {}) }, 401],
     [{ token: jwt.sign({ ...ACCESS, sub: USER }, "other-secret", {}) }, 401],
     [{ token: jwt.sign({ role: "user", sub: USER }, SECRET, {}), user_id: OTHER_USER }, 401],
@@ -259,8 +275,18 @@ test("a token from issueAccessToken passes the REST authorizer and websocket/acc
 
   const token = await credentials.issueAccessToken(USER);
   const policy = await authorize(authorizer, token);
-  assert.deepEqual(policy.context, { userId: USER, role: "user" });
+  const { jti } = jwt.issued.get(token).payload;
+  assert.match(jti, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  assert.deepEqual(policy.context, { userId: USER, role: "user", tokenId: jti });
   assert.equal(await wsToken.verifyAccessToken(token), USER);
+
+  // An anonymous token passes the REST authorizer with a per-token principal,
+  // and websocket/accessToken.js still refuses it.
+  const anonymous = await credentials.issueAccessToken(null);
+  const anonPolicy = await authorize(authorizer, anonymous);
+  assert.equal(anonPolicy.context.userId, "");
+  assert.equal(anonPolicy.principalId, `anonymous:${jwt.issued.get(anonymous).payload.jti}`);
+  assert.equal(await wsToken.verifyAccessToken(anonymous), null);
 
   // A credential is accepted by neither.
   const credential = await credentials.issueUserCredential(USER, 0);

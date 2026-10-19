@@ -10,6 +10,7 @@ let cacheExpiry = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // Must match ACCESS_AUDIENCE in handlers/utils/userCredential.js.
 const ACCESS_AUDIENCE = "kc-public-api";
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 exports.handler = async (event) => {
   const token = event.authorizationToken?.replace("Bearer ", "");
@@ -49,8 +50,14 @@ exports.handler = async (event) => {
     const apiGatewayArnPrefix = arnParts.slice(0, 2).join('/'); // arn:aws:execute-api:region:account:apiId/stage
     const wildcardResource = `${apiGatewayArnPrefix}/*/*`; // Allow all methods and resources
 
+    // tokenId is the access token's random jti (userCredential.js), for audit
+    // correlation only ($context.authorizer.* in the API access log). It is
+    // never an identity: anonymous tokens get principalId "anonymous:<jti>"
+    // so each token is distinguishable, while userId stays empty.
+    const tokenId =
+      typeof decoded.jti === "string" && UUID_REGEX.test(decoded.jti) ? decoded.jti : "";
     const policy = generatePolicy(
-      decoded.sub || "anonymous",
+      decoded.sub || (tokenId ? `anonymous:${tokenId}` : "anonymous"),
       "Allow",
       wildcardResource
     );
@@ -60,6 +67,7 @@ exports.handler = async (event) => {
     policy.context = {
       userId: typeof decoded.sub === "string" ? decoded.sub : "",
       role: typeof decoded.role === "string" ? decoded.role : "user",
+      tokenId,
     };
     return policy;
   } catch (err) {

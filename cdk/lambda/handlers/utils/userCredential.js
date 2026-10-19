@@ -24,8 +24,11 @@
  * the deployment) and aud: ACCESS_AUDIENCE for access tokens, CREDENTIAL_AUDIENCE
  * for credentials. Every verifier (user authorizer, WebSocket $connect and
  * $default, credential exchange) checks typ, iss and aud, so a credential
- * cannot be used as an access token. There is no jti: revocation is
- * users.credential_version, and access tokens expire after 15 minutes.
+ * cannot be used as an access token. Access tokens carry a random jti
+ * (crypto.randomUUID, not derived from personal data) for audit correlation:
+ * the user authorizer exposes it as context.tokenId and in principalId, and
+ * GET /user/publicToken logs it at issuance (finding f-0d57a9d0). Revocation
+ * is still users.credential_version, and access tokens expire after 15 minutes.
  */
 
 const {
@@ -33,6 +36,7 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const jwt = require("jsonwebtoken");
+const { randomUUID } = require("crypto");
 
 const CREDENTIAL_LIFETIME = "30d";
 const ACCESS_TOKEN_LIFETIME = "15m";
@@ -78,14 +82,30 @@ async function issueUserCredential(userId, version) {
   });
 }
 
-/** Sign a 15-minute access token, bound to `userId` when given. */
-async function issueAccessToken(userId) {
-  const claims = { role: "user", typ: "access", iss: issuer(), aud: ACCESS_AUDIENCE };
+/**
+ * Sign a 15-minute access token, bound to `userId` when given.
+ * Returns { token, tokenId } where tokenId is the token's random jti.
+ */
+async function issueAccessTokenWithId(userId) {
+  const tokenId = randomUUID();
+  const claims = { role: "user", typ: "access", iss: issuer(), aud: ACCESS_AUDIENCE, jti: tokenId };
   if (userId) claims.sub = userId;
-  return jwt.sign(claims, await jwtSecret(), {
+  const token = jwt.sign(claims, await jwtSecret(), {
     algorithm: "HS256",
     expiresIn: ACCESS_TOKEN_LIFETIME,
   });
+  return { token, tokenId };
+}
+
+/** Sign a 15-minute access token, bound to `userId` when given. */
+async function issueAccessToken(userId) {
+  return (await issueAccessTokenWithId(userId)).token;
+}
+
+/** { token, tokenId, userId } for an exchange result. */
+async function boundAccessToken(userId) {
+  const { token, tokenId } = await issueAccessTokenWithId(userId);
+  return { token, tokenId, userId };
 }
 
 /** Verified credential claims, or null when the token is not a usable credential. */
@@ -126,8 +146,10 @@ const secondsSince = (date, now) => (now - new Date(date).getTime()) / 1000;
 
 /**
  * Exchange a credential for an access token.
- * Returns { token, credential? } (credential only when it was rotated or
- * refreshed) or null when the caller must start a new anonymous user.
+ * Returns { token, tokenId, userId, credential? } (credential only when it was
+ * rotated or refreshed; tokenId and userId are for the issuance log and are
+ * not part of the response body) or null when the caller must start a new
+ * anonymous user.
  */
 async function exchangeCredential(sql, credential, now = Date.now()) {
   const claims = await verifyCredential(credential);
@@ -149,7 +171,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     // TODO(after <deploy>+30d): drop the legacy branch; by then no credential
     // without iss/aud can still be valid (CREDENTIAL_LIFETIME).
     if (ageSeconds < ROTATE_AFTER_SECONDS && !claims.legacy) {
-      return { token: await issueAccessToken(userId) };
+      return boundAccessToken(userId);
     }
     // Rotate. The version guard makes concurrent exchanges rotate only once.
     const rotated = await sql`
@@ -161,7 +183,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     `;
     if (rotated.length === 1) {
       return {
-        token: await issueAccessToken(userId),
+        ...(await boundAccessToken(userId)),
         credential: await issueUserCredential(userId, rotated[0].credential_version),
       };
     }
@@ -184,7 +206,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     // Concurrent exchange right after a rotation (another tab). Only a
     // short-lived access token: a superseded credential is never upgraded to
     // the current one, and the other tab already stored the replacement.
-    return { token: await issueAccessToken(userId) };
+    return boundAccessToken(userId);
   }
 
   // Superseded (or unknown) version: refuse it. Nothing is revoked here,
@@ -199,6 +221,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
 module.exports = {
   issueUserCredential,
   issueAccessToken,
+  issueAccessTokenWithId,
   exchangeCredential,
   ROTATE_AFTER_SECONDS,
   ROTATION_GRACE_SECONDS,

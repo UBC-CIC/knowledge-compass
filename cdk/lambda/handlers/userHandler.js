@@ -11,9 +11,10 @@ const { resolveCaller } = require("./utils/callerIdentity.js");
 const { isStaffEmailDomain } = require("./utils/staffEmailDomains.js");
 const {
   exchangeCredential,
-  issueAccessToken,
+  issueAccessTokenWithId,
   issueUserCredential,
 } = require("./utils/userCredential.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
 
 /** Bearer value of the Authorization header, or null. */
 const bearerToken = (event) => {
@@ -21,6 +22,31 @@ const bearerToken = (event) => {
   const value = headers.Authorization || headers.authorization;
   if (typeof value !== "string" || !value.startsWith("Bearer ")) return null;
   return value.slice("Bearer ".length).trim() || null;
+};
+
+/**
+ * One structured line per issued access token (finding f-0d57a9d0), so
+ * anonymous-tier abuse can be traced: the token's jti, the bound guest id
+ * (a random UUID, null for anonymous tokens), source IP (already in the API
+ * access log under the same request id), user agent and request id. Never
+ * the token or the credential.
+ */
+const logTokenIssued = (event, { tokenId, userId, credentialRotated }) => {
+  const identity = event?.requestContext?.identity || {};
+  const headers = event?.headers || {};
+  const userAgent = String(identity.userAgent ?? headers["User-Agent"] ?? headers["user-agent"] ?? "").slice(0, 200);
+  console.log(
+    JSON.stringify({
+      audit: "access_token_issued",
+      tokenId,
+      bound: Boolean(userId),
+      userId: userId || null,
+      credentialRotated,
+      requestId: event?.requestContext?.requestId ?? null,
+      sourceIp: identity.sourceIp ?? null,
+      userAgent: userAgent || null,
+    })
+  );
 };
 
 // Reply with a resolveCaller() failure.
@@ -54,7 +80,7 @@ const initConnection = async () => {
       await sqlConnection`SELECT 1`;
       console.log("Database connection initialized successfully");
     } catch (error) {
-      console.error("Error initializing database connection:", error);
+      console.error("Error initializing database connection:", errorSummary(error));
       throw error;
     }
   }
@@ -76,7 +102,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
   response.statusCode = 500;
-  console.error("Internal server error:", error);
+  console.error("Internal server error:", errorSummary(error));
   response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -91,19 +117,28 @@ exports.handler = async (event) => {
     // POST /user gets a token bound to its user (see utils/userCredential.js).
     if (pathData === "GET /user/publicToken") {
       const credential = bearerToken(event);
+      let issued = null;
       if (!credential) {
-        response.body = JSON.stringify({ token: await issueAccessToken(null) });
+        const { token, tokenId } = await issueAccessTokenWithId(null);
+        issued = { tokenId, userId: null, credentialRotated: false };
+        response.body = JSON.stringify({ token });
       } else {
         await initConnection();
         const exchanged = await exchangeCredential(sqlConnection, credential);
         if (exchanged) {
-          response.body = JSON.stringify(exchanged);
+          // tokenId/userId are for the issuance log only; the response
+          // contract stays { token, credential? }.
+          const { tokenId, userId, ...payload } = exchanged;
+          issued = { tokenId, userId, credentialRotated: Boolean(payload.credential) };
+          response.body = JSON.stringify(payload);
         } else {
           response.statusCode = 401;
           response.body = JSON.stringify({ error: "invalid_credential" });
         }
       }
-      console.log({ statusCode: response.statusCode, resource: event.resource });
+      // The body holds the minted token; log status only.
+      logResponse(event, response);
+      if (issued) logTokenIssued(event, issued);
       return response;
     }
 
@@ -392,6 +427,6 @@ exports.handler = async (event) => {
   }
 
   // Bodies hold the user's credential, email or chat history; log status only.
-  console.log({ statusCode: response.statusCode, resource: event.resource });
+  logResponse(event, response);
   return response;
 };
