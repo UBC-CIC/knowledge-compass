@@ -411,10 +411,13 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 | Log Type | Content | Retention |
 |----------|---------|-----------|
-| **API Access Logs** | Request metadata, status codes, latency | 1 week |
-| **Lambda Logs** | Function execution, errors (body excluded) | 1 week |
+| **API Access Logs** | Request metadata, source IP, status, request id, and the authorizer identity: principal id, user id (admin Cognito sub or bound guest id), role, admin email (masked by the data-protection policy), access-token id (`jti`) | 1 year (retained on stack deletion; `apiLogRetention` in `api-stack.ts`) |
+| **Lambda Logs** | Function execution, errors (body excluded) | 2 years (CDK-managed log groups, retained on stack deletion) |
 | **VPC Flow Logs** | Network traffic metadata | Configurable |
-| **WebSocket Logs** | Connection events, route keys | 1 week |
+| **WebSocket Logs** | Connection events, route keys (no authorizer fields: the WebSocket API has no API Gateway authorizer) | 1 year (retained on stack deletion) |
+| **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for promote_user, admin user creation, system-message create/activate/delete, system-settings updates and data-source deletion; written in the same transaction as the change; append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
+| **Token issuance log** | One line per access token from `GET /user/publicToken`: token id (`jti`), bound guest id or null, source IP, user agent, request id (never the token or credential) | Lambda log retention |
+| **Worker task log** | One line per self-invoked ingestion/embedding task with the originating admin (sub/email/request id, null for scheduler/ECS paths) | Lambda log retention |
 
 ### 8.3 Alerting
 
@@ -431,7 +434,7 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 | **Encryption at Rest** | ✅ Enabled | AWS managed keys (CMK upgrade available — see [`AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md)) |
 | **Encryption in Transit** | ✅ Enabled | TLS enforced on all connections |
 | **Access Control** | ✅ Enabled | Role-based, least privilege |
-| **Audit Logging** | ✅ Enabled | Comprehensive logging across all layers |
+| **Audit Logging** | ✅ Enabled | Privileged admin actions (role elevation, admin creation, system messages/settings, data-source deletion) are recorded with the acting administrator in the append-only `admin_audit` table; API access logs carry the authorizer identity and token id and are kept 1 year; token issuance and admin-started worker tasks are logged with their ids and originating admin. CloudTrail covers AWS API calls. |
 | **Credential Management** | ✅ Enabled | Secrets Manager with automatic rotation |
 | **PII Protection** | ✅ Enabled | Automatic anonymization via Bedrock Guardrails |
 | **Input Validation** | ✅ Enabled | Schema and application-level validation |
