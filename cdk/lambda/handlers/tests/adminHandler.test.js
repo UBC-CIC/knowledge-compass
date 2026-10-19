@@ -305,3 +305,269 @@ test("system settings: invalid patches return 400 without updating", async () =>
     assert.equal(updateQuery(sql), undefined, "no UPDATE for invalid input");
   }
 });
+
+// --- Admin audit trail (finding f-0d57a9d0, migration 040) -----------------
+
+const auditContext = { ...adminContext, requestId: "req-123" };
+const auditInserts = (sql) => sql.queries().filter((q) => q.text.startsWith("INSERT INTO admin_audit"));
+
+// Like invoke(), but returns the console.log lines that parse as admin audit entries.
+async function invokeCapturing(sql, event) {
+  const { handler } = loadHandler("adminHandler", sql);
+  const lines = [];
+  const saved = { log: console.log, error: console.error, warn: console.warn };
+  console.log = (...args) => lines.push(args.map(String).join(" "));
+  console.error = console.warn = () => {};
+  let res;
+  try {
+    res = await handler(event);
+  } finally {
+    Object.assign(console, saved);
+  }
+  const audits = lines
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter((l) => l && l.audit === "admin_action");
+  return { statusCode: res.statusCode, body: res.body ? JSON.parse(res.body) : null, audits };
+}
+
+function promoteSql({ failAudit = false } = {}) {
+  const sql = fakeSql((text, values) => {
+    if (text.startsWith("INSERT INTO admin_audit") && failAudit) throw new Error("audit insert failed");
+    if (text.startsWith("INSERT INTO users")) return [{ id: "new-row", email: values[1], role: values[3] }];
+    if (text.startsWith("SELECT id, email, display_name, role")) return [{ id: values[0], role: "admin" }];
+    return [];
+  });
+  return sql;
+}
+
+test("promote_user writes one audit row with the authorizer actor, never the body email", async () => {
+  const sql = promoteSql();
+  const res = await invokeCapturing(sql, {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: auditContext,
+    body: JSON.stringify({ email: "other@example.com" }),
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const inserts = auditInserts(sql);
+  assert.equal(inserts.length, 1);
+  const [sub, email, action, target, requestId] = inserts[0].values;
+  assert.equal(sub, ADMIN_SUB);
+  assert.equal(email, "admin@example.com");
+  assert.equal(action, "admin.promote_user");
+  assert.deepEqual(JSON.parse(target), { user_id: "new-row", outcome: "created", role: "admin" });
+  assert.equal(requestId, "req-123");
+  assert.ok(!JSON.stringify(inserts[0].values).includes("other@example.com"));
+  const texts = sql.queries().map((q) => q.text);
+  assert.ok(
+    texts.findIndex((t) => t.startsWith("INSERT INTO users")) < texts.findIndex((t) => t.startsWith("INSERT INTO admin_audit")),
+    "audit after the write, inside the same transaction"
+  );
+  assert.equal(res.audits.length, 1);
+  assert.equal(res.audits[0].actorSub, ADMIN_SUB);
+  assert.equal(res.audits[0].requestId, "req-123");
+});
+
+// The status line (utils/logging.js logResponse) of one handler call.
+async function statusLines(sql, event) {
+  const { handler } = loadHandler("adminHandler", sql);
+  const lines = [];
+  const saved = { log: console.log, error: console.error, warn: console.warn };
+  console.log = (...args) => lines.push(args);
+  console.error = console.warn = () => {};
+  try {
+    await handler(event);
+  } finally {
+    Object.assign(console, saved);
+  }
+  return lines
+    .filter((args) => args.length === 1 && args[0] && typeof args[0] === "object" && "statusCode" in args[0])
+    .map((args) => args[0]);
+}
+
+test("status lines name the acting admin's sub, never a body email (finding f-7f03f151)", async () => {
+  const promoted = await statusLines(promoteSql(), {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: auditContext,
+    body: JSON.stringify({ email: "other@example.com" }),
+  });
+  assert.deepEqual(promoted, [
+    { statusCode: 200, resource: "/admin/promote_user", requestId: "req-123", actorSub: ADMIN_SUB },
+  ]);
+
+  const denied = await statusLines(fakeSql(() => []), {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: { requestId: "req-9", authorizer: { role: "user", userId: "guest-sub" } },
+    body: JSON.stringify({ email: "other@example.com" }),
+  });
+  assert.deepEqual(denied, [
+    { statusCode: 403, resource: "/admin/promote_user", requestId: "req-9", actorSub: "guest-sub" },
+  ]);
+
+  const anonymous = await statusLines(fakeSql(() => []), {
+    httpMethod: "GET",
+    resource: "/admin/analytics",
+    requestContext: { requestId: "req-10" },
+  });
+  assert.deepEqual(anonymous, [{ statusCode: 403, resource: "/admin/analytics", requestId: "req-10", actorSub: null }]);
+  assert.ok(!JSON.stringify([promoted, denied]).includes("other@example.com"));
+});
+
+test("promote_user: a failing audit insert is a 500 with no success log", async () => {
+  const sql = promoteSql({ failAudit: true });
+  const res = await invokeCapturing(sql, {
+    httpMethod: "POST",
+    resource: "/admin/promote_user",
+    requestContext: auditContext,
+    body: "{}",
+  });
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.audits.length, 0);
+});
+
+test("system settings audits the patched field names and never their values", async () => {
+  const sql = settingsSql();
+  const res = await invokeCapturing(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: auditContext,
+    body: JSON.stringify({ max_messages_per_day: 77, service_status: "normal" }),
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const inserts = auditInserts(sql);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].values[2], "system_settings.update");
+  assert.deepEqual(JSON.parse(inserts[0].values[3]), {
+    settings_id: "s1",
+    fields: ["max_messages_per_day", "service_status"],
+  });
+  assert.ok(!JSON.stringify(res.audits).includes("77"));
+  assert.equal(res.audits.length, 1);
+});
+
+test("system settings: a failing audit insert is a 500 with no success log", async () => {
+  const sql = fakeSql((text) => {
+    if (text.startsWith("INSERT INTO admin_audit")) throw new Error("audit insert failed");
+    if (text.includes("FROM users")) return [{ id: "u1", role: "admin" }];
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1" }];
+    return [];
+  });
+  const res = await invokeCapturing(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: auditContext,
+    body: JSON.stringify({ max_messages_per_day: 50 }),
+  });
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.audits.length, 0);
+});
+
+test("validation failures write no audit row", async () => {
+  const sql = settingsSql();
+  const res = await invokeCapturing(sql, {
+    httpMethod: "PUT",
+    resource: "/admin/system-settings",
+    requestContext: auditContext,
+    body: JSON.stringify({ temperature: 9 }),
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(auditInserts(sql).length, 0);
+  assert.equal(res.audits.length, 0);
+});
+
+const MSG_ID = "9d4c1f6e-0000-4000-8000-000000000001";
+const PREV_ID = "9d4c1f6e-0000-4000-8000-000000000002";
+
+function systemMessageSql({ isActive = false } = {}) {
+  return fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: "u1", role: "admin" }];
+    if (text.includes("AS next_version")) return [{ next_version: 3 }];
+    if (text.startsWith("SELECT character_limit")) return [{ character_limit: 700 }];
+    if (text.startsWith("INSERT INTO system_messages")) return [{ id: MSG_ID }];
+    if (text.startsWith("SELECT id, type, version, is_active")) {
+      return [{ id: MSG_ID, type: "welcome_message", version: 2, is_active: isActive }];
+    }
+    if (text.startsWith("SELECT id, version FROM system_messages")) return [{ id: PREV_ID, version: 1 }];
+    if (text.startsWith("DELETE FROM system_messages")) return [{ id: MSG_ID, type: "welcome_message", version: 2 }];
+    if (text.startsWith("SELECT sm.id")) return [{ id: MSG_ID, content: "secret prompt text" }];
+    return [];
+  });
+}
+
+test("system message create, delete and activate each write one audit row without content", async () => {
+  const cases = [
+    ["POST", "/admin/system-messages/{system_message_type}", { content: "secret prompt text" }, "system_message.create",
+      { id: MSG_ID, type: "welcome_message", version: 3 }],
+    ["DELETE", "/admin/system-messages/{system_message_type}/{version_id}", {}, "system_message.delete",
+      { id: MSG_ID, type: "welcome_message", version: 2 }],
+    ["POST", "/admin/system-messages/{system_message_type}/{version_id}/activate", {}, "system_message.activate",
+      { id: MSG_ID, type: "welcome_message", version: 2, previous_active_id: PREV_ID }],
+  ];
+  for (const [httpMethod, resource, body, action, target] of cases) {
+    const sql = systemMessageSql();
+    const res = await invokeCapturing(sql, {
+      httpMethod,
+      resource,
+      pathParameters: { system_message_type: "welcome_message", version_id: MSG_ID },
+      requestContext: auditContext,
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.statusCode, 200, `${resource} ${JSON.stringify(res.body)}`);
+    const inserts = auditInserts(sql);
+    assert.equal(inserts.length, 1, resource);
+    assert.equal(inserts[0].values[0], ADMIN_SUB);
+    assert.equal(inserts[0].values[2], action);
+    assert.deepEqual(JSON.parse(inserts[0].values[3]), target);
+    assert.equal(res.audits.length, 1, resource);
+    assert.ok(!JSON.stringify(inserts[0].values).includes("secret prompt text"));
+    assert.ok(!JSON.stringify(res.audits).includes("secret prompt text"));
+  }
+});
+
+test("activating the already-active version writes no audit row", async () => {
+  const sql = systemMessageSql({ isActive: true });
+  const res = await invokeCapturing(sql, {
+    httpMethod: "POST",
+    resource: "/admin/system-messages/{system_message_type}/{version_id}/activate",
+    pathParameters: { system_message_type: "welcome_message", version_id: MSG_ID },
+    requestContext: auditContext,
+    body: "{}",
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.status, "already_active");
+  assert.equal(auditInserts(sql).length, 0);
+});
+
+test("POST /admin/users audits the new admin row in its transaction; no sub is 401", async () => {
+  const sql = fakeSql((text) => (text.startsWith("INSERT INTO users") ? [{ id: "new-admin", role: "admin" }] : []));
+  const res = await invokeCapturing(sql, {
+    httpMethod: "POST",
+    resource: "/admin/users",
+    requestContext: auditContext,
+    body: JSON.stringify({ display_name: "New", email: "new@example.com" }),
+  });
+  assert.equal(res.statusCode, 201);
+  const inserts = auditInserts(sql);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].values[2], "admin_user.create");
+  assert.deepEqual(JSON.parse(inserts[0].values[3]), { user_id: "new-admin" });
+  assert.equal(res.audits.length, 1);
+
+  const noSub = fakeSql();
+  const res401 = await invokeCapturing(noSub, {
+    httpMethod: "POST",
+    resource: "/admin/users",
+    requestContext: { authorizer: { role: "admin" } },
+    body: JSON.stringify({ display_name: "New", email: "new@example.com" }),
+  });
+  assert.equal(res401.statusCode, 401);
+  assert.equal(noSub.queries().length, 0);
+});

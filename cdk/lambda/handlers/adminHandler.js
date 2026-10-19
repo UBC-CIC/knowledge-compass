@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AWS Lambda Handler for Admin Operations
  *
  * This Lambda function handles HTTP requests for administrative operations including:
@@ -12,12 +12,13 @@
 
 const postgres = require("postgres");
 const { getCorsHeaders } = require("./utils/cors.js");
-const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
+const { handleJourneyRequest } = require("./utils/journeyPrompts.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
 const { adminSubFromEvent, resolveAdminUser } = require("./utils/adminIdentity.js");
 const { ensureStaffUser, normalizeEmail } = require("../authorization/staffIdentity.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./utils/adminAudit.js");
 const {
   handleFeedbackTriageRequest,
-  isFeedbackTriageRoute,
   fetchFeedbackLists,
 } = require("./utils/feedbackTriage.js");
 const {
@@ -82,7 +83,7 @@ const initConnection = async () => {
       await sqlConnection`SELECT 1`;
       console.log("Database connection initialized successfully");
     } catch (error) {
-      console.error("Error initializing database connection:", error);
+      console.error("Error initializing database connection:", errorSummary(error));
       throw error;
     }
   }
@@ -104,7 +105,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
   response.statusCode = 500;
-  console.error("Internal server error:", error);
+  console.error("Internal server error:", errorSummary(error));
   response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -120,7 +121,7 @@ exports.handler = async (event) => {
   if (callerRole !== 'admin') {
     response.statusCode = 403;
     response.body = JSON.stringify({ error: 'Admin access required' });
-    return response;
+    return logAndReturn(event, response);
   }
 
   // Ensure database connection is ready
@@ -167,13 +168,25 @@ exports.handler = async (event) => {
         }
         const adminEmail = normalizeEmail(event.requestContext?.authorizer?.email);
 
+        // The audit row is written in ensureStaffUser's transaction, so the
+        // role change and its record commit or roll back together.
+        let promoteAudit;
         const ensured = await ensureStaffUser(sqlConnection, {
           sub: adminSub,
           email: adminEmail,
           displayName: adminEmail,
           role: "admin",
           elevate: true,
+          onWrite: (tx, row) => {
+            promoteAudit = auditEntry(event, "admin.promote_user", {
+              user_id: row.id,
+              outcome: row.outcome,
+              role: row.role,
+            });
+            return insertAdminAudit(tx, promoteAudit);
+          },
         });
+        logAdminAudit(promoteAudit);
 
         const updated = await sqlConnection`
           SELECT
@@ -366,9 +379,17 @@ exports.handler = async (event) => {
               LIMIT 1
             `;
 
+            const audit = auditEntry(event, "system_message.create", {
+              id: inserted[0].id,
+              type: messageType,
+              version: next_version,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "created",
               row: out[0],
+              audit,
             };
           });
 
@@ -382,11 +403,12 @@ exports.handler = async (event) => {
             break;
           }
 
+          logAdminAudit(created.audit);
           response.statusCode = 200;
           response.body = JSON.stringify(created.row);
           break;
         } catch (err) {
-          console.error("POST /admin/system-messages/{system_message_type} failed:", err);
+          console.error("POST /admin/system-messages/{system_message_type} failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to create system message version" });
           break;
@@ -464,11 +486,19 @@ exports.handler = async (event) => {
               return { kind: "not_found" };
             }
 
+            const audit = auditEntry(event, "system_message.delete", {
+              id: removed[0].id,
+              type: removed[0].type,
+              version: removed[0].version,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "deleted",
               id: removed[0].id,
               type: removed[0].type,
               version: removed[0].version,
+              audit,
             };
           });
 
@@ -489,6 +519,7 @@ exports.handler = async (event) => {
             break;
           }
 
+          logAdminAudit(deleted.audit);
           response.statusCode = 200;
           response.body = JSON.stringify({
             success: true,
@@ -500,7 +531,7 @@ exports.handler = async (event) => {
           });
           break;
         } catch (err) {
-          console.error("DELETE /admin/system-messages/{system_message_type}/{version_id} failed:", err);
+          console.error("DELETE /admin/system-messages/{system_message_type}/{version_id} failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to delete system message version" });
           break;
@@ -635,8 +666,17 @@ exports.handler = async (event) => {
               LIMIT 1
             `;
 
+            const audit = auditEntry(event, "system_message.activate", {
+              id: target.id,
+              type: target.type,
+              version: target.version,
+              previous_active_id: previousActive ? previousActive.id : null,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "activated",
+              audit,
               activated: out[0],
               previous_active: previousActive
                 ? {
@@ -655,7 +695,9 @@ exports.handler = async (event) => {
             break;
           }
 
-          // Both "already_active" and "activated" return 200
+          // Both "already_active" and "activated" return 200; only a real
+          // activation is audited.
+          if (result.kind === "activated") logAdminAudit(result.audit);
           response.statusCode = 200;
           response.body = JSON.stringify({
             success: true,
@@ -665,7 +707,7 @@ exports.handler = async (event) => {
           });
           break;
         } catch (err) {
-          console.error("POST /admin/system-messages/{system_message_type}/{version_id}/activate failed:", err);
+          console.error("POST /admin/system-messages/{system_message_type}/{version_id}/activate failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to activate system message version" });
           break;
@@ -696,13 +738,26 @@ exports.handler = async (event) => {
           break;
         }
 
-        // Insert new admin user into database
-        // Using postgres library template literal syntax for better performance
-        const result = await sqlConnection`
-          INSERT INTO users (display_name, email, institution_id, role)
-          VALUES (${display_name}, ${email}, ${institution_id || null}, 'admin')
-          RETURNING id, display_name, email, role, institution_id, created_at
-        `;
+        // The audit actor is the Cognito sub from the admin authorizer.
+        if (!adminSubFromEvent(event)) {
+          response.statusCode = 401;
+          response.body = JSON.stringify({ error: "Unauthorized" });
+          break;
+        }
+
+        // Insert new admin user and its audit row in one transaction
+        let createAudit;
+        const result = await sqlConnection.begin(async (tx) => {
+          const inserted = await tx`
+            INSERT INTO users (display_name, email, institution_id, role)
+            VALUES (${display_name}, ${email}, ${institution_id || null}, 'admin')
+            RETURNING id, display_name, email, role, institution_id, created_at
+          `;
+          createAudit = auditEntry(event, "admin_user.create", { user_id: inserted[0].id });
+          await insertAdminAudit(tx, createAudit);
+          return inserted;
+        });
+        logAdminAudit(createAudit);
 
         response.statusCode = 201; // Created
         data = result[0];
@@ -966,7 +1021,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify({ items });
           break;
         } catch (err) {
-          console.error("GET /admin/data_sources error:", err);
+          console.error("GET /admin/data_sources error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ message: "Internal Server Error" });
           break;
@@ -1052,7 +1107,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/users error:", err);
+          console.error("GET /admin/users error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1085,7 +1140,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/users/{userId}/chat_sessions error:", err);
+          console.error("GET /admin/users/{userId}/chat_sessions error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1118,7 +1173,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/chat_sessions/{sessionId}/messages error:", err);
+          console.error("GET /admin/chat_sessions/{sessionId}/messages error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1427,7 +1482,10 @@ exports.handler = async (event) => {
         }
 
         // Single UPDATE of the latest row (no â€œensure row existsâ€ step)
-        const updated = await sqlConnection`
+        // Runs in one transaction with its audit row (field names only, no values).
+        let settingsAudit = null;
+        const updated = await sqlConnection.begin(async (tx) => {
+          const rows = await tx`
           WITH latest AS (
             SELECT id
             FROM system_settings
@@ -1476,6 +1534,16 @@ exports.handler = async (event) => {
             s.updated_by,
             s.updated_at
         `;
+          if (rows.length > 0) {
+            settingsAudit = auditEntry(event, "system_settings.update", {
+              settings_id: rows[0].id,
+              fields: Object.keys(patch),
+            });
+            await insertAdminAudit(tx, settingsAudit);
+          }
+          return rows;
+        });
+        if (settingsAudit) logAdminAudit(settingsAudit);
 
         if (updated.length === 0) {
           // Should never happen because we seed system_settings
@@ -1516,20 +1584,12 @@ exports.handler = async (event) => {
   return logAndReturn(event, response);
 };
 
-// Log response for debugging (visible in AWS CloudWatch Logs), then return it
-// to API Gateway. Analytics includes user-written feedback comments and journey
-// routes return large prompt trees; log status only for those. Feedback triage
-// is status-only too so it stays consistent with the feedback privacy rules.
+// Log a status line, then return the response to API Gateway. Admin responses
+// hold user emails, chat transcripts, raw sources and feedback comments, so
+// every route logs status only; no route logs its body. The status line names
+// the acting admin (Cognito sub from the authorizer) so every admin action,
+// including a denied one, is attributable (finding f-7f03f151).
 function logAndReturn(event, response) {
-  const routeKey = `${event.httpMethod} ${event.resource}`;
-  if (
-    event.resource === "/admin/analytics" ||
-    isJourneyRoute(routeKey) ||
-    isFeedbackTriageRoute(routeKey)
-  ) {
-    console.log({ statusCode: response.statusCode, resource: event.resource });
-  } else {
-    console.log(response);
-  }
+  logResponse(event, response, { actorSub: adminSubFromEvent(event) });
   return response;
 }

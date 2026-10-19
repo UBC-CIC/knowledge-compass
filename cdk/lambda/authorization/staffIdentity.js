@@ -53,15 +53,26 @@ async function detachEmail(tx, email, keepId) {
  * @param email    Cognito-verified email (optional)
  * @param role     role for a newly created row ('admin' | 'student')
  * @param elevate  when true and role is 'admin', an existing row is set to admin
+ * @param onWrite  optional async (tx, result) => void, called inside the same
+ *                 transaction after the row is written (e.g. an admin_audit
+ *                 insert); if it throws, the whole change rolls back
  * @returns {{ id, email, role, outcome: "existing" | "linked" | "created" }}
  */
-async function ensureStaffUser(sql, { sub, email, displayName, role = "student", elevate = false } = {}) {
+async function ensureStaffUser(
+  sql,
+  { sub, email, displayName, role = "student", elevate = false, onWrite } = {}
+) {
   const cognitoSub = typeof sub === "string" ? sub.trim() : "";
   if (!cognitoSub) throw new Error("ensureStaffUser requires a Cognito sub");
   const normalized = normalizeEmail(email);
   const elevateToAdmin = elevate === true && role === "admin";
 
   return sql.begin(async (tx) => {
+    const finish = async (result) => {
+      if (typeof onWrite === "function") await onWrite(tx, result);
+      return result;
+    };
+
     // Serialize concurrent first sign-ins of the same account.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`staff-identity:${normalized || cognitoSub}`}, 0))`;
 
@@ -82,7 +93,7 @@ async function ensureStaffUser(sql, { sub, email, displayName, role = "student",
         WHERE id = ${row.id}
         RETURNING id, email, role
       `;
-      return { ...updated, outcome: "existing" };
+      return finish({ ...updated, outcome: "existing" });
     }
 
     if (normalized) {
@@ -110,7 +121,7 @@ async function ensureStaffUser(sql, { sub, email, displayName, role = "student",
           WHERE id = ${legacy.id}
           RETURNING id, email, role
         `;
-        return { ...linked, outcome: "linked" };
+        return finish({ ...linked, outcome: "linked" });
       }
       if (holders.length > 0) await detachEmail(tx, normalized, null);
     }
@@ -125,7 +136,7 @@ async function ensureStaffUser(sql, { sub, email, displayName, role = "student",
       )
       RETURNING id, email, role
     `;
-    return { ...created, outcome: "created" };
+    return finish({ ...created, outcome: "created" });
   });
 }
 

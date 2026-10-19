@@ -127,6 +127,61 @@ test("a guest row that owns chats or a cognito row with another sub is detached 
   }
 });
 
+test("onWrite runs once inside the transaction for each outcome", async () => {
+  const cases = [
+    [{ bySub: [{ id: ROW, email: EMAIL, role: "student" }] }, "existing"],
+    [{ holders: [{ id: ROW, identity_source: "cognito", cognito_sub: null, role: "admin", has_sessions: false }] }, "linked"],
+    [{}, "created"],
+  ];
+  for (const [setup, outcome] of cases) {
+    const sql = staffSql(setup);
+    let inTx = false;
+    const seenTx = [];
+    sql.begin = async (fn) => {
+      inTx = true;
+      try {
+        return await fn(sql);
+      } finally {
+        inTx = false;
+      }
+    };
+    const calls = [];
+    const result = await captureLogs(() =>
+      ensureStaffUser(sql, {
+        sub: SUB,
+        email: EMAIL,
+        role: "admin",
+        elevate: true,
+        onWrite: async (tx, row) => {
+          seenTx.push(inTx);
+          calls.push({ tx, row });
+        },
+      })
+    );
+    assert.equal(calls.length, 1, outcome);
+    assert.equal(calls[0].tx, sql);
+    assert.deepEqual(seenTx, [true], "called before the transaction resolves");
+    assert.equal(calls[0].row.outcome, outcome);
+    assert.deepEqual(calls[0].row, result.result);
+  }
+});
+
+test("an onWrite that throws rejects ensureStaffUser", async () => {
+  const sql = staffSql({ bySub: [{ id: ROW, email: EMAIL, role: "admin" }] });
+  await assert.rejects(
+    ensureStaffUser(sql, {
+      sub: SUB,
+      email: EMAIL,
+      role: "admin",
+      elevate: true,
+      onWrite: async () => {
+        throw new Error("audit insert failed");
+      },
+    }),
+    /audit insert failed/
+  );
+});
+
 test("no email: creates a cognito row with a null email without any email lookup", async () => {
   const sql = staffSql();
   const row = await ensureStaffUser(sql, { sub: SUB, role: "student" });
