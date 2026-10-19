@@ -469,6 +469,10 @@ paths:
                   example: example@email.com
                 name:
                   type: string
+                  description: >-
+                    For type website: the crawl seed. Must be a public http(s) URL (no
+                    embedded credentials, ports 80/443/8080/8443, host must resolve only
+                    to public addresses); stored normalized.
                   example: https://example.com
                 include_patterns:
                   type: array
@@ -535,6 +539,9 @@ paths:
                   example: uploads/video/1712345678_family-rights-webinar.mp4
                 video_url:
                   type: string
+                  description: >-
+                    Required when type is video. Public http(s) URL used for citations and
+                    deep-links; must not point to a private or reserved address.
                   example: https://www.youtube.com/watch?v=example
                 document_file_name:
                   type: string
@@ -549,7 +556,8 @@ paths:
                   type: string
                   description: >-
                     Required when type is document. Public http(s) URL where users can
-                    open the document; shown as its citation link.
+                    open the document; shown as its citation link. Must not point to a
+                    private or reserved address.
                   example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
@@ -584,7 +592,9 @@ paths:
                       http(s) URLs. A hint for setting url_column; nothing is crawled
                       unless url_column is set.
         "400":
-          description: Invalid request
+          description: >-
+            Invalid request, including a website name, video_url or document_url
+            that is not a public http(s) URL
         "404":
           description: Route not found
         "409":

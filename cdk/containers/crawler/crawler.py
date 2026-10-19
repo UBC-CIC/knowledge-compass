@@ -34,6 +34,8 @@ import json
 import os
 import re
 import sys
+import weakref
+from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 
 import trafilatura
@@ -72,6 +74,21 @@ except ImportError:
     _emb_spec = importlib.util.spec_from_file_location("embeddings", _emb_path)
     shared_embeddings = importlib.util.module_from_spec(_emb_spec)
     _emb_spec.loader.exec_module(shared_embeddings)  # type: ignore
+
+# SSRF guard (mirror of the Lambda url_safety); same import / path-load fallback.
+try:
+    from common import url_safety  # type: ignore
+except ImportError:
+    _safety_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "url_safety.py",
+    )
+    if not os.path.exists(_safety_path):
+        _safety_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "url_safety.py")
+    _safety_spec = importlib.util.spec_from_file_location("url_safety", _safety_path)
+    url_safety = importlib.util.module_from_spec(_safety_spec)
+    _safety_spec.loader.exec_module(url_safety)  # type: ignore
 
 
 # ── Config (environment-driven) ───────────────────────────────────────────────
@@ -833,17 +850,117 @@ def _split_long(text: str, max_words: int, overlap_sentences: int = 2) -> list:
     return parts
 
 
+# ── SSRF guard ────────────────────────────────────────────────────────────────
+# The seed comes from an admin-entered data source and the crawled pages are
+# untrusted, while this task runs inside the VPC with database and Bedrock
+# access. Only public http(s) destinations may be fetched or stored. Limits
+# (DNS rebinding, redirect hops, WebSockets) are described in
+# common/url_safety.py.
+
+class UnsafeSeedURL(RuntimeError):
+    """SEED_URL is not a public http(s) URL."""
+
+
+class UnsafeRequestURL(RuntimeError):
+    """A request was about to navigate to a non-public URL."""
+
+
+def validate_seed_url(seed_url: str, resolver=None) -> None:
+    """Refuse to crawl a seed that is not a public http(s) URL (never prints the address)."""
+    try:
+        url_safety.check_public_url(seed_url, resolver=resolver)
+    except (url_safety.InvalidURL, url_safety.BlockedURL, OSError) as e:
+        print(f"[ssrf] seed URL rejected ({type(e).__name__})", file=sys.stderr)
+        raise UnsafeSeedURL("Seed URL rejected: it must be a public http(s) address") from e
+
+
+def _log_blocked_host(url: str, checker) -> None:
+    """Log a blocked destination once per host, never the full URL."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or f"{parts.scheme}:"
+    except ValueError:
+        host = "(malformed)"
+    if host not in checker.logged_hosts:
+        checker.logged_hosts.add(host)
+        print(f"[ssrf] blocked request to non-public host {host}", file=sys.stderr)
+
+
+async def guard_route(route, checker) -> None:
+    """Playwright route handler: let public http(s) requests through, abort the rest."""
+    url = route.request.url
+    try:
+        allowed = await checker.allows(url)
+    except Exception:  # noqa: BLE001 - fail closed; an unresolved route would hang the page
+        allowed = False
+    if allowed:
+        await route.continue_()
+    else:
+        _log_blocked_host(url, checker)
+        await route.abort("blockedbyclient")
+
+
+async def guard_navigation(ctx, checker, guarded_contexts) -> None:
+    """
+    Pre-navigation hook: route every request of the browser context through
+    guard_route, and refuse a navigation to a non-public URL.
+
+    The route is installed on the BrowserContext, not the page: page.route does
+    not apply to popups, and a crawled page could otherwise window.open() or
+    submit a target=_blank form to an internal address in an unrouted page.
+    A context route covers every page of the context, popups included.
+    """
+    context = ctx.page.context
+    if context not in guarded_contexts:
+        await context.route("**/*", lambda route: guard_route(route, checker))
+        guarded_contexts.add(context)
+    if not await checker.allows(ctx.request.url):
+        _log_blocked_host(ctx.request.url, checker)
+        try:
+            ctx.request.no_retry = True  # a blocked URL stays blocked
+        except (AttributeError, TypeError, ValueError):
+            pass  # retries are then blocked the same way
+        raise UnsafeRequestURL("blocked non-public URL")
+
+
+def enqueue_filter(request_options):
+    """transform_request_function for enqueue_links: skip non-http(s) / non-public-IP links."""
+    if not url_safety.is_crawlable_url(request_options.get("url")):
+        return "skip"
+    return request_options
+
+
 # ── Crawler ───────────────────────────────────────────────────────────────────
 
 async def crawl(seed_url: str, max_pages: int, max_words: int,
                use_semantic: bool = False, semantic_threshold: float = 0.6):
     pages: list = []
     discovered_urls: set = set()
-    crawler = PlaywrightCrawler(max_requests_per_crawl=max_pages, headless=True)
+    checker = url_safety.PublicHostChecker()
+    guarded_contexts = weakref.WeakSet()
+    crawler = PlaywrightCrawler(
+        max_requests_per_crawl=max_pages,
+        headless=True,
+        # Requests served by a service worker bypass request routing, so block them.
+        browser_new_context_options={"service_workers": "block"},
+    )
+
+    @crawler.pre_navigation_hook
+    async def _guard(ctx) -> None:
+        await guard_navigation(ctx, checker, guarded_contexts)
 
     @crawler.router.default_handler
     async def handler(ctx: PlaywrightCrawlingContext) -> None:
         url = ctx.request.url
+
+        # Request routing does not see the redirect hops of a navigation, so a
+        # public URL can redirect to an internal one: re-check where the page
+        # ended up and store nothing from a non-public final URL.
+        if not await checker.allows(ctx.page.url):
+            _log_blocked_host(ctx.page.url, checker)
+            print("  [ssrf] skipped page whose final URL is not public", file=sys.stderr)
+            return
+
         discovered_urls.add(url)
 
         # Wait for JS to fully render (important for Wix SPAs)
@@ -872,6 +989,7 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
         view_ids = re.findall(r'[?&]view=([a-f0-9-]{36})', html)
         if view_ids:
             resource_urls = [f"https://{ctx.page.url.split('/')[2]}/resource?view={vid}" for vid in set(view_ids)]
+            resource_urls = [u for u in resource_urls if url_safety.is_crawlable_url(u)]
             await ctx.add_requests(resource_urls)
             print(f"  [wix]  {url} — enqueued {len(resource_urls)} resource detail page(s)", file=sys.stderr)
 
@@ -894,7 +1012,9 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
             video_note = f", {len(video_urls)} video URL(s)" if video_urls else ""
             print(f"  [ok]   {url} — {len(chunks)} chunk(s){video_note}", file=sys.stderr)
 
-        await ctx.enqueue_links(strategy="same-domain", selector="a[href]")
+        await ctx.enqueue_links(
+            strategy="same-domain", selector="a[href]", transform_request_function=enqueue_filter
+        )
 
     await crawler.run([seed_url])
     return pages, discovered_urls
@@ -934,6 +1054,10 @@ def main() -> None:
 
     if not args.seed_url:
         parser.error("seed_url is required (pass as an argument or set SEED_URL env)")
+
+    # Validate before anything else runs; the original string is still passed
+    # on unchanged (write_to_db matches data_sources.name against it).
+    validate_seed_url(args.seed_url)
 
     # Resolve the embedding space once, before crawling: semantic splitting
     # embeds sentences and needs the space's model and split_threshold.

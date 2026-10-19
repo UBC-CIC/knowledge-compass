@@ -8,6 +8,7 @@ Run from the knowledgeBase dir:
 """
 
 import json
+import socket
 import sys
 import types
 import unittest
@@ -63,11 +64,18 @@ class StageDocumentUrlTests(unittest.TestCase):
         self.assert_rejected(self.stage(body(document_url="s3://bucket/key.pdf")))
 
     def test_http_link_passes_validation(self):
-        # Gets past URL validation and reaches the S3 existence check.
-        with mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")):
+        # Gets past URL validation and reaches the S3 existence check (DNS faked; no network).
+        def public_dns(host, port, type=None):  # noqa: A002 - mirrors socket.getaddrinfo
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        with mock.patch("socket.getaddrinfo", public_dns), \
+                mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")):
             response = self.stage(body(document_url="https://example.org/handbook.pdf"))
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("does not exist in S3", json.loads(response["body"])["error"])
+
+    def test_private_link_is_rejected(self):
+        self.assert_rejected(self.stage(body(document_url="http://169.254.170.2/x.pdf")))
 
 
 if __name__ == "__main__":

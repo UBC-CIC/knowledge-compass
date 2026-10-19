@@ -8,7 +8,8 @@ from helpers.admin_user import (
 )
 from helpers.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
-from helpers.video_transcription import is_http_url, start_transcription_job
+from helpers.video_transcription import start_transcription_job
+from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 from helpers.process_document_batch import trigger_uploaded_document
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
 from helpers.data_source_cleanup import supersede_duplicates
@@ -88,18 +89,43 @@ def _validate_file_pair(source_type: str, file_name: str, metadata_file_name: st
     return None
 
 
-def _existing_website_row_id(connection, *, name: str) -> str | None:
-    """Check whether a website data source with the same URL already exists"""
+def _validated_public_url(value: str, field: str) -> tuple[str | None, str | None]:
+    """
+    SSRF guard for admin-entered URLs (see helpers/url_safety.py).
+
+    Returns (normalized_url, None) when the URL is a public http(s) URL, or
+    (None, reason). Reasons are fixed texts that never include resolved
+    addresses; nothing about the URL is logged.
+    """
+    try:
+        return check_public_url(value), None
+    except InvalidURL as e:
+        # InvalidURL texts describe the URL's shape only (scheme, port, ...).
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, f"{field} must be a public http(s) URL ({e})"
+    except BlockedURL as e:
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, (
+            f"{field} must be a public http(s) URL; it points to a private, "
+            "loopback, link-local or reserved address"
+        )
+    except OSError as e:
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, f"{field} could not be resolved; check the address and try again"
+
+
+def _existing_website_row_id(connection, *, names: list[str]) -> str | None:
+    """Check whether a website data source with any of these URLs already exists"""
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT id
             FROM data_sources
             WHERE type = %s::data_source_type
-              AND name = %s
+              AND name = ANY(%s)
             LIMIT 1
             """,
-            ("website", name),
+            ("website", names),
         )
         row = cursor.fetchone()
         return str(row[0]) if row else None
@@ -502,8 +528,15 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
     include_patterns = body.get("include_patterns", [])
     exclude_patterns = body.get("exclude_patterns", [])
 
-    if not name:
+    if not isinstance(name, str) or not name.strip():
         return _response(event, 400, {"error": "Missing name of the website"})
+
+    # The name is the crawl seed the in-VPC crawler will open: it must be a
+    # public http(s) URL. The normalized form is stored.
+    raw_name = name.strip()
+    name, url_error = _validated_public_url(raw_name, "name")
+    if url_error:
+        return _response(event, 400, {"error": url_error})
 
     if not isinstance(include_patterns, list):
         return _response(event, 400, {"error": "include_patterns must be an array"})
@@ -511,7 +544,8 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
     if not isinstance(exclude_patterns, list):
         return _response(event, 400, {"error": "exclude_patterns must be an array"})
 
-    existing_id = _existing_website_row_id(connection, name=name)
+    # Also match the raw spelling: rows staged before normalization store it.
+    existing_id = _existing_website_row_id(connection, names=list(dict.fromkeys([name, raw_name])))
     if existing_id:
         return _response(
             event,
@@ -590,7 +624,8 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
 
     if not file_name or not s3_bucket or not s3_key:
         return _response(event, 400, {"error": "Missing video file details"})
-    if not video_url or not is_http_url(video_url):
+    # Validated only; the trimmed original is stored so deep links are kept.
+    if not video_url or _validated_public_url(video_url, "video_url")[1]:
         return _response(
             event,
             400,
@@ -745,7 +780,7 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         )
     # Public users can only open a cited document through this link (uploads
     # are never served from S3), so it is required.
-    if not document_url or not is_http_url(document_url):
+    if not document_url or _validated_public_url(document_url, "document_url")[1]:
         return _response(
             event,
             400,

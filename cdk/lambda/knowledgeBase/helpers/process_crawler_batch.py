@@ -32,6 +32,7 @@ import os
 import boto3
 
 from helpers.cors import get_cors_headers
+from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -50,6 +51,16 @@ TRANSCRIBER_CONTAINER_NAME = os.environ.get("TRANSCRIBER_CONTAINER_NAME", "trans
 DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME") or os.environ.get("SM_DB_CREDENTIALS", "")
 
 ecs_client = boto3.client("ecs", region_name=REGION)
+
+# Shown to admins on the failed run; never includes the URL or resolved address.
+REJECTED_SEED_MESSAGE = (
+    "Website URL was rejected: it must be a public http(s) address. "
+    "Delete this website and add it again with a public URL."
+)
+
+
+class SeedURLRejected(Exception):
+    """The stored website seed is not a public http(s) URL; the crawler must not be launched."""
 
 
 def _response(event, status_code: int, body: dict):
@@ -127,6 +138,33 @@ def _mark_run_running(connection, *, ingestion_run_id: str, ecs_task_arn: str, s
                         "backend": "pgvector",
                         "sync_session_id": sync_session_id,
                         "ecs_task_arn": ecs_task_arn,
+                    }
+                ),
+                ingestion_run_id,
+            ),
+        )
+
+
+def _mark_run_failed(connection, *, ingestion_run_id: str, error_message: str, sync_session_id: str):
+    """Mark a queued run failed without launching a task (same shape as handle_ecs_task_stopped)."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'failed'::ingestion_status,
+                error_message = %s,
+                completed_at = now(),
+                finished_at = now(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+            WHERE id = %s::uuid
+            """,
+            (
+                error_message,
+                json.dumps(
+                    {
+                        "backend": "pgvector",
+                        "sync_session_id": sync_session_id,
+                        "rejected": "unsafe_seed_url",
                     }
                 ),
                 ingestion_run_id,
@@ -229,6 +267,14 @@ def handle_ecs_task_stopped(event, connection) -> dict:
 def _run_crawler_task(run: dict) -> str:
     """Launch the crawler ECS task for a website source. Returns the ECS task ARN."""
     # For website sources, ds.name holds the seed URL (see stage_data_sources.py).
+    # Re-validate it here: rows may predate staging validation. DNS failures
+    # (OSError) propagate as an ordinary launch failure so the run is retried.
+    # SEED_URL stays byte-identical to ds.name: the crawler falls back to
+    # matching data_sources.name against it.
+    try:
+        check_public_url(run["name"])
+    except (InvalidURL, BlockedURL) as e:
+        raise SeedURLRejected(type(e).__name__) from e
     env = [
         {"name": "JOB_ID", "value": run["ingestion_run_id"]},
         {"name": "SEED_URL", "value": run["name"]},
@@ -369,6 +415,30 @@ def process_crawler_batch(event, connection, sync_session_id: str, triggered_by_
             )
             connection.commit()
             launched.append({"ingestion_run_id": run["ingestion_run_id"], "type": run["type"], "ecs_task_arn": task_arn})
+        except SeedURLRejected as e:
+            # Permanent: fail the run so it is not retried on every sync.
+            connection.rollback()
+            try:
+                _mark_run_failed(
+                    connection,
+                    ingestion_run_id=run["ingestion_run_id"],
+                    error_message=REJECTED_SEED_MESSAGE,
+                    sync_session_id=sync_session_id,
+                )
+                connection.commit()
+            except Exception as exc:  # noqa: BLE001
+                connection.rollback()
+                logger.error(
+                    "Could not mark run %s failed after rejecting its seed URL (%s)",
+                    run["ingestion_run_id"],
+                    type(exc).__name__,
+                )
+            logger.warning(
+                "Refusing to launch crawler for run %s: stored seed URL is not a public http(s) URL (%s)",
+                run["ingestion_run_id"],
+                e,
+            )
+            failures.append({"ingestion_run_id": run["ingestion_run_id"], "error": REJECTED_SEED_MESSAGE})
         except Exception as e:  # noqa: BLE001
             connection.rollback()
             logger.error("Failed to launch ingestion task for run %s: %s", run["ingestion_run_id"], e, exc_info=True)

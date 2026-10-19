@@ -30,9 +30,17 @@ RUN apt-get update \
 # cannot create in the root-owned /app. Point it at a writable tmp path.
 ENV CRAWLEE_STORAGE_DIR=/tmp/crawlee-storage
 
-# Chromium's user-namespace sandbox is unavailable on Fargate (and in default
-# Docker), so the browser fails to launch with "No usable sandbox". Isolation
-# comes from the container boundary plus the non-root pwuser instead.
+# Chromium's sandbox cannot start on Fargate: the namespace sandbox needs
+# unprivileged user namespaces or CAP_SYS_ADMIN, the setuid fallback also needs
+# CLONE_NEW* namespaces, Fargate only allows adding SYS_PTRACE, and it does not
+# support custom seccomp profiles. Removing this makes every launch fail with
+# "No usable sandbox". This browser renders untrusted pages, so compensating
+# controls are: the non-root pwuser (below), the request-level SSRF guard in
+# crawler.py / common/url_safety.py (only public http(s) hosts are fetched),
+# and the task security group limiting public egress to 443.
+# readonlyRootFilesystem is deferred: it needs a task-definition change, which
+# is blocked while KC-Api imports the task-def ARN export (ingestion-stack.ts),
+# and Fargate has no tmpfs for the writable /tmp Chromium needs.
 ENV CRAWLEE_DISABLE_BROWSER_SANDBOX=true
 
 WORKDIR /app

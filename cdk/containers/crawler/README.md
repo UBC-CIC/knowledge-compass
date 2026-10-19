@@ -131,6 +131,32 @@ The Lambda is the consistent entry point — whether triggered by a human (front
 
 ---
 
+## URL Safety
+
+The crawler runs inside the VPC with database and Bedrock access, so it only
+fetches public http(s) destinations:
+
+- The website seed is validated three times: at staging
+  (`stage_data_sources.py`, stored normalized), again before `ecs:RunTask`
+  (`process_crawler_batch.py`; a rejected seed fails the run), and in the
+  container before crawling (`validate_seed_url`). Rules: http/https only, no
+  embedded credentials, ports 80/443/8080/8443, and every resolved address
+  must be public (no private, loopback, link-local/metadata, or reserved).
+- Every browser request is routed through `guard_route` (Playwright
+  `BrowserContext.route`, so popups opened by a crawled page are covered
+  too), which aborts non-public hosts and non-http(s) schemes;
+  navigations are refused in a pre-navigation hook; enqueued links are
+  filtered; service workers are blocked so they cannot bypass routing.
+- `common/url_safety.py` mirrors the Lambda `helpers/url_safety.py`; keep the
+  two in sync.
+
+Limits: Chromium resolves DNS again after the check (DNS rebinding), redirect
+hops of a navigation are not routed (the final URL is re-checked and nothing
+is stored from a non-public one), WebSockets are not guarded, and the
+Chromium sandbox is disabled on Fargate (see the Dockerfile).
+
+---
+
 ## Docker Container Requirements
 
 The ECS Fargate container needs:
