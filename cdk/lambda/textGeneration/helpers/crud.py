@@ -5,6 +5,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from helpers.prompt_data import MAX_GUIDE_LABEL_CHARS, guide_state_key
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -341,7 +343,14 @@ def fetch_active_space(db_connection, space_id: Optional[str] = None) -> Optiona
 
 
 def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, Any]]:
-    """Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata."""
+    """
+    Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata.
+
+    The column is client-reachable storage, so the stored value is
+    shape-checked and resolved against guideline_sections of a ready guide;
+    anything that does not resolve gives None. The stored label is ignored:
+    the canonical admin/auto label is returned instead.
+    """
     try:
         with db_connection.cursor() as cur:
             cur.execute(
@@ -349,9 +358,36 @@ def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, A
                 (chat_session_id,)
             )
             row = cur.fetchone()
-            return row[0] if row and isinstance(row[0], dict) else None
+            key = guide_state_key(row[0]) if row else None
+            if key is None:
+                return None
+            document_id, section_key = key
+            cur.execute(
+                """
+                SELECT COALESCE(NULLIF(gs.label_override, ''), gs.auto_label, '')
+                  FROM guideline_sections gs
+                  JOIN guideline_documents d ON d.id = gs.document_id
+                 WHERE d.status = 'ready'
+                   AND gs.document_id = %s::uuid
+                   AND gs.section_key = %s
+                 LIMIT 1
+                """,
+                (document_id, section_key)
+            )
+            section = cur.fetchone()
+            if not section:
+                return None
+            return {
+                "document_id": document_id,
+                "section_key": section_key,
+                "label": (section[0] or "")[:MAX_GUIDE_LABEL_CHARS],
+            }
     except Exception as e:
         logger.error(f"get_guide_state failed: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
         return None
 
 
