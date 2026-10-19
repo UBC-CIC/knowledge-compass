@@ -1,5 +1,7 @@
 # Evaluation harness
 
+Stakeholder overview (what is measured, how to read a report): [`Docs/EVALS.md`](../Docs/EVALS.md).
+
 Automated tests of Knowledge Compass journeys and situations against the live
 public chat API. It:
 
@@ -250,7 +252,7 @@ Start small and check Bedrock pricing for current rates.
   `run.json → cleanup_failed`, and all of them carry the run's `eval_run_id`.
 - **Admin user list.** Harness users still appear in the admin user list.
 - **No feedback, no intro flag.** The harness never sends feedback and never sets
-  `is_intro_message`, which would skip the guardrail.
+  `is_intro_message`. The server ignores that flag; the guardrail always runs.
 - **Synthetic data only.** Personas are synthetic. Do not put real family details in scenarios.
 
 ## Signed tag and the future dual mode
