@@ -189,7 +189,7 @@ if guardrail_result['action'] == ACTION_ANONYMIZED:
     query = guardrail_result['text']
 ```
 
-The guardrail is skipped entirely for intro message (`is_intro_message=True`).
+The guardrail runs for every message. No request field can skip it; any client-sent `is_intro_message` is ignored.
 
 ### IAM and Permissions
 
@@ -221,7 +221,7 @@ The guardrail is configured in `api-stack.ts` with:
 
   Regex matches (`sensitiveInformationPolicy.regexes`) are classified as ANONYMIZED in `helpers/guardrail.py`, the same as built-in PII entities.
 
-- **Prompt attack filter:** `PROMPT_ATTACK` with `inputStrength: HIGH`, `outputStrength: NONE` — prompt injection attempts are blocked before reaching the LLM.
+- **Prompt attack filter:** `PROMPT_ATTACK` with `inputStrength: HIGH`, `outputStrength: NONE` — prompt injection attempts are blocked before reaching the LLM. The output strength must stay `NONE`: AWS applies the prompt-attack filter to user input only, and the app calls ApplyGuardrail with `source='INPUT'` only.
 - **`blockedInputMessaging`:** Friendly redirect message shown to the user when a prompt injection is detected.
 
 To change PII entities or attack sensitivity, edit the `guardrailConfig` object and `inputGuardrail` resource in `cdk/lib/api-stack.ts`, then redeploy. The config hash system will automatically create a new pinned guardrail version.
@@ -235,13 +235,13 @@ To change PII entities or attack sensitivity, edit the `guardrailConfig` object 
 
 2. **No output guardrail:** Guardrails are not applied to LLM responses. Output safety is handled by the system prompt guardrails and the intervention/assessment layer (`helpers/intervention.py`).
 
-3. **Intro messages:** The guardrail check is skipped for intro messages (`is_intro_message=True` in the request body).
+3. **Intro messages:** The guardrail runs for every message, including the first turn of a session. No request field can skip it; any client-sent `is_intro_message` is ignored. The welcome message is shown client-side and never goes through text generation.
 
 4. **Error handling:** If the `apply_guardrail` API call itself fails (network error, permissions issue, etc.), the Lambda returns a 500-level error rather than silently passing the message through.
 
 ### Automatic Protection
 
-Guardrails are applied automatically to all non-intro user queries handled by the text generation function. No additional runtime configuration is required — the Lambda reads `GUARDRAIL_ID` and `GUARDRAIL_VERSION` directly from its environment variables, which are set by CDK at deploy time.
+Guardrails are applied automatically to all user queries handled by the text generation function. No additional runtime configuration is required — the Lambda reads `GUARDRAIL_ID` and `GUARDRAIL_VERSION` directly from its environment variables, which are set by CDK at deploy time.
 
 ## Testing
 

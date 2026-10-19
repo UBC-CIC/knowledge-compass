@@ -28,7 +28,7 @@ if "helpers.db_connection" not in sys.modules:
 
 import main  # noqa: E402
 from helpers import chat  # noqa: E402
-from helpers.guardrail import ACTION_ANONYMIZED, ACTION_BLOCKED  # noqa: E402
+from helpers.guardrail import ACTION_ANONYMIZED, ACTION_BLOCKED, ACTION_NONE  # noqa: E402
 
 USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11"
 SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99"
@@ -115,6 +115,49 @@ class MainGuardrailTests(unittest.TestCase):
         self.guardrail.assert_called_once()
         # The redacted text, not the raw message, goes on to generation.
         self.assertEqual(self.prepare.call_args.args[0], "my name is {NAME}")
+
+    def test_intro_flag_on_session_with_existing_messages_still_runs_guardrail(self):
+        # The session already has history: generation proceeds after a clean
+        # guardrail pass, and the guardrail must run before generation starts.
+        self.guardrail.return_value = {"action": ACTION_NONE, "text": QUERY}
+        self.prepare.side_effect = RuntimeError("stop after the guardrail")
+        order = mock.Mock()
+        order.attach_mock(self.guardrail, "guardrail")
+        order.attach_mock(self.prepare, "prepare")
+
+        with mock.patch.object(chat, "get_exchange_count", return_value=3):
+            main.handler(make_event({"query": QUERY, "is_intro_message": True}))
+
+        self.guardrail.assert_called_once_with(QUERY, main.config.REGION)
+        self.assertEqual(self.prepare.call_args.args[0], QUERY)
+        names = [c[0] for c in order.mock_calls]
+        self.assertLess(names.index("guardrail"), names.index("prepare"))
+
+    def test_intro_flag_string_or_truthy_values_do_not_skip_guardrail(self):
+        for value in ("true", 1, "1", {"x": 1}):
+            with self.subTest(is_intro_message=value):
+                self.guardrail.reset_mock()
+                main.handler(make_event({"query": QUERY, "is_intro_message": value}))
+                self.guardrail.assert_called_once_with(QUERY, main.config.REGION)
+                self.prepare.assert_not_called()
+
+    def test_first_turn_of_new_session_runs_guardrail(self):
+        # The opening greeting is shown client-side; the first text_generation
+        # turn is user text and is checked like any other.
+        with mock.patch.object(chat, "get_exchange_count", return_value=0):
+            main.handler(make_event({"query": QUERY}))
+
+        self.guardrail.assert_called_once_with(QUERY, main.config.REGION)
+        self.prepare.assert_not_called()
+
+    def test_rest_path_without_websocket_runs_guardrail(self):
+        with mock.patch.object(main, "_get_ws_client", return_value=(None, None)):
+            result = main.handler(make_event({"query": QUERY, "is_intro_message": True}))
+
+        self.guardrail.assert_called_once_with(QUERY, main.config.REGION)
+        self.prepare.assert_not_called()
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"])["response"], DENIAL)
 
     def test_get_response_has_no_guardrail_bypass_parameter(self):
         self.assertNotIn("is_intro_message", inspect.signature(chat.get_response).parameters)
