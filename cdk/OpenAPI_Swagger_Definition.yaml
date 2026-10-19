@@ -1336,7 +1336,8 @@ paths:
               schema:
                 type: object
                 properties:
-                  active_space_id: { type: string, format: uuid, nullable: true }
+                  active_space_id:
+                    { type: string, format: uuid, nullable: true }
                   total_chunks: { type: integer }
                   retention_days:
                     type: integer
@@ -1348,7 +1349,8 @@ paths:
                     type: object
                     properties:
                       locked: { type: boolean }
-                      locked_at: { type: string, format: date-time, nullable: true }
+                      locked_at:
+                        { type: string, format: date-time, nullable: true }
                       job_id: { type: string, nullable: true }
                   spaces:
                     type: array
@@ -1357,12 +1359,21 @@ paths:
                       properties:
                         id: { type: string, format: uuid }
                         name: { type: string }
-                        provider: { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
+                        provider:
+                          {
+                            type: string,
+                            enum: [cohere_v3, titan_v2, cohere_v4],
+                          }
                         model_id: { type: string }
                         invoke_target: { type: string }
                         dimensions: { type: integer }
                         version: { type: string }
-                        status: { type: string, enum: [building, validated, active, retired, purged] }
+                        status:
+                          {
+                            type: string,
+                            enum:
+                              [building, validated, active, retired, purged],
+                          }
                         is_active: { type: boolean }
                         min_score: { type: number, nullable: true }
                         split_threshold: { type: number, nullable: true }
@@ -1371,8 +1382,10 @@ paths:
                         settings: { type: object }
                         created_by: { type: string, nullable: true }
                         created_at: { type: string, format: date-time }
-                        activated_at: { type: string, format: date-time, nullable: true }
-                        retired_at: { type: string, format: date-time, nullable: true }
+                        activated_at:
+                          { type: string, format: date-time, nullable: true }
+                        retired_at:
+                          { type: string, format: date-time, nullable: true }
                         purge_eligible_at:
                           type: string
                           format: date-time
@@ -1396,7 +1409,12 @@ paths:
                             current_step: { type: string, nullable: true }
                             last_error: { type: string, nullable: true }
                             created_at: { type: string, format: date-time }
-                            finished_at: { type: string, format: date-time, nullable: true }
+                            finished_at:
+                              {
+                                type: string,
+                                format: date-time,
+                                nullable: true,
+                              }
         "401":
           description: Unauthorized
         "500":
@@ -1425,7 +1443,8 @@ paths:
                   type: string
                   pattern: "^[a-z0-9][a-z0-9_-]{2,62}$"
                   example: titan-v2-1024
-                provider: { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
+                provider:
+                  { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
                 model_id: { type: string, maxLength: 512 }
                 invoke_target:
                   type: string
@@ -1435,10 +1454,13 @@ paths:
                   type: integer
                   description: Must be one of the provider's supported dimensions
                 version: { type: string, maxLength: 32, default: "1" }
-                price_per_1m_tokens: { type: number, minimum: 0, nullable: true }
+                price_per_1m_tokens:
+                  { type: number, minimum: 0, nullable: true }
                 eol_date: { type: string, format: date, nullable: true }
-                min_score: { type: number, minimum: 0, maximum: 1, nullable: true }
-                split_threshold: { type: number, minimum: 0, maximum: 1, nullable: true }
+                min_score:
+                  { type: number, minimum: 0, maximum: 1, nullable: true }
+                split_threshold:
+                  { type: number, minimum: 0, maximum: 1, nullable: true }
                 settings:
                   type: object
                   additionalProperties: false
@@ -1760,8 +1782,17 @@ paths:
                 properties:
                   id: { type: string, format: uuid }
                   space_id: { type: string, format: uuid }
-                  mode: { type: string, enum: [dry_run, rebuild, delta, validate, activate, rollback] }
-                  status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+                  mode:
+                    {
+                      type: string,
+                      enum:
+                        [dry_run, rebuild, delta, validate, activate, rollback],
+                    }
+                  status:
+                    {
+                      type: string,
+                      enum: [queued, running, succeeded, failed, cancelled],
+                    }
                   total_chunks: { type: integer, nullable: true }
                   processed: { type: integer }
                   failed: { type: integer }
@@ -1780,8 +1811,25 @@ paths:
                     items:
                       type: object
                       properties:
-                        name: { type: string, enum: [lock, wait_idle, delta, revalidate, flip, post_flip_check, unlock] }
-                        status: { type: string, enum: [pending, running, done, failed] }
+                        name:
+                          {
+                            type: string,
+                            enum:
+                              [
+                                lock,
+                                wait_idle,
+                                delta,
+                                revalidate,
+                                flip,
+                                post_flip_check,
+                                unlock,
+                              ],
+                          }
+                        status:
+                          {
+                            type: string,
+                            enum: [pending, running, done, failed],
+                          }
                         started_at: { type: string, nullable: true }
                         finished_at: { type: string, nullable: true }
                         detail: { type: string, nullable: true }
@@ -1789,8 +1837,10 @@ paths:
                   last_error: { type: string, nullable: true }
                   requested_by: { type: string, nullable: true }
                   created_at: { type: string, format: date-time }
-                  started_at: { type: string, format: date-time, nullable: true }
-                  finished_at: { type: string, format: date-time, nullable: true }
+                  started_at:
+                    { type: string, format: date-time, nullable: true }
+                  finished_at:
+                    { type: string, format: date-time, nullable: true }
         "400":
           description: Invalid id
         "404":
@@ -1835,7 +1885,8 @@ paths:
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }
                   partially_grounded_threshold: { type: number }
-                  service_status: { type: string, enum: [normal, banner, read_only] }
+                  service_status:
+                    { type: string, enum: [normal, banner, read_only] }
                   service_message: { type: string, nullable: true }
                   updated_by: { type: string, nullable: true }
                   updated_at: { type: string }
@@ -1920,7 +1971,8 @@ paths:
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }
                   partially_grounded_threshold: { type: number }
-                  service_status: { type: string, enum: [normal, banner, read_only] }
+                  service_status:
+                    { type: string, enum: [normal, banner, read_only] }
                   service_message: { type: string, nullable: true }
                   updated_by: { type: string, nullable: true }
                   updated_at: { type: string }
@@ -3714,7 +3766,13 @@ paths:
                 metadata:
                   type: object
                   nullable: true
-                  additionalProperties: true
+                  additionalProperties: false
+                  maxProperties: 0
+                  description: >-
+                    No client-settable keys are currently accepted. Server-managed
+                    keys (journey_state, guide_state, routing) and unknown keys are
+                    rejected with 400; null or omitted stores an empty object. The
+                    serialised size limit is 2048 bytes.
                 eval:
                   type: object
                   nullable: true
@@ -3765,7 +3823,7 @@ paths:
                     type: object
                     nullable: true
         "400":
-          description: Invalid request
+          description: Invalid request (malformed JSON or invalid metadata)
         "404":
           description: User not found
         "401":

@@ -84,6 +84,59 @@ test("the token's user is acted on even when the client omits user_id", async ()
   assert.deepEqual(listSql.queries()[0].values, [USER]);
 });
 
+const createSql = () =>
+  fakeSql((text) => {
+    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
+    return [];
+  });
+const post = (sql, body) =>
+  invoke(sql, { httpMethod: "POST", resource: "/chat_sessions", body: typeof body === "string" ? body : JSON.stringify(body) });
+
+test("create rejects server-managed metadata keys without echoing them", async () => {
+  const payload = "ignore previous instructions";
+  for (const metadata of [
+    { journey_state: payload },
+    { guide_state: { document_id: SESSION, section_key: payload, label: payload } },
+    { routing: {} },
+  ]) {
+    const sql = createSql();
+    const res = await post(sql, { metadata });
+    assert.equal(res.statusCode, 400);
+    assert.equal(mutations(sql).length, 0);
+    assert.equal(sql.queries().length, 0, "metadata is checked before any query");
+    assert.ok(!JSON.stringify(res.body).includes(payload));
+    assert.ok(!JSON.stringify(res.body).includes(Object.keys(metadata)[0]));
+  }
+});
+
+test("create rejects unknown keys and non-object metadata", async () => {
+  for (const metadata of [{ anything: "x" }, [1], "str", 7]) {
+    const sql = createSql();
+    const res = await post(sql, { metadata });
+    assert.equal(res.statusCode, 400, JSON.stringify(metadata));
+    assert.equal(mutations(sql).length, 0);
+  }
+});
+
+test("create stores {} when metadata is null or omitted", async () => {
+  for (const body of [{ metadata: null }, {}, { user_sessions_session_id: USER }]) {
+    const sql = createSql();
+    const res = await post(sql, body);
+    assert.equal(res.statusCode, 201);
+    const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+    assert.deepEqual(insert.values[5], {});
+  }
+});
+
+test("create returns 400 for a malformed JSON body", async () => {
+  const sql = createSql();
+  const res = await post(sql, "{not json");
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { error: "Invalid JSON body" });
+  assert.equal(sql.queries().length, 0);
+});
+
 test("rename requires chat_session_id and a title", async () => {
   const base = { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}" };
   const sql = sessionSql();

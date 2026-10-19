@@ -243,8 +243,11 @@ test("a valid key is fetched once and reused", async () => {
 
 test("a tag placed inside metadata is ignored", async () => {
   const tag = tagFor(USER);
-  const { insert } = await createSession({ metadata: { eval: tag, eval_run_id: tag.run_id } });
-  assert.ok(!tagged(insert));
+  // Unknown metadata keys are rejected outright (utils/sessionMetadata.js),
+  // so no session, tagged or not, is created.
+  const { res, insert } = await createSession({ metadata: { eval: tag, eval_run_id: tag.run_id } });
+  assert.equal(res.statusCode, 400);
+  assert.equal(insert, undefined);
 });
 
 test("neither the tag nor the signing key is logged", async () => {

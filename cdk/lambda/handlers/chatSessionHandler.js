@@ -7,6 +7,8 @@ const {
 } = require("./utils/validation.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
 const { resolveEvalTag } = require("./utils/evalTag.js");
+const { validateSessionMetadata } = require("./utils/sessionMetadata.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
 const postgres = require("postgres");
 const {
   SecretsManagerClient,
@@ -38,7 +40,7 @@ const initConnection = async () => {
       await sqlConnection`SELECT 1`;
       console.log("Database connection initialized successfully");
     } catch (error) {
-      console.error("Error initializing database connection:", error);
+      console.error("Error initializing database connection:", errorSummary(error));
       throw error;
     }
   }
@@ -97,7 +99,7 @@ const reject = (response, failure) => {
 
 const handleError = (error, response) => {
   response.statusCode = 500;
-  console.error("Internal server error:", error);
+  console.error("Internal server error:", errorSummary(error));
   response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -132,7 +134,14 @@ exports.handler = async (event) => {
       }
 
       case "POST /chat_sessions": {
-        const body = parseBody(event.body);
+        let body;
+        try {
+          body = parseBody(event.body);
+        } catch (error) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: error.message });
+          break;
+        }
         const claimedUserId = body.user_id || body.userId || body.user_sessions_session_id;
         const caller = resolveCaller(event, claimedUserId);
         if (caller.error) {
@@ -142,7 +151,16 @@ exports.handler = async (event) => {
         const userId = caller.userId;
 
         const title = body.title || null;
-        const metadata = body.metadata || {};
+
+        // Server-authored keys (journey_state, guide_state, routing) reach the
+        // model prompt, so clients may only set allow-listed keys.
+        const metadataCheck = validateSessionMetadata(body.metadata);
+        if (!metadataCheck.valid) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: metadataCheck.error });
+          break;
+        }
+        const metadata = metadataCheck.metadata;
 
         // Validate user exists
         const userExists = await sqlConnection`
@@ -392,11 +410,8 @@ exports.handler = async (event) => {
     handleError(error, response);
   }
 
-  // Feedback responses can contain the user's free-text comment; log status only.
-  if (event.resource === "/chat_sessions/{chat_session_id}/feedback") {
-    console.log({ statusCode: response.statusCode, resource: event.resource });
-  } else {
-    console.log(response);
-  }
+  // Bodies can hold transcripts, session titles, metadata and feedback
+  // comments; log status only.
+  logResponse(event, response);
   return response;
 };
