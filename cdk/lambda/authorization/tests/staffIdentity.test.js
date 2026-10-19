@@ -91,6 +91,18 @@ test("legacy cognito row without a sub or chats is linked and its credentials re
   assert.ok(!texts(sql).some((t) => t.startsWith("INSERT INTO users")));
   const holders = find(sql, "SELECT id, identity_source");
   assert.equal(holders.values[0], EMAIL, "matched on the normalized email");
+  assert.match(holders.text, /ORDER BY \(role = 'admin'::user_role\) DESC, id/);
+});
+
+test("elevate does not adopt a non-admin row that holds the email", async () => {
+  const sql = staffSql({
+    holders: [{ id: GUEST, identity_source: "cognito", cognito_sub: null, role: "student", has_sessions: false }],
+  });
+  const row = await ensureStaffUser(sql, { sub: SUB, email: EMAIL, role: "admin", elevate: true });
+  assert.equal(row.outcome, "created");
+  assert.notEqual(row.id, GUEST);
+  assert.ok(!texts(sql).some((t) => t.startsWith("UPDATE users SET cognito_sub")));
+  assert.ok(find(sql, "UPDATE users SET email = NULL"));
 });
 
 test("a guest row holding the email is detached, never linked, and a cognito row is created", async () => {

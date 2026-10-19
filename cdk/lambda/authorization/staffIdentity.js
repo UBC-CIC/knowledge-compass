@@ -8,7 +8,9 @@
  *   (a) link a legacy 'cognito' row that has no sub yet and owns no chat
  *       sessions (created before migration 039), or
  *   (b) take the verified address away from any other row holding it.
- * A guest row is never linked, elevated or returned.
+ * A guest row is never linked, elevated or returned. With elevate=true the
+ * link also requires role 'admin', so a non-admin row is not adopted. The
+ * email select orders by admin role, then id.
  *
  * Lives under authorization/ because the PostConfirmation Lambda's asset is
  * lambda/authorization; handlers require it via ../../authorization/.
@@ -102,10 +104,17 @@ async function ensureStaffUser(
                EXISTS (SELECT 1 FROM chat_sessions s WHERE s.user_id = users.id) AS has_sessions
         FROM users
         WHERE lower(email) = ${normalized}
+        ORDER BY (role = 'admin'::user_role) DESC, id
         FOR UPDATE
       `;
+      // Non-admin holders stay in the result so their email can be detached.
+      // Elevating (promote / admin provision) never adopts one of them.
       const legacy = holders.find(
-        (r) => r.identity_source === "cognito" && !r.cognito_sub && !r.has_sessions
+        (r) =>
+          r.identity_source === "cognito" &&
+          !r.cognito_sub &&
+          !r.has_sessions &&
+          (!elevateToAdmin || r.role === "admin")
       );
       if (legacy) {
         await detachEmail(tx, normalized, legacy.id);

@@ -726,11 +726,15 @@ exports.handler = async (event) => {
           break;
         }
 
-        // Extract user fields from request body
+        // Extract user fields from request body. Email is stored in the same
+        // canonical form as every other writer (trim + lowercase) so a
+        // mixed-case address cannot sit beside its lowercase twin
+        // (users_email_lower_key, migration 041).
         const { display_name, email, institution_id } = userData;
+        const normalizedEmail = normalizeEmail(email);
 
         // Validate required fields
-        if (!display_name || !email) {
+        if (!display_name || !normalizedEmail) {
           response.statusCode = 400;
           response.body = JSON.stringify({
             error: "display_name and email are required",
@@ -750,7 +754,7 @@ exports.handler = async (event) => {
         const result = await sqlConnection.begin(async (tx) => {
           const inserted = await tx`
             INSERT INTO users (display_name, email, institution_id, role)
-            VALUES (${display_name}, ${email}, ${institution_id || null}, 'admin')
+            VALUES (${display_name}, ${normalizedEmail}, ${institution_id || null}, 'admin')
             RETURNING id, display_name, email, role, institution_id, created_at
           `;
           createAudit = auditEntry(event, "admin_user.create", { user_id: inserted[0].id });

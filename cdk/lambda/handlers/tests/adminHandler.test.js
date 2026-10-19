@@ -552,9 +552,11 @@ test("POST /admin/users audits the new admin row in its transaction; no sub is 4
     httpMethod: "POST",
     resource: "/admin/users",
     requestContext: auditContext,
-    body: JSON.stringify({ display_name: "New", email: "new@example.com" }),
+    body: JSON.stringify({ display_name: "New", email: "  New@Example.COM " }),
   });
   assert.equal(res.statusCode, 201);
+  const userInsert = sql.queries().find((q) => q.text.startsWith("INSERT INTO users"));
+  assert.equal(userInsert.values[1], "new@example.com");
   const inserts = auditInserts(sql);
   assert.equal(inserts.length, 1);
   assert.equal(inserts[0].values[2], "admin_user.create");
@@ -570,4 +572,17 @@ test("POST /admin/users audits the new admin row in its transaction; no sub is 4
   });
   assert.equal(res401.statusCode, 401);
   assert.equal(noSub.queries().length, 0);
+});
+
+test("POST /admin/users rejects a blank email before inserting", async () => {
+  const sql = fakeSql();
+  const res = await invoke(sql, {
+    httpMethod: "POST",
+    resource: "/admin/users",
+    requestContext: adminContext,
+    body: JSON.stringify({ display_name: "New", email: "   " }),
+  });
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { error: "display_name and email are required" });
+  assert.equal(sql.queries().length, 0);
 });

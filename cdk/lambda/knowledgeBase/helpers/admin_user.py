@@ -8,10 +8,12 @@ authorizer (requestContext.authorizer.userId); see migration 039.
 
 Mirrors cdk/lambda/authorization/staffIdentity.js (ensureStaffUser with
 role='admin', elevate=True); keep the algorithm and SQL in sync. An email
-match is only used to link a legacy 'cognito' row that has no sub and owns no
-chat sessions, or to take the verified address away from any other row. A
-guest row is never linked or returned. (The JS-only `onWrite` hook, used for
-the promote_user admin_audit insert, has no Python counterpart.)
+match is only used to link a legacy 'cognito' row with role 'admin' that has
+no sub and owns no chat sessions, or to take the verified address away from
+any other row. The email select orders by admin role, then id, so two holders
+cannot resolve to an arbitrary row. A guest or any other non-admin row is
+never linked or returned. (The JS-only `onWrite` hook, used for the
+promote_user admin_audit insert, has no Python counterpart.)
 
 Never logs email addresses or users ids. A privilege-changing write (admin
 row created, legacy row linked, or a non-admin row elevated) logs one
@@ -111,19 +113,30 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
             return str(updated[0]) if updated else user_id
 
         if normalized:
+            # Every holder is locked, including non-admins: their address has to
+            # be detached before the insert below or users_email_lower_key
+            # rejects the new row. Only a legacy admin (no sub, no chats) is
+            # linked. ORDER BY makes that choice deterministic when more than
+            # one admin row matches.
             cursor.execute(
                 """
                 SELECT id, identity_source, cognito_sub,
-                       EXISTS (SELECT 1 FROM chat_sessions s WHERE s.user_id = users.id) AS has_sessions
+                       EXISTS (SELECT 1 FROM chat_sessions s WHERE s.user_id = users.id) AS has_sessions,
+                       role
                 FROM users
                 WHERE lower(email) = %s
+                ORDER BY (role = 'admin'::user_role) DESC, id
                 FOR UPDATE
                 """,
                 (normalized,),
             )
             holders = cursor.fetchall() or []
             legacy = next(
-                (h for h in holders if h[1] == "cognito" and not h[2] and not h[3]),
+                (
+                    h
+                    for h in holders
+                    if h[1] == "cognito" and not h[2] and not h[3] and h[4] == "admin"
+                ),
                 None,
             )
             if legacy:

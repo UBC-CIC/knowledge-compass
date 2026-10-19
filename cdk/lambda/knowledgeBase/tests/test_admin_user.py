@@ -97,7 +97,7 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         self.assertFalse([t for t, _ in conn.executed if "lower(email)" in t])
 
     def test_legacy_cognito_row_is_linked_and_credentials_revoked(self):
-        conn = FakeConnection(holders=[(ROW, "cognito", None, False)])
+        conn = FakeConnection(holders=[(ROW, "cognito", None, False, "admin")])
         self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, "Admin@Staff.Example"), ROW)
         (text, params), = conn.sql_with("UPDATE users SET cognito_sub")
         self.assertIn("credential_version = credential_version + 1", text)
@@ -107,7 +107,7 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         self.assertEqual(holder_params, (EMAIL,))
 
     def test_guest_row_holding_the_email_is_detached_and_a_cognito_row_created(self):
-        conn = FakeConnection(holders=[(GUEST, "guest", None, False)])
+        conn = FakeConnection(holders=[(GUEST, "guest", None, False, "student")])
         with self.assertLogs(level="INFO") as logs:
             result = admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL)
         self.assertEqual(result, "new-row")
@@ -123,7 +123,7 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
             self.assertNotIn(GUEST, line)
 
     def test_cognito_row_with_chats_or_another_sub_is_not_linked(self):
-        for holder in [(GUEST, "cognito", None, True), (GUEST, "cognito", "other-sub", False)]:
+        for holder in [(GUEST, "cognito", None, True, "admin"), (GUEST, "cognito", "other-sub", False, "admin")]:
             with self.subTest(holder=holder):
                 conn = FakeConnection(holders=[holder])
                 self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL), "new-row")
@@ -141,7 +141,7 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
     def test_privilege_changing_writes_log_the_actor_and_outcome_only(self):
         cases = [
             (FakeConnection(), "created"),
-            (FakeConnection(holders=[(ROW, "cognito", None, False)]), "linked"),
+            (FakeConnection(holders=[(ROW, "cognito", None, False, "admin")]), "linked"),
             (FakeConnection(by_sub=(ROW, EMAIL, "user")), "elevated"),
         ]
         for conn, outcome in cases:
@@ -156,11 +156,26 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         self.assertEqual(lines, [])
 
     def test_only_the_link_lookup_matches_on_email(self):
-        conn = FakeConnection(holders=[(GUEST, "guest", None, False)])
+        conn = FakeConnection(holders=[(GUEST, "guest", None, False, "student")])
         admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL)
         email_selects = [t for t, _ in conn.executed if t.startswith("SELECT") and "lower(email) = %s" in t]
         self.assertEqual(len(email_selects), 1)
         self.assertTrue(email_selects[0].startswith("SELECT id, identity_source, cognito_sub"))
+        self.assertIn("ORDER BY (role = 'admin'::user_role) DESC, id", email_selects[0])
+
+    def test_non_admin_holder_is_detached_and_never_returned(self):
+        student = (GUEST, "cognito", None, False, "student")
+        conn = FakeConnection(holders=[student])
+        self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL), "new-row")
+        self.assertFalse(conn.sql_with("UPDATE users SET cognito_sub"))
+        self.assertTrue(conn.sql_with("UPDATE users SET email = NULL"))
+
+    def test_admin_holder_is_chosen_when_a_student_row_is_listed_first(self):
+        student = (GUEST, "cognito", None, False, "student")
+        admin = (ROW, "cognito", None, False, "admin")
+        conn = FakeConnection(holders=[student, admin])
+        self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL), ROW)
+        self.assertFalse(conn.sql_with("INSERT INTO users"))
 
 
 if __name__ == "__main__":
