@@ -39,6 +39,7 @@ import boto3
 
 from helpers.cors import get_cors_headers
 from helpers.url_safety import InvalidURL, normalize_citation_url, normalize_url
+from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -450,22 +451,28 @@ def _fail_unindexed_rows(connection, data_source_id: str, reason: str):
         )
 
 
-def invoke_link_worker(*, ingestion_run_id: str, data_source_id: str, sync_session_id: str, continuation: int):
-    """Fire the async process_csv_links worker (self-invocation, like process_document_batch)."""
+def invoke_link_worker(*, ingestion_run_id: str, data_source_id: str, sync_session_id: str, continuation: int,
+                       actor=None):
+    """Fire the async process_csv_links worker (self-invocation, like process_document_batch).
+    `actor` (helpers/admin_audit.py) is the originating admin, forwarded for logging."""
+    payload = {
+        "task": "process_csv_links",
+        "ingestion_run_id": ingestion_run_id,
+        "data_source_id": data_source_id,
+        "sync_session_id": sync_session_id,
+        "continuation": continuation,
+    }
+    if actor is not None:
+        payload["actor"] = actor
     lambda_client.invoke(
         FunctionName=LAMBDA_FUNCTION_NAME,
         InvocationType="Event",
-        Payload=json.dumps({
-            "task": "process_csv_links",
-            "ingestion_run_id": ingestion_run_id,
-            "data_source_id": data_source_id,
-            "sync_session_id": sync_session_id,
-            "continuation": continuation,
-        }).encode("utf-8"),
+        Payload=worker_payload(payload),
     )
 
 
-def start_link_phase(connection, *, run: dict, raw_bytes: bytes, chunks_upserted: int, chunks_deleted: int) -> dict:
+def start_link_phase(connection, *, run: dict, raw_bytes: bytes, chunks_upserted: int, chunks_deleted: int,
+                     actor=None) -> dict:
     """
     Called by process_document_batch after a CSV's own chunks are committed.
 
@@ -523,6 +530,7 @@ def start_link_phase(connection, *, run: dict, raw_bytes: bytes, chunks_upserted
             data_source_id=data_source_id,
             sync_session_id=(run.get("run_metadata") or {}).get("sync_session_id") or run["ingestion_run_id"],
             continuation=0,
+            actor=actor,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to start link crawl for run %s: %s", run["ingestion_run_id"], e, exc_info=True)

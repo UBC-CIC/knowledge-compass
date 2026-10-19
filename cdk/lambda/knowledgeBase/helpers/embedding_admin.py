@@ -49,6 +49,7 @@ from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_jo
 from helpers.embedding_space import index_name
 from helpers.ingestion_lock import LOCK_CODE, LOCK_MESSAGE, LOCK_TTL_SECONDS, lock_state
 from helpers.admin_user import normalize_email
+from helpers.admin_audit import with_actor
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -491,7 +492,7 @@ def _insert_job(connection, space_id: str, mode: str, admin: str, report: Option
 def _start_job(event, connection, job_id: str, mode: str):
     """Fire the worker. A failure to start fails the job so nothing is left queued forever."""
     try:
-        invoke_self({"task": _TASK_FOR_MODE[mode], "job_id": job_id, "continuation": 0})
+        invoke_self(with_actor({"task": _TASK_FOR_MODE[mode], "job_id": job_id, "continuation": 0}, event))
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to start %s job %s: %s", mode, job_id, type(e).__name__)
         with connection.cursor() as cur:

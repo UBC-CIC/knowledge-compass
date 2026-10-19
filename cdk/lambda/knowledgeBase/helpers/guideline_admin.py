@@ -21,10 +21,12 @@ import uuid
 import boto3
 from botocore.config import Config
 
+from helpers.admin_audit import with_actor
 from helpers.admin_user import normalize_email
 from helpers.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
 from helpers.guideline_extract import file_kind
+from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -131,7 +133,7 @@ def _invoke(payload: dict) -> None:
     _lambda_client().invoke(
         FunctionName=LAMBDA_FUNCTION_NAME,
         InvocationType="Event",
-        Payload=json.dumps(payload).encode("utf-8"),
+        Payload=worker_payload(payload),
     )
 
 
@@ -345,7 +347,7 @@ def register_document(event, body, connection):
         _delete_object_quietly(old_key)
 
     try:
-        _invoke({"task": "process_guideline_document", "document_id": document_id})
+        _invoke(with_actor({"task": "process_guideline_document", "document_id": document_id}, event))
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to start guideline ingestion: %s", type(e).__name__)
         with connection.cursor() as cur:
@@ -409,7 +411,7 @@ def rename_section(event, body, connection, section_id):
     connection.commit()
 
     try:
-        _invoke({"task": "reembed_guideline_sections", "section_ids": [section_id]})
+        _invoke(with_actor({"task": "reembed_guideline_sections", "section_ids": [section_id]}, event))
     except Exception as e:  # noqa: BLE001
         # The rename is saved; search picks up the new name on the next upload.
         logger.error("Failed to start guideline re-embed: %s", type(e).__name__)

@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from helpers import validate_space
+from helpers.admin_audit import actor_from_event
 from helpers.embedding_jobs import (
     TERMINAL_STATUSES,
     emit_metric,
@@ -471,7 +472,8 @@ def _execute(connection, ctx: _Context, progress: _Progress, time_left):
     return None
 
 
-def _hand_over(connection, ctx: _Context, kind: str, continuation: int) -> None:
+def _hand_over(connection, ctx: _Context, kind: str, continuation: int, actor=None) -> None:
+    # `actor` (the originating admin, if known) is forwarded for logging.
     next_continuation = continuation + 1
     if next_continuation > _MAX_CONTINUATIONS:
         raise CutoverError(f"Stopped after {_MAX_CONTINUATIONS} continuations")
@@ -482,7 +484,10 @@ def _hand_over(connection, ctx: _Context, kind: str, continuation: int) -> None:
             (next_continuation, ctx.job["id"]),
         )
     connection.commit()
-    invoke_self({"task": _TASKS[kind], "job_id": ctx.job["id"], "continuation": next_continuation})
+    payload = {"task": _TASKS[kind], "job_id": ctx.job["id"], "continuation": next_continuation}
+    if actor is not None:
+        payload["actor"] = actor
+    invoke_self(payload)
     logger.info("Cutover job %s continues in a fresh invocation (%s)", ctx.job["id"], next_continuation)
 
 
@@ -525,7 +530,7 @@ def _run(kind: str, event, connection, context) -> dict:
             raise CutoverError(f"Stopped after {_MAX_CONTINUATIONS} continuations")
         progress = _Progress(connection, job)
         if _execute(connection, ctx, progress, time_left) is _CONTINUE:
-            _hand_over(connection, ctx, kind, continuation)
+            _hand_over(connection, ctx, kind, continuation, actor=actor_from_event(event))
             handed_over = True
     except Exception as e:  # noqa: BLE001 - recorded on the job, never re-raised
         rollback_quietly(connection)

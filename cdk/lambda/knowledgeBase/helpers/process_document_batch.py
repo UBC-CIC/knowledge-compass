@@ -71,10 +71,12 @@ import boto3
 from docx import Document as DocxDocument
 
 from helpers import embeddings
+from helpers.admin_audit import actor_from_event, with_actor
 from helpers.csv_links import start_link_phase
 from helpers.embedding_space import resolve_active_space
 from helpers.pdf_text import TextractPending, extract_pdf
 from helpers.upload_identity import source_url_for
+from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -665,7 +667,7 @@ def write_chunks(connection, source_id: str, chunks: list, space=None) -> dict:
     return write_chunk_sets(connection, [(source_id, chunks)], space=space)
 
 
-def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> dict:
+def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict, actor=None) -> dict:
     """Links never fail the CSV run: a link-phase error is recorded on the run instead."""
     try:
         return start_link_phase(
@@ -674,6 +676,7 @@ def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> 
             raw_bytes=raw_bytes,
             chunks_upserted=counts["written"],
             chunks_deleted=counts["deleted"],
+            actor=actor,
         )
     except Exception as e:  # noqa: BLE001
         connection.rollback()
@@ -719,7 +722,9 @@ def trigger_document_batch(event, connection, sync_session_id: str) -> dict:
         lambda_client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
             InvocationType="Event",
-            Payload=json.dumps({"task": "process_document_batch", "sync_session_id": sync_session_id}).encode("utf-8"),
+            Payload=worker_payload(
+                with_actor({"task": "process_document_batch", "sync_session_id": sync_session_id}, event)
+            ),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to invoke document batch worker: %s", e, exc_info=True)
@@ -730,13 +735,17 @@ def trigger_document_batch(event, connection, sync_session_id: str) -> dict:
     return {"started": True, "queued_count": len(queued), "run_ids": run_ids, "sync_session_id": sync_session_id}
 
 
-def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
+def trigger_uploaded_document(connection, ingestion_run_id: str, actor=None) -> dict:
     """
     Immediately mark a single freshly-staged document ingestion_runs row
     'running' and fire the async chunk+embed worker, so a single-document
     upload starts embedding right away instead of waiting for an admin to
     click Sync (mirrors how video auto-starts transcription).
+    `actor` (helpers/admin_audit.py) is the originating admin, logged by main.py.
     """
+    payload = {"task": "process_document_batch"}
+    if actor is not None:
+        payload["actor"] = actor
     if not LAMBDA_FUNCTION_NAME:
         logger.error("LAMBDA_FUNCTION_NAME not set; cannot start document ingestion")
         return {"started": False, "reason": "document ingestion is not configured (missing LAMBDA_FUNCTION_NAME)"}
@@ -748,7 +757,7 @@ def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
         lambda_client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
             InvocationType="Event",
-            Payload=json.dumps({"task": "process_document_batch"}).encode("utf-8"),
+            Payload=worker_payload(payload),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to invoke document batch worker: %s", e, exc_info=True)
@@ -791,18 +800,22 @@ def _no_text_error(pdf) -> str:
     return message
 
 
-def _continue_later(connection, runs: list, continuation: int) -> list:
+def _continue_later(connection, runs: list, continuation: int, actor=None) -> list:
     """
     Hand runs this invocation had no time for to a fresh one. Returns the ids
     of runs failed instead (continuation limit reached, or the invoke failed).
+    `actor` (the originating admin, if known) is forwarded to the next invocation.
     """
     run_ids = [run["ingestion_run_id"] for run in runs]
     if continuation < _MAX_CONTINUATIONS and LAMBDA_FUNCTION_NAME:
+        payload = {"task": "process_document_batch", "continuation": continuation + 1}
+        if actor is not None:
+            payload["actor"] = actor
         try:
             lambda_client.invoke(
                 FunctionName=LAMBDA_FUNCTION_NAME,
                 InvocationType="Event",
-                Payload=json.dumps({"task": "process_document_batch", "continuation": continuation + 1}).encode("utf-8"),
+                Payload=worker_payload(payload),
             )
             logger.info("Document worker continues in a new invocation: %d run(s) left", len(run_ids))
             return []
@@ -825,6 +838,7 @@ def process_document_batch(event, connection, context=None) -> dict:
         return {"processed": 0, "reason": "no running document runs found"}
 
     continuation = int((event or {}).get("continuation") or 0)
+    actor = actor_from_event(event)
     can_continue = continuation < _MAX_CONTINUATIONS
     time_left = _time_left(context)
     completed, failed, deferred = [], [], []
@@ -907,7 +921,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             if ds_type == "csv":
                 # The CSV's own rows stay indexed whatever happens to its links.
                 connection.commit()
-                link = _start_link_phase(connection, run, raw_bytes, counts)
+                link = _start_link_phase(connection, run, raw_bytes, counts, actor=actor)
                 if link["deferred"]:
                     completed.append(run_id)
                     logger.info("Document run %s: link crawl started; it will finalize the run", run_id)
@@ -940,7 +954,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             failed.append(run_id)
 
     if deferred:
-        failed.extend(_continue_later(connection, deferred, continuation))
+        failed.extend(_continue_later(connection, deferred, continuation, actor=actor))
     return {
         "processed": len(runs) - len(deferred),
         "completed": completed,

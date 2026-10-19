@@ -41,6 +41,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, List, Optional
 
 from helpers import embeddings
+from helpers.admin_audit import actor_from_event
 from helpers.embedding_jobs import (
     TERMINAL_STATUSES,
     error_summary,
@@ -395,8 +396,9 @@ def _set_total_if_unset(connection, job: dict, space_id: str) -> None:
     connection.commit()
 
 
-def _hand_over(connection, job: dict, continuation: int) -> dict:
-    """Continue in a fresh invocation, or fail clearly at the continuation cap."""
+def _hand_over(connection, job: dict, continuation: int, actor=None) -> dict:
+    """Continue in a fresh invocation, or fail clearly at the continuation cap.
+    `actor` (the originating admin, if known) is forwarded for logging."""
     next_continuation = continuation + 1
     if next_continuation > _MAX_CONTINUATIONS:
         finish_job(
@@ -410,12 +412,15 @@ def _hand_over(connection, job: dict, continuation: int) -> dict:
             (next_continuation, job["id"]),
         )
     connection.commit()
-    invoke_self({"task": "reembed_space", "job_id": job["id"], "continuation": next_continuation})
+    payload = {"task": "reembed_space", "job_id": job["id"], "continuation": next_continuation}
+    if actor is not None:
+        payload["actor"] = actor
+    invoke_self(payload)
     logger.info("Re-embed job %s continues in a fresh invocation (%s)", job["id"], next_continuation)
     return {"status": "continued", "continuation": next_continuation}
 
 
-def _rebuild(connection, job: dict, space, spec, context, continuation: int) -> dict:
+def _rebuild(connection, job: dict, space, spec, context, continuation: int, actor=None) -> dict:
     _set_total_if_unset(connection, job, space.id)
     outcome = run_delta(
         connection, space, spec,
@@ -427,7 +432,7 @@ def _rebuild(connection, job: dict, space, spec, context, continuation: int) -> 
         finish_job(connection, job["id"], "succeeded")
         logger.info("Re-embed job %s finished", job["id"])
         return {"status": "succeeded"}
-    return _hand_over(connection, job, continuation)
+    return _hand_over(connection, job, continuation, actor=actor)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -459,7 +464,7 @@ def reembed_space(event, connection, context=None) -> dict:
         if job["mode"] == "dry_run":
             _dry_run(connection, job, space, spec)
             return {"status": "succeeded"}
-        return _rebuild(connection, job, space, spec, context, continuation)
+        return _rebuild(connection, job, space, spec, context, continuation, actor=actor_from_event(event))
     except Exception as e:  # noqa: BLE001 - recorded on the job, never re-raised
         rollback_quietly(connection)
         summary = error_summary(e) if not isinstance(e, (ReembedError, EmbeddingSpaceError)) else str(e)[:200]

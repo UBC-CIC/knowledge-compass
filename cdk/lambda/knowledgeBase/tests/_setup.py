@@ -9,6 +9,9 @@ Shared test setup; import it before any `helpers` module.
   never call AWS.
 - PDFs are read with pypdf only, whatever the developer's shell sets; tests
   of the Textract path (test_pdf_text.py) opt in per test with fake clients.
+- The worker invoke token (helpers/worker_envelope.py) is pre-cached as
+  TEST_INVOKE_TOKEN, so signing and verifying self-invokes never reads
+  Secrets Manager.
 """
 
 import os
@@ -22,3 +25,13 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
 os.environ.pop("AWS_PROFILE", None)
 os.environ["PDF_TEXTRACT_MODE"] = "off"
 os.environ.pop("KNOWLEDGE_BASE_BUCKET_NAME", None)
+os.environ.setdefault(
+    "WORKER_INVOKE_SECRET_ARN",
+    "arn:aws:secretsmanager:us-east-1:000000000000:secret:test-worker-invoke",
+)
+
+TEST_INVOKE_TOKEN = "test-invoke-token"
+
+from helpers import worker_envelope  # noqa: E402
+
+worker_envelope._cached_token = TEST_INVOKE_TOKEN

@@ -23,6 +23,8 @@ from helpers.embedding_admin import handle_embedding_request, is_embedding_route
 from helpers.reembed_space import reembed_space
 from helpers.validate_space import validate_space
 from helpers.cutover import activate_space, rollback_space
+from helpers.admin_audit import log_worker_task
+from helpers.worker_envelope import INVOKE_TOKEN_FIELD, verify_worker_event
 
 # Set up logging
 logger = logging.getLogger()
@@ -117,10 +119,25 @@ def _parse_body(event):
     return body
 
 def handler(event, context=None):
-    safe_event = {k: v for k, v in event.items() if k != 'body'}
+    # Never log the body or the worker invoke token.
+    safe_event = {k: v for k, v in event.items() if k not in ('body', INVOKE_TOKEN_FIELD)}
     logger.info("Event: %s (body omitted)", json.dumps(safe_event))
     
     try:
+        # Self-invoked {task} payloads rewrite the corpus and move the live
+        # embedding pointer. The IAM self-invoke grant alone is not trusted:
+        # every task must carry the invoke token (helpers/worker_envelope.py),
+        # a generated Secrets Manager value only this function's role can read.
+        # Checked before any dispatch or logging of the payload's actor.
+        # EventBridge events (aws.transcribe / aws.ecs via transcribeRelay)
+        # never carry "task" and are handled below without a token.
+        if "task" in event and not verify_worker_event(event):
+            logger.warning(
+                "Rejected worker invocation without a valid invoke token: task=%s",
+                str(event.get("task"))[:64],
+            )
+            return {"error": "Unauthorized worker invocation"}
+
         if event.get("source") == "aws.transcribe":
             try:
                 connection = _connect_to_db()
@@ -136,6 +153,12 @@ def handler(event, context=None):
                 logger.error(f"Error connecting to database: {e}")
                 return _response(event, 500, {"error": "Error connecting to database"})
             return handle_ecs_task_stopped(event, connection)
+
+        # Every self-invoked {task} branch below is logged once with the
+        # originating admin from the payload's "actor" (helpers/admin_audit.py;
+        # null when the task was not started by an admin request).
+        if event.get("task"):
+            log_worker_task(event)
 
         # Async self-invocation path (pgvector document ingestion; see
         # helpers/process_document_batch.py). Fired via lambda_client.invoke(...,
@@ -183,6 +206,15 @@ def handler(event, context=None):
             return _EMBEDDING_TASKS[event["task"]](event=event, connection=connection, context=context)
 
         # API Gateway path
+        # Every route on this function is /admin/* behind adminAuthorizer
+        # (OpenAPI_Swagger_Definition.yaml). Defence in depth, mirroring
+        # adminHandler.js: a route left without the authorizer, or any other
+        # event shape, is still denied here.
+        role = ((event.get("requestContext") or {}).get("authorizer") or {}).get("role")
+        if role != "admin":
+            logger.warning("Rejected non-admin request: resource=%s", event.get("resource"))
+            return _response(event, 403, {"error": "Admin access required"})
+
         method = event.get("httpMethod", "")
         resource = event.get("resource", "")
         path = event.get("path", "")

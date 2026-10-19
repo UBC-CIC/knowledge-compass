@@ -11,6 +11,7 @@ from helpers.ingestion_lock import reject_if_locked
 from helpers.video_transcription import start_transcription_job
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 from helpers.process_document_batch import trigger_uploaded_document
+from helpers.admin_audit import actor_from_event
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
 from helpers.data_source_cleanup import supersede_duplicates
 from helpers.upload_identity import (
@@ -875,7 +876,7 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
     connection.commit()
     delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
 
-    trigger_result = trigger_uploaded_document(connection, ingestion_run_id)
+    trigger_result = trigger_uploaded_document(connection, ingestion_run_id, actor=actor_from_event(event))
 
     if not trigger_result.get("started"):
         message = "Document staged, but embedding could not be started automatically. Use Sync to retry."

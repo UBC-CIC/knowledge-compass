@@ -6,6 +6,7 @@ S3, Lambda and the DB are mocked. Run from knowledgeBase:
 """
 
 import _setup  # noqa: F401  (must be first)
+from _setup import TEST_INVOKE_TOKEN
 
 import json
 import os
@@ -153,7 +154,8 @@ class RegisterDocumentTest(AdminTestBase):
         insert = conn.sql_with("INSERT INTO guideline_documents")[0]
         self.assertEqual(insert[1][2], "admin@example.org")
         payload = json.loads(self.lam.invoke.call_args.kwargs["Payload"])
-        self.assertEqual(payload, {"task": "process_guideline_document", "document_id": DOC_ID})
+        self.assertEqual(payload, {"task": "process_guideline_document", "document_id": DOC_ID,
+                                   "invoke_token": TEST_INVOKE_TOKEN})
         self.assertEqual(self.lam.invoke.call_args.kwargs["InvocationType"], "Event")
 
     def test_rejects_keys_outside_prefix(self):
@@ -269,7 +271,8 @@ class RenameSectionTest(AdminTestBase):
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("UPDATE guideline_sections")[0][1][0], "Sent home early")
         payload = json.loads(self.lam.invoke.call_args.kwargs["Payload"])
-        self.assertEqual(payload, {"task": "reembed_guideline_sections", "section_ids": [SECTION_ID]})
+        self.assertEqual(payload, {"task": "reembed_guideline_sections", "section_ids": [SECTION_ID],
+                                   "invoke_token": TEST_INVOKE_TOKEN})
 
     def test_empty_label_resets(self):
         conn = FakeConnection({"UPDATE guideline_sections": [(SECTION_ID, "Auto")]})
