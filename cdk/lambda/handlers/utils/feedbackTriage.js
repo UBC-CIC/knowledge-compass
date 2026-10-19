@@ -19,6 +19,7 @@
  */
 
 const { validateUUID } = require("./validation.js");
+const { errorSummary } = require("./logging.js");
 
 const TRIAGE_ROUTE = "PUT /admin/feedback/{chat_session_id}";
 const RATED_MESSAGE_ROUTE = "GET /admin/feedback/{chat_session_id}/message";
@@ -187,8 +188,8 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
     if (err instanceof InputError) {
       send(400, { error: err.message });
     } else {
-      // Error only; never the request body.
-      console.error(`${pathData} error:`, err?.message ?? err);
+      // Error summary only; never the request body or DB error detail.
+      console.error(`${pathData} error:`, errorSummary(err));
       send(500, { error: "Internal server error" });
     }
   }

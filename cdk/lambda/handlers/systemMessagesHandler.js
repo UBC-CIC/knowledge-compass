@@ -1,5 +1,6 @@
 const postgres = require("postgres");
 const { getCorsHeaders } = require("./utils/cors.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
 const {
     SecretsManagerClient,
     GetSecretValueCommand,
@@ -31,7 +32,7 @@ const initConnection = async () => {
             await sqlConnection`SELECT 1`;
             console.log("Database connection initialized successfully");
         } catch (error) {
-            console.error("Error initializing database connection:", error);
+            console.error("Error initializing database connection:", errorSummary(error));
             throw error;
         }
     }
@@ -53,7 +54,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
     response.statusCode = 500;
-    console.error("Internal server error:", error);
+    console.error("Internal server error:", errorSummary(error));
     response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -172,6 +173,7 @@ exports.handler = async (event) => {
         handleError(error, response);
     }
 
-    console.log(response);
+    // Log status only, never the body.
+    logResponse(event, response);
     return response;
 };

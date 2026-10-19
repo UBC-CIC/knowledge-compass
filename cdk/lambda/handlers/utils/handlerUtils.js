@@ -1,5 +1,6 @@
 const { initializeConnection } = require("../initializeConnection.js");
 const { getCorsHeaders } = require("./cors.js");
+const { errorSummary } = require("./logging.js");
 
 let { SM_DB_CREDENTIALS, RDS_PROXY_ENDPOINT } = process.env;
 let sqlConnection;
@@ -26,7 +27,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
   response.statusCode = 500;
-  console.error("Internal server error:", error);
+  console.error("Internal server error:", errorSummary(error));
   response.body = JSON.stringify({ error: "Internal server error" });
 };
 

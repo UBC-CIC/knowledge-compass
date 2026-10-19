@@ -79,7 +79,8 @@ exports.handler = async (event) => {
       },
     };
   } catch (error) {
-    console.error("Authorization error:", error);
+    // Name only: aws-jwt-verify errors carry the decoded token (including email).
+    console.error("Authorization error:", error?.name ?? "Error");
     // API Gateway wants this *exact* error message, otherwise it returns 500 instead of 401:
     throw new Error("Unauthorized");
   }

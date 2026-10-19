@@ -34,6 +34,8 @@ function fakeSql(respond = () => [], { rejectUndefined = false } = {}) {
     }
   };
   sql.calls = calls;
+  // Transactions run on the same fake; tests may override this.
+  sql.begin = async (fn) => fn(sql);
   // Queries other than the connection check, for assertions.
   sql.queries = () => calls.filter((c) => c.text !== "SELECT 1");
   return sql;
@@ -147,7 +149,7 @@ function loadHandler(name, sql, options = {}) {
   }
 }
 
-// Silence handler console output (it logs full responses) during a test.
+// Silence handler console output (it logs status lines and errors) during a test.
 async function quietly(fn) {
   const saved = { log: console.log, error: console.error, warn: console.warn };
   console.log = console.error = console.warn = () => {};
