@@ -4,6 +4,7 @@ sits under /admin/ and is protected by the existing admin Cognito authorizer in 
 Gateway. Routes that change anything additionally need the authorizer's `requestContext`
 email (the audit identity); a body-supplied email is ignored.
 
+  GET  /admin/embedding-models                      models this app can call, with Bedrock ids
   GET  /admin/embedding-spaces                     spaces, coverage, lock state, latest job
   POST /admin/embedding-spaces                     register a space (status 'building')
   POST /admin/embedding-spaces/{id}/jobs           dry_run | rebuild | delta   (202)
@@ -43,7 +44,7 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
-from helpers import embeddings
+from helpers import embedding_models, embeddings
 from helpers.cors import get_cors_headers
 from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_job
 from helpers.embedding_space import index_name
@@ -67,6 +68,7 @@ STALE_CUTOVER_SECONDS = LOCK_TTL_SECONDS
 MAX_TOLERANCE = 0.5
 # A retired space is kept this long before it may be purged (rollback window).
 RETENTION_DAYS = 30
+LOOKUP_ERROR = "Couldn't look up embedding models in Amazon Bedrock. Try again."
 PURGE_BATCH_SIZE = 5000
 # Safety stop for the delete loop (5000 x 10,000 = 50 million vectors).
 _PURGE_MAX_BATCHES = 10_000
@@ -138,6 +140,7 @@ def _locked_response(event):
 # ── Routing ───────────────────────────────────────────────────────────────────
 
 _ROUTES = (
+    ("GET", "/admin/embedding-models", re.compile(r"/admin/embedding-models$")),
     ("GET", "/admin/embedding-spaces", re.compile(r"/admin/embedding-spaces$")),
     ("POST", "/admin/embedding-spaces", re.compile(r"/admin/embedding-spaces$")),
     ("POST", "/admin/embedding-spaces/{id}/jobs", re.compile(r"/admin/embedding-spaces/[^/]+/jobs$")),
@@ -187,6 +190,8 @@ def handle_embedding_request(event, body, connection):
         return _response(event, 400, {"error": "Invalid id."})
     body = body if isinstance(body, dict) else {}
     try:
+        if resource == "/admin/embedding-models":
+            return list_models(event)
         if resource == "/admin/embedding-spaces" and method == "GET":
             return list_spaces(event, connection)
         if resource == "/admin/embedding-spaces":
@@ -237,19 +242,8 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
     if not _is_int(dimensions) or (allowed and dimensions not in allowed) or not 1 <= dimensions <= 2000:
         return None, f"dimensions for {provider} must be one of: {', '.join(str(d) for d in allowed) or '1 to 2000'}."
 
-    invoke_target = body.get("invoke_target")
-    if (
-        not isinstance(invoke_target, str)
-        or not invoke_target
-        or len(invoke_target) > MAX_INVOKE_TARGET
-        or re.search(r"\s", invoke_target)
-    ):
-        return None, f"invoke_target must be a model id or inference profile ARN of up to {MAX_INVOKE_TARGET} characters, without spaces."
-
-    model_id = body.get("model_id")
-    if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > MAX_MODEL_ID:
-        return None, "model_id must be a non-empty text value."
-
+    # model_id and invoke_target are filled from Bedrock in register_space.
+    # Anything the client sends for them is ignored.
     version = body.get("version", "1")
     if version is None:
         version = "1"
@@ -295,8 +289,6 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
     clean = {
         "name": name,
         "provider": provider,
-        "model_id": model_id.strip(),
-        "invoke_target": invoke_target,
         "dimensions": dimensions,
         "version": version.strip(),
         "min_score": thresholds["min_score"],
@@ -305,10 +297,6 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
         "eol_date": eol_date,
         "settings": settings,
     }
-    try:  # adapter-specific limits, e.g. a batch size over the provider maximum
-        embeddings.spec_from_row(clean)
-    except (ValueError, KeyError, TypeError) as e:
-        return None, f"These settings do not fit {provider}: {e}"
     return clean, None
 
 
@@ -399,10 +387,58 @@ def list_spaces(event, connection):
     })
 
 
+def list_models(event):
+    """The embedding models this app can call, with the id and call target Bedrock returned."""
+    try:
+        models = embedding_models.list_embedding_models()
+    except Exception as e:  # noqa: BLE001 - the message must not include the Bedrock error text
+        logger.error("Embedding model lookup failed: %s", type(e).__name__)
+        return _response(event, 503, {"error": LOOKUP_ERROR})
+    return _response(event, 200, {"models": models})
+
+
+def _apply_bedrock_reference(clean: Dict[str, Any]):
+    """
+    Fill model_id and invoke_target from Bedrock. Returns (None, error, status)
+    or (clean, None, None). A client-sent id or ARN is never read.
+    """
+    try:
+        models = embedding_models.list_embedding_models()
+    except Exception as e:  # noqa: BLE001
+        logger.error("Embedding model lookup failed: %s", type(e).__name__)
+        return None, LOOKUP_ERROR, 503
+    chosen = embedding_models.reference_for(clean["provider"], models)
+    if not chosen or not chosen.get("available"):
+        reason = (chosen or {}).get("unavailable_reason") or embedding_models.NOT_LISTED
+        return None, reason, 400
+    model_id = chosen.get("model_id")
+    invoke_target = chosen.get("invoke_target")
+    if (
+        not isinstance(model_id, str)
+        or not isinstance(invoke_target, str)
+        or not model_id.strip()
+        or len(model_id) > MAX_MODEL_ID
+        or not invoke_target
+        or len(invoke_target) > MAX_INVOKE_TARGET
+        or re.search(r"\s", invoke_target)
+    ):
+        return None, "Amazon Bedrock returned a model reference this app cannot store.", 400
+    clean["model_id"] = model_id.strip()
+    clean["invoke_target"] = invoke_target
+    try:  # adapter-specific limits, e.g. a batch size over the provider maximum
+        embeddings.spec_from_row(clean)
+    except (ValueError, KeyError, TypeError) as e:
+        return None, f"These settings do not fit {clean['provider']}: {e}", 400
+    return clean, None, None
+
+
 def register_space(event, body, connection, admin):
     clean, problem = validate_registration(body)
     if problem:
         return _response(event, 400, {"error": problem})
+    clean, problem, status = _apply_bedrock_reference(clean)
+    if problem:
+        return _response(event, status, {"error": problem})
 
     with connection.cursor() as cur:
         cur.execute("SELECT 1 FROM embedding_spaces WHERE name = %s", (clean["name"],))

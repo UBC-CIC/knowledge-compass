@@ -191,7 +191,12 @@ describe("API Lambda IAM least privilege", () => {
         }
       }
     }
-    expect(allowActionsFor(kbRole)).toEqual(expect.arrayContaining(["bedrock:InvokeModel", "bedrock:Converse"]));
+    expect(allowActionsFor(kbRole)).toEqual(expect.arrayContaining([
+      "bedrock:InvokeModel",
+      "bedrock:Converse",
+      "bedrock:ListFoundationModels",
+      "bedrock:ListInferenceProfiles",
+    ]));
   });
 
   test("request-handling roles carry the boundary; the Cognito trigger role does not", () => {

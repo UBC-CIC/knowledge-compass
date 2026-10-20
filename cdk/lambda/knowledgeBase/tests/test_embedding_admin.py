@@ -24,6 +24,28 @@ NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 UNLOCKED = (False, None, None, False)
 LOCKED = (True, NOW, JOB_ID, False)
+TITAN_TARGET = "arn:aws:bedrock:ca-central-1:111122223333:inference-profile/us.amazon.titan-embed-text-v2:0"
+
+
+def available_models():
+    """What GET /admin/embedding-models returns when every catalog model is callable."""
+    return [
+        {
+            "provider": "cohere_v3", "label": "Cohere Embed English v3", "dimensions": [1024],
+            "available": True, "model_id": "cohere.embed-english-v3",
+            "invoke_target": "cohere.embed-english-v3", "cross_region": False, "unavailable_reason": None,
+        },
+        {
+            "provider": "titan_v2", "label": "Amazon Titan Text Embeddings V2", "dimensions": [256, 512, 1024],
+            "available": True, "model_id": "amazon.titan-embed-text-v2:0",
+            "invoke_target": TITAN_TARGET, "cross_region": True, "unavailable_reason": None,
+        },
+        {
+            "provider": "cohere_v4", "label": "Cohere Embed v4", "dimensions": [256, 512, 1024, 1536],
+            "available": True, "model_id": "cohere.embed-v4:0",
+            "invoke_target": "cohere.embed-v4:0", "cross_region": False, "unavailable_reason": None,
+        },
+    ]
 
 
 def event(method, path, resource=None, path_id=None, email="admin@example.org"):
@@ -64,6 +86,9 @@ class AdminBase(unittest.TestCase):
         patch = mock.patch.object(ea, "invoke_self")
         self.invoke = patch.start()
         self.addCleanup(patch.stop)
+        models = mock.patch.object(ea.embedding_models, "list_embedding_models", return_value=available_models())
+        self.list_models = models.start()
+        self.addCleanup(models.stop)
 
     def call(self, ev, body=None, conn=None):
         conn = conn or fakes.ScriptedConnection()
@@ -73,6 +98,7 @@ class AdminBase(unittest.TestCase):
 class RoutingTest(unittest.TestCase):
     def test_every_route_and_method_is_recognised(self):
         cases = [
+            ("GET", "/admin/embedding-models", None),
             ("GET", "/admin/embedding-spaces", None),
             ("POST", "/admin/embedding-spaces", None),
             ("POST", f"/prod/admin/embedding-spaces/{SPACE_ID}/jobs", "/admin/embedding-spaces/{id}/jobs"),
@@ -101,7 +127,7 @@ class RoutingTest(unittest.TestCase):
                 self.assertFalse(ea.is_embedding_route(event(method, path)))
 
     def test_routes_table_matches_the_documented_shape(self):
-        self.assertEqual(len(ea._ROUTES), 8)
+        self.assertEqual(len(ea._ROUTES), 9)
         for method, resource, pattern in ea._ROUTES:
             self.assertIn(method, ("GET", "POST"))
             self.assertTrue(resource.startswith("/admin/embedding-"))
@@ -175,9 +201,65 @@ class RegisterTest(AdminBase):
         insert = conn.sql_with("INSERT INTO embedding_spaces")[0]
         self.assertIn("'building'", insert[0])
         self.assertEqual(insert[1][0], "titan-v2-1024")
+        self.assertEqual(insert[1][2], "amazon.titan-embed-text-v2:0")
+        self.assertEqual(insert[1][3], TITAN_TARGET)
         self.assertEqual(json.loads(insert[1][10]), {"concurrency": 8})
         self.assertEqual(insert[1][11], "admin@example.org")
         self.assertEqual(conn.commits, 1)   # space row and index in the same transaction
+
+    def test_registration_does_not_require_a_model_id_or_arn(self):
+        body = valid_registration()
+        del body["model_id"], body["invoke_target"]
+        response, conn = self.register(body)
+        self.assertEqual(response["statusCode"], 201)
+        params = conn.sql_with("INSERT INTO embedding_spaces")[0][1]
+        self.assertEqual(params[2], "amazon.titan-embed-text-v2:0")
+        self.assertEqual(params[3], TITAN_TARGET)
+
+    def test_a_client_sent_model_id_or_arn_is_ignored(self):
+        response, conn = self.register(valid_registration(
+            model_id="not-from-bedrock",
+            invoke_target="arn:aws:bedrock:us-east-1:1:inference-profile/custom",
+        ))
+        self.assertEqual(response["statusCode"], 201)
+        params = conn.sql_with("INSERT INTO embedding_spaces")[0][1]
+        self.assertEqual(params[2], "amazon.titan-embed-text-v2:0")
+        self.assertEqual(params[3], TITAN_TARGET)
+        self.assertNotIn("custom", params[3])
+
+    def test_an_unavailable_model_is_refused_before_the_database(self):
+        models = available_models()
+        models[1] = {
+            **models[1], "available": False, "model_id": None, "invoke_target": None,
+            "unavailable_reason": "This model is not available in Amazon Bedrock for this account.",
+        }
+        self.list_models.return_value = models
+        response, conn = self.register(valid_registration())
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("not available", body_of(response)["error"])
+        self.assertEqual(conn.executed, [])
+
+    def test_a_lookup_failure_does_not_register(self):
+        self.list_models.side_effect = RuntimeError("denied")
+        response, conn = self.register(valid_registration())
+        self.assertEqual(response["statusCode"], 503)
+        self.assertEqual(body_of(response)["error"], ea.LOOKUP_ERROR)
+        self.assertEqual(conn.executed, [])
+
+    def test_get_models_returns_the_bedrock_list_without_a_database_query(self):
+        response, conn = self.call(event("GET", "/admin/embedding-models", email=None))
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(conn.executed, [])
+        models = body_of(response)["models"]
+        self.assertEqual([m["provider"] for m in models], ["cohere_v3", "titan_v2", "cohere_v4"])
+        self.assertEqual(models[1]["invoke_target"], TITAN_TARGET)
+
+    def test_a_model_lookup_failure_is_503(self):
+        self.list_models.side_effect = RuntimeError("denied")
+        response, conn = self.call(event("GET", "/admin/embedding-models"))
+        self.assertEqual(response["statusCode"], 503)
+        self.assertEqual(body_of(response)["error"], ea.LOOKUP_ERROR)
+        self.assertEqual(conn.executed, [])
 
     def test_price_and_eol_are_optional(self):
         body = valid_registration()
@@ -200,12 +282,6 @@ class RegisterTest(AdminBase):
             "dimensions not allowed for provider": {"dimensions": 768},
             "dimensions text": {"dimensions": "1024"},
             "dimensions bool": {"dimensions": True},
-            "invoke_target empty": {"invoke_target": ""},
-            "invoke_target spaces": {"invoke_target": "amazon titan"},
-            "invoke_target too long": {"invoke_target": "a" * 2049},
-            "invoke_target not text": {"invoke_target": 3},
-            "model_id empty": {"model_id": "  "},
-            "model_id missing": {"model_id": None},
             "version too long": {"version": "v" * 33},
             "price negative": {"price_per_1m_tokens": -0.01},
             "price text": {"price_per_1m_tokens": "0.02"},

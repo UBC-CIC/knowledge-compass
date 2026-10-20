@@ -125,6 +125,7 @@ describe("OpenAPI definition", () => {
     expect(routes.size).toBeGreaterThanOrEqual(14);
     expect([...routes.keys()]).toEqual(
       expect.arrayContaining([
+        "GET /admin/embedding-models",
         "GET /admin/embedding-spaces",
         "POST /admin/embedding-spaces/{id}/activate",
         "POST /admin/embedding-spaces/{id}/rollback",

@@ -79,8 +79,6 @@ function job(overrides: Partial<EmbeddingJob> = {}): EmbeddingJob {
 const valid: RegisterFormValues = {
   ...EMPTY_REGISTER_FORM,
   name: "titan-v2-1024",
-  model_id: "amazon.titan-embed-text-v2:0",
-  invoke_target: "amazon.titan-embed-text-v2:0",
 };
 
 describe("register form (mirrors validate_registration)", () => {
@@ -99,6 +97,8 @@ describe("register form (mirrors validate_registration)", () => {
         split_threshold: null,
         settings: {},
       });
+      expect(result.payload).not.toHaveProperty("model_id");
+      expect(result.payload).not.toHaveProperty("invoke_target");
     }
   });
 
@@ -152,11 +152,6 @@ describe("register form (mirrors validate_registration)", () => {
       [{ dimensions: 768 }, "dimensions"],
       [{ provider: "cohere_v3", dimensions: 512 }, "dimensions"],
       [{ dimensions: Number.NaN }, "dimensions"],
-      [{ model_id: "   " }, "model_id"],
-      [{ model_id: "m".repeat(513) }, "model_id"],
-      [{ invoke_target: "" }, "invoke_target"],
-      [{ invoke_target: "amazon titan" }, "invoke_target"],
-      [{ invoke_target: "a".repeat(2049) }, "invoke_target"],
       [{ version: "v".repeat(33) }, "version"],
       [{ price_per_1m_tokens: "-0.01" }, "price_per_1m_tokens"],
       [{ price_per_1m_tokens: "cheap" }, "price_per_1m_tokens"],
@@ -193,9 +188,9 @@ describe("register form (mirrors validate_registration)", () => {
   });
 
   it("reports every problem at once, one message per field", () => {
-    const result = parseRegisterForm({ ...valid, name: "x", model_id: "", invoke_target: "" });
+    const result = parseRegisterForm({ ...valid, name: "x", price_per_1m_tokens: "-1", eol_date: "nope" });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(Object.keys(result.errors).sort()).toEqual(["invoke_target", "model_id", "name"]);
+    if (!result.ok) expect(Object.keys(result.errors).sort()).toEqual(["eol_date", "name", "price_per_1m_tokens"]);
   });
 
   it("lists the same dimensions as the server adapters", () => {

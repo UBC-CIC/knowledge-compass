@@ -1954,6 +1954,15 @@ export class ApiGatewayStack extends cdk.Stack {
     // it needs the statement explicitly. Same statement object, plain ARNs.
     lambdaKnowledgeBase.addToRolePolicy(textGenBedrockPolicyStatement);
 
+    // Search-index registration asks the Bedrock control plane which embedding
+    // models this account can call, and which id or inference-profile ARN to
+    // store. Both actions are account-wide (no resource-level scoping).
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles"],
+      resources: ["*"],
+    }));
+
     // Guideline-mode section labelling reads the Haiku model id from SSM and
     // calls Converse (Bedrock statement above). Plain ARN strings, no token
     // references back to the function (see the circular-dependency note below).

@@ -23,6 +23,7 @@ import {
   jobProgressText,
   purgeEligibilityText,
   type EmbeddingJob,
+  type EmbeddingModelOption,
   type EmbeddingSpace,
   type RegisterPayload,
   type SpaceStatus,
@@ -65,12 +66,16 @@ function Detail({ label, value }: { label: string; value: ReactNode }) {
 const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 
 export default function EmbeddingSpaces() {
-  const { state, loading, error, reload, register, startJob, validate, cutover, purge } = useEmbeddingSpaces();
+  const { state, loading, error, reload, loadModels, register, startJob, validate, cutover, purge } = useEmbeddingSpaces();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tracked, setTracked] = useState<{ spaceId: string; jobId: string } | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registerBusy, setRegisterBusy] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const [models, setModels] = useState<EmbeddingModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelAttempt, setModelAttempt] = useState(0);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -80,6 +85,31 @@ export default function EmbeddingSpaces() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const typedId = useId();
+
+  // The model list is loaded when the register dialog opens, and again on Try again.
+  useEffect(() => {
+    if (!registerOpen) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    loadModels()
+      .then((next) => {
+        if (!cancelled) setModels(next);
+      })
+      .catch((e) => {
+        console.error(e);
+        if (!cancelled) {
+          setModels([]);
+          setModelsError(errorText(e, "Couldn't load embedding models from Amazon Bedrock."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [registerOpen, modelAttempt, loadModels]);
 
   // Keep "can be purged from ..." current without a reload.
   useEffect(() => {
@@ -290,6 +320,8 @@ export default function EmbeddingSpaces() {
                 type="button"
                 onClick={() => {
                   setRegisterError(null);
+                  setModelsError(null);
+                  setModelsLoading(true);
                   setRegisterOpen(true);
                 }}
               >
@@ -482,6 +514,10 @@ export default function EmbeddingSpaces() {
             <RegisterSpaceForm
               busy={registerBusy}
               serverError={registerError}
+              models={models}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              onReloadModels={() => setModelAttempt((attempt) => attempt + 1)}
               onSubmit={submitRegister}
               onCancel={() => setRegisterOpen(false)}
             />

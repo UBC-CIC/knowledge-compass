@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthService } from "@/functions/authService";
 import { isDemoMode } from "@/lib/demo";
 import {
+  DEMO_EMBEDDING_MODELS,
   EMPTY_SPACES_STATE,
   JOB_POLL_MS,
   hasActiveJob,
   isJobActive,
   type EmbeddingJob,
+  type EmbeddingModelOption,
   type EmbeddingSpace,
   type RegisterPayload,
   type SpacesState,
@@ -123,6 +125,12 @@ export function useEmbeddingSpaces() {
     return () => window.clearInterval(timer);
   }, [polling, load]);
 
+  const loadModels = useCallback(async (): Promise<EmbeddingModelOption[]> => {
+    if (isDemoMode) return DEMO_EMBEDDING_MODELS;
+    const data = await adminFetch<{ models: EmbeddingModelOption[] }>("/admin/embedding-models");
+    return data.models ?? [];
+  }, []);
+
   const register = useCallback(
     async (payload: RegisterPayload) => {
       refuseInDemo();
@@ -185,7 +193,7 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
-  return { state, loading, error, reload: load, register, startJob, validate, cutover, purge };
+  return { state, loading, error, reload: load, loadModels, register, startJob, validate, cutover, purge };
 }
 
 /** Follows one job: polls until it finishes, then calls `onFinished` once. */

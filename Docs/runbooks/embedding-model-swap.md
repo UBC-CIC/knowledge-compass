@@ -4,7 +4,7 @@ Knowledge Compass finds answers by comparing a family's question with stored pas
 
 Everything below is done from the admin console page **Search index**. No deploy is needed to swap a model.
 
-> **What this document does not claim.** It does not say which models exist, what they cost, when any model reaches end of life, or whether a model is available in `ca-central-1`. Those lookups were deliberately skipped by the project owner. Model ids, inference-profile ARNs, prices and end-of-life dates are **configuration you enter** on the index you register. Check them against AWS before you rely on them.
+> **What this document does not claim.** It does not say which models exist, what they cost, or when any model reaches end of life. Selecting a model on **Search index** looks up its model id and call target in Amazon Bedrock for this account. Prices and end-of-life dates are still **configuration you enter**. Check those against AWS before you rely on them.
 
 ## Placeholders to fill in
 
@@ -28,16 +28,16 @@ How it works, in one paragraph. A new index (a "space": one model, one vector si
 
 - [ ] Database migrations 032, 033 and 034 are applied (`cdk/lambda/db_setup/migrations/`). 034 adds the banner and read-only switch.
 - [ ] Access to the candidate model is enabled in Amazon Bedrock for the region you will call.
-- [ ] The IAM grants for the candidate models are deployed (`cdk/lib/ingestion-stack.ts` and `cdk/lib/api-stack.ts` list Titan Text Embeddings V2 and Cohere Embed v4 next to the current Cohere v3). Model ids and inference-profile ARNs are configuration; these grants enable candidates and do not assert availability in any region.
+- [ ] The IAM grants for the candidate models are deployed (`cdk/lib/ingestion-stack.ts` and `cdk/lib/api-stack.ts` list Titan Text Embeddings V2 and Cohere Embed v4 next to the current Cohere v3). Registering an index reads the model id and inference-profile ARN from Amazon Bedrock; these grants enable the candidates and do not assert availability in any region.
 - [ ] The golden question set is present: `cdk/lambda/textGeneration/tests/eval/golden_queries.json` (71 synthetic questions) and its copy in `cdk/lambda/knowledgeBase/helpers/golden_queries.json`. Never replace them with real chat messages.
 - [ ] A recent database snapshot exists.
 - [ ] You have read [Where inference runs](#3-where-inference-runs-and-data-residency).
 
 ## 3. Where inference runs, and data residency
 
-The application is deployed in `ca-central-1`. A model id you enter is called in that region. **Cross-region inference profiles are acceptable per the owner's decision**, but they mean the text of your content and of families' questions **may be processed in other regions** while the model runs. For Inclusion Canada that has data-residency implications.
+The application is deployed in `ca-central-1`. When Amazon Bedrock offers the model on demand, it is called in that region. Otherwise the register page uses an inference profile and shows the call target. **Cross-region inference profiles are acceptable per the owner's decision**, but they mean the text of your content and of families' questions **may be processed in other regions** while the model runs. For Inclusion Canada that has data-residency implications.
 
-Before registering an index that uses an inference profile, confirm the policy: `TODO(CIC policy reference)`.
+Before registering an index whose call target is a cross-region profile, confirm the policy: `TODO(CIC policy reference)`.
 
 ## 4. Steps
 
@@ -46,7 +46,7 @@ Owners are placeholders. Durations are expectations, not measurements.
 | # | Step | Where | What to do | Expected duration | Owner |
 |---|---|---|---|---|---|
 | 1 | Compare candidates offline | A terminal with a database and Bedrock access | `py -3 cdk\lambda\textGeneration\tests\eval\run_eval.py cdk\lambda\textGeneration\tests\eval\golden_queries.json --candidate` (set `EVAL_DATABASE_URL`; use `--candidates`, `--invoke-target name=ID_OR_ARN` and `--price name=USD_PER_1M` as needed). It reads a read-only snapshot and prints ids, ranks and metrics only, never chunk text. | Minutes to an hour, depending on corpus size | `TODO(owner)` |
-| 2 | Register the index | **Search index** > **Register a new index** | Name, provider, dimensions, model id, the id or ARN to call, and optionally price, end-of-life date and score thresholds. It starts as **Building** and changes nothing for families. | Under a minute | `TODO(owner)` |
+| 2 | Register the index | **Search index** > **Register a new index** | Name, the model (its id and the Bedrock call target are filled from Amazon Bedrock), dimensions, and optionally price, end-of-life date and score thresholds. It starts as **Building** and changes nothing for families. | Under a minute | `TODO(owner)` |
 | 3 | Dry run | **Manage** > **Dry run (estimate only)** | Counts what needs embedding and estimates tokens, cost and time. Writes nothing. The cost line reads `price not configured` unless you entered a price. **Start rebuild** stays disabled until a dry run has finished. | A few minutes | `TODO(owner)` |
 | 4 | Rebuild | **Start rebuild** | Embeds every chunk that lacks a current vector. Ingestion keeps running and chat is unaffected. Throttling is retried; a failed rebuild keeps its place and can be started again. | The dry-run estimate | `TODO(owner)` |
 | 5 | Validate | **Check quality** | Runs the checks below. The index becomes **Ready to activate** only when all pass. | A few minutes | `TODO(owner)` |

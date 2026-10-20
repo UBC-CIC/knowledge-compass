@@ -114,6 +114,36 @@ export const PROVIDERS: Record<
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 
+/** A model the register form can offer. `model_id` and `invoke_target` come from Amazon Bedrock. */
+export type EmbeddingModelOption = {
+  provider: ProviderId;
+  label: string;
+  dimensions: number[];
+  available: boolean;
+  model_id: string | null;
+  invoke_target: string | null;
+  cross_region: boolean;
+  unavailable_reason: string | null;
+};
+
+/** Demo mode does not call Amazon Bedrock. These are the same three adapters, with their known ids. */
+const DEMO_MODEL_IDS: Record<ProviderId, string> = {
+  cohere_v3: "cohere.embed-english-v3",
+  titan_v2: "amazon.titan-embed-text-v2:0",
+  cohere_v4: "cohere.embed-v4:0",
+};
+
+export const DEMO_EMBEDDING_MODELS: EmbeddingModelOption[] = PROVIDER_IDS.map((provider) => ({
+  provider,
+  label: PROVIDERS[provider].label,
+  dimensions: [...PROVIDERS[provider].dimensions],
+  available: true,
+  model_id: DEMO_MODEL_IDS[provider],
+  invoke_target: DEMO_MODEL_IDS[provider],
+  cross_region: false,
+  unavailable_reason: null,
+}));
+
 /** How long a retired space is kept before it may be purged (RETENTION_DAYS on the server). */
 export const PURGE_RETENTION_DAYS = 30;
 /** Poll interval while a job is queued or running. */
@@ -125,8 +155,6 @@ export type RegisterFormValues = {
   name: string;
   provider: ProviderId;
   dimensions: number;
-  model_id: string;
-  invoke_target: string;
   version: string;
   price_per_1m_tokens: string;
   eol_date: string;
@@ -141,8 +169,6 @@ export const EMPTY_REGISTER_FORM: RegisterFormValues = {
   name: "",
   provider: "titan_v2",
   dimensions: 1024,
-  model_id: "",
-  invoke_target: "",
   version: "1",
   price_per_1m_tokens: "",
   eol_date: "",
@@ -157,8 +183,6 @@ export type RegisterPayload = {
   name: string;
   provider: ProviderId;
   dimensions: number;
-  model_id: string;
-  invoke_target: string;
   version: string;
   price_per_1m_tokens: number | null;
   eol_date: string | null;
@@ -168,8 +192,6 @@ export type RegisterPayload = {
 };
 
 export const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{2,62}$/;
-const MAX_INVOKE_TARGET = 2048;
-const MAX_MODEL_ID = 512;
 const MAX_VERSION = 32;
 const MAX_PRICE = 99_999_999;
 
@@ -197,15 +219,6 @@ export const registerSchema = z
       .regex(NAME_PATTERN, "Use 3 to 63 characters: lowercase letters, digits, '-' or '_', starting with a letter or digit."),
     provider: z.enum(PROVIDER_IDS as [ProviderId, ...ProviderId[]], { message: "Choose a provider from the list." }),
     dimensions: z.number({ message: "Choose a dimension." }).int("Choose a dimension."),
-    model_id: z
-      .string()
-      .refine((v) => v.trim().length > 0, "Enter the model id.")
-      .refine((v) => v.length <= MAX_MODEL_ID, `Use at most ${MAX_MODEL_ID} characters.`),
-    invoke_target: z
-      .string()
-      .refine((v) => v.length > 0, "Enter the model id or inference profile ARN to call.")
-      .refine((v) => v.length <= MAX_INVOKE_TARGET, `Use at most ${MAX_INVOKE_TARGET} characters.`)
-      .refine((v) => !/\s/.test(v), "Remove the spaces."),
     version: z.string().refine((v) => v.trim().length <= MAX_VERSION, `Use at most ${MAX_VERSION} characters.`),
     price_per_1m_tokens: optionalNumber(
       "Leave empty, or enter a price of 0 or more (USD per 1 million tokens).",
@@ -266,8 +279,6 @@ export function parseRegisterForm(values: RegisterFormValues): RegisterResult {
       name: values.name,
       provider: values.provider,
       dimensions: values.dimensions,
-      model_id: values.model_id.trim(),
-      invoke_target: values.invoke_target,
       version: isBlank(values.version) ? "1" : values.version.trim(),
       price_per_1m_tokens: nullableNumber(values.price_per_1m_tokens),
       eol_date: isBlank(values.eol_date) ? null : values.eol_date.trim(),
