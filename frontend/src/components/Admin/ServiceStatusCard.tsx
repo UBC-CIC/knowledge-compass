@@ -1,8 +1,8 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import SettingsSection from "@/components/Admin/SettingsSection";
 import {
   SERVICE_MESSAGE_MAX,
   SERVICE_OPTIONS,
@@ -29,6 +29,7 @@ export default function ServiceStatusCard({
 }) {
   // The settings page shows a spinner (unmounting this card) while it reloads, so the draft always starts from what was saved.
   const [draft, setDraft] = useState<ServiceState>(saved);
+  const [open, setOpen] = useState(() => saved.status !== "normal");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -40,6 +41,10 @@ export default function ServiceStatusCard({
   const problem = changed ? validateServiceDraft(draft) : null;
   const needsMessage = draft.status !== "normal";
   const remaining = SERVICE_MESSAGE_MAX - cleanServiceMessage(draft.message ?? "").length;
+
+  useEffect(() => {
+    if (problem) setOpen(true);
+  }, [problem]);
 
   const choose = (status: ServiceStatus) => {
     setNotice(null);
@@ -69,16 +74,12 @@ export default function ServiceStatusCard({
   };
 
   return (
-    <Card className="rounded-[13px] border-foreground/12 shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-[18.5px] font-bold tracking-[-0.01em]">Service status</CardTitle>
-        <CardDescription className="text-[13.5px] leading-relaxed">
-          Let families know about planned work, or pause new messages if something is wrong. Use this only when you need to;
-          normally leave it on Normal. It takes effect within about a minute and needs no deploy. The message is visible to
-          anyone who opens the chat, so do not include private details.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+    <SettingsSection
+      title="Service status"
+      description="Let families know about planned work, or pause new messages if something is wrong. Use this only when you need to; normally leave it on Normal. It takes effect within about a minute and needs no deploy. The message is visible to anyone who opens the chat, so do not include private details."
+      open={open}
+      onOpenChange={setOpen}
+    >
         <fieldset className="space-y-2.5">
           <legend className="sr-only">Service status</legend>
           {SERVICE_OPTIONS.map((option) => {
@@ -154,7 +155,6 @@ export default function ServiceStatusCard({
             {changed ? "Unsaved changes." : notice ?? ""}
           </span>
         </div>
-      </CardContent>
-    </Card>
+    </SettingsSection>
   );
 }
