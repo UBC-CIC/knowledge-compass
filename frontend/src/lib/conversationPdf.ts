@@ -129,7 +129,7 @@ function pdfLiteral(text: string): string {
   for (const ch of text) {
     const mapped = WIN_ANSI[ch];
     const code = ch.codePointAt(0) ?? 0x3f;
-    let byte = mapped ?? (code >= 0x20 && code <= 0x7e ? code : code >= 0xa1 && code <= 0xff ? code : 0x3f);
+    const byte = mapped ?? (code >= 0x20 && code <= 0x7e ? code : code >= 0xa1 && code <= 0xff ? code : 0x3f);
     if (byte === 0x5c || byte === 0x28 || byte === 0x29) {
       out += `\\${String.fromCharCode(byte)}`;
     } else if (byte < 0x20 || byte > 0x7e) {
@@ -142,7 +142,7 @@ function pdfLiteral(text: string): string {
 }
 
 function clip(text: string): string {
-  const clean = text.replace(/\u0000/g, "");
+  const clean = text.replaceAll("\u0000", "");
   if (clean.length <= 20000) return clean;
   return `${clean.slice(0, 20000)}...`;
 }
