@@ -67,13 +67,13 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
         id: "detective_phase_prompt",
         title: "Asking questions",
         stage: "asking",
-        autoInsert: "The conversation's progress and every journey's description, words and questions added automatically",
+        autoInsert: "The conversation's progress, every journey's description and words, and its uploaded situations or questions added automatically",
       },
       {
         id: "suggestion_phase_prompt",
         title: "Giving guidance",
         stage: "guiding",
-        autoInsert: "The journey's guidance and matching situation steps added automatically",
+        autoInsert: "The matching uploaded guide section, or the journey's typed steps when no document covers it, added automatically",
       },
     ],
   },
@@ -104,7 +104,7 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
 
 /** One line under the page title, in place of a diagram of the conversation steps. */
 export const STAGE_SUMMARY =
-  "Every reply uses The assistant. Asking questions and giving guidance add How it talks, plus the journey's own text.";
+  "Every reply uses The assistant. Asking questions and giving guidance add How it talks, plus the journey's documents or its own text.";
 
 /**
  * Notes shown while the live text is still the cleaned-up version published

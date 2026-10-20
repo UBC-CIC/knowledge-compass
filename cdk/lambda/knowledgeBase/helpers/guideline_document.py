@@ -349,10 +349,67 @@ def guideline_source_url(document_id: str) -> str:
     return f"{GUIDELINE_URL_PREFIX}{document_id}"
 
 
+def situation_identity(section: dict) -> str:
+    """
+    The situation name used to keep one situation in one ready document.
+
+    Heading paths are "journey > situation". The situation is the last segment.
+    A headingless window uses its section key.
+    """
+    heading = (section.get("heading_path") or "").strip()
+    if not heading:
+        heading = (section.get("section_key") or "").strip()
+    if " > " in heading:
+        heading = heading.split(" > ")[-1]
+    return " ".join(heading.casefold().split())
+
+
+def find_situation_conflict(connection, document_id: str, journey_id, sections: list):
+    """
+    Plain-language error when another ready document of this journey already
+    covers one of these situations. Replacing this document is allowed: its
+    own rows are excluded. No journey, no check.
+    """
+    if not journey_id:
+        return None
+    identities = {}
+    for section in sections:
+        name = situation_identity(section)
+        if name and name not in identities:
+            identities[name] = section.get("heading_path") or section.get("section_key") or name
+    if not identities:
+        return None
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.file_name, s.heading_path, s.section_key
+            FROM guideline_sections s
+            JOIN guideline_documents d ON d.id = s.document_id
+            WHERE d.journey_id = %s::uuid
+              AND d.status = 'ready'
+              AND d.id <> %s::uuid
+            """,
+            (journey_id, document_id),
+        )
+        rows = cur.fetchall()
+    for file_name, heading_path, section_key in rows:
+        other = situation_identity({"heading_path": heading_path or "", "section_key": section_key or ""})
+        if other and other in identities:
+            label = identities[other]
+            return (
+                f"This file includes \"{label}\", which is already covered by \"{file_name}\". "
+                f"Remove that situation from one of the files, or replace \"{file_name}\"."
+            )
+    return None
+
+
 def _load_document(connection, document_id: str):
     with connection.cursor() as cur:
         cur.execute(
-            "SELECT id::text, file_name, s3_key FROM guideline_documents WHERE id = %s::uuid",
+            """
+            SELECT id::text, file_name, s3_key, journey_id::text
+            FROM guideline_documents WHERE id = %s::uuid
+            """,
             (document_id,),
         )
         return cur.fetchone()
@@ -504,7 +561,7 @@ def process_guideline_document(event, connection, context=None) -> dict:
         row = _load_document(connection, document_id)
         if not row:
             return {"error": "document not found"}
-        _, file_name, s3_key = row
+        _, file_name, s3_key, journey_id = row
 
         text = _read_guide_text(file_name, s3_key, _time_left(context))
         if not text.strip():
@@ -515,6 +572,10 @@ def process_guideline_document(event, connection, context=None) -> dict:
             raise GuidelineError(
                 "We couldn't find any guidance text in this file. Please check it and upload it again."
             )
+
+        conflict = find_situation_conflict(connection, document_id, journey_id, sections)
+        if conflict:
+            raise GuidelineError(conflict)
 
         existing = _existing_sections(connection, document_id)
         label_sections(sections, existing)

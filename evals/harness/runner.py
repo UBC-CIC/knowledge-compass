@@ -232,7 +232,7 @@ class Runner:
                 message = scenario.opening_message
                 for index in range(self.config.max_turns):
                     result = chat.send(session_id, message)
-                    routing = self.client.routing_snapshot(user, session_id) if (mode == "standard" and result.ok) else {}
+                    routing = self.client.routing_snapshot(user, session_id) if result.ok else {}
                     turns.append(self._turn_record(index, message, result, routing))
                     if result.limited:
                         stopped = "limit"

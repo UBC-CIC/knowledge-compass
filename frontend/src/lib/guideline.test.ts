@@ -5,9 +5,12 @@ import {
   MAX_LABEL_CHARS,
   guideFileKind,
   hasProcessing,
+  coveredSituationNames,
   normalizeLabel,
+  situationName,
   validateGuideFile,
   validateLabel,
+  type GuidelineDocument,
 } from "@/lib/guideline";
 
 describe("guide files", () => {
@@ -31,6 +34,38 @@ describe("guide files", () => {
   });
 });
 
+describe("covered situations", () => {
+  const doc = (status: GuidelineDocument["status"], heading: string): GuidelineDocument => ({
+    id: heading,
+    file_name: "g.md",
+    status,
+    error: null,
+    section_count: 1,
+    uploaded_by: null,
+    created_at: "",
+    updated_at: "",
+    journey_id: "j",
+    sections: [
+      {
+        id: "s",
+        section_key: heading,
+        heading_path: heading,
+        auto_label: heading,
+        label_override: null,
+        label: heading,
+        summary: null,
+      },
+    ],
+  });
+
+  it("uses the situation heading and ignores files that are not ready", () => {
+    expect(situationName("Journey > Sent home early")).toBe("sent home early");
+    expect(coveredSituationNames([doc("ready", "Journey > Sent home early"), doc("processing", "Journey > Other")])).toEqual(
+      new Set(["sent home early"])
+    );
+  });
+});
+
 describe("situation labels", () => {
   it("normalizes whitespace", () => {
     expect(normalizeLabel("  Sent   home\nearly ")).toBe("Sent home early");
@@ -49,7 +84,7 @@ describe("polling", () => {
     expect(hasProcessing(EMPTY_GUIDELINE_STATE)).toBe(false);
     const doc = {
       id: "1", file_name: "g.md", status: "processing" as const, error: null, section_count: 0,
-      uploaded_by: null, created_at: "", updated_at: "", sections: [],
+      uploaded_by: null, created_at: "", updated_at: "", journey_id: null, sections: [],
     };
     expect(hasProcessing({ ...EMPTY_GUIDELINE_STATE, documents: [doc] })).toBe(true);
   });

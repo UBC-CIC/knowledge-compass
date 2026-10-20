@@ -95,12 +95,14 @@ def _stream(text, size=7):
 
 class ChatModeTestBase(unittest.TestCase):
     reply = GUIDELINE_REPLY
+    use_journey_documents = False
 
     def setUp(self):
         self._mode = config.PROMPT_MODE
         self.bedrock = mock.Mock()
         self.bedrock.converse_stream.side_effect = lambda **kw: _stream(self.reply)
         self.routing_state = mock.Mock()
+        self.routing_state.advance.return_value.to_metadata.return_value = {}
         self.patches = {
             "fetch_recent_messages": mock.Mock(return_value=[{"sender": "user", "content": "hi"}, {"sender": "AI", "content": "hello"}]),
             "insert_message": mock.Mock(),
@@ -112,13 +114,13 @@ class ChatModeTestBase(unittest.TestCase):
             "save_routing_state": mock.Mock(),
             "get_guide_state": mock.Mock(return_value=None),
             "save_guide_state": mock.Mock(),
-            "get_prompt_mode_override": mock.Mock(return_value=None),
             "route_turn": mock.Mock(return_value=None),
             "decide_phase": mock.Mock(return_value="SUGGESTION"),
             "touched_keys": mock.Mock(return_value=([], [])),
             "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "sonnet")),
             "retrieve_from_pgvector": mock.Mock(return_value=list(RESOURCES)),
             "retrieve_guideline_sections": mock.Mock(return_value=SECTIONS),
+            "fetch_journey_coverage": mock.Mock(return_value={}),
             # The active embedding space's min_score (migration 032); 0.40 = DEFAULT_MIN_SCORE.
             "effective_min_score": mock.Mock(return_value=0.40),
             "assess_response": mock.Mock(return_value={"warning_text": None}),
@@ -129,11 +131,18 @@ class ChatModeTestBase(unittest.TestCase):
         self._patchers.append(mock.patch.object(chat.boto3, "client", return_value=self.bedrock))
         for p in self._patchers:
             p.start()
+        if self.use_journey_documents:
+            self.cover_journey()
 
     def tearDown(self):
         for p in self._patchers:
             p.stop()
         config.PROMPT_MODE = self._mode
+
+    def cover_journey(self):
+        self.patches["fetch_journey_coverage"].return_value = {
+            "J1": {"document_ids": ["d1"], "sections": [], "names": set()},
+        }
 
     def respond(self, mode):
         config.PROMPT_MODE = mode
@@ -179,22 +188,23 @@ class StandardModeTest(ChatModeTestBase):
 
 
 class GuidelineModeTest(ChatModeTestBase):
-    def test_guideline_mode_skips_router_but_searches_library(self):
-        result, streamed = self.respond("guideline")
-        self.patches["route_turn"].assert_not_called()
-        self.patches["decide_phase"].assert_not_called()
-        self.patches["get_current_prompt"].assert_not_called()
+    use_journey_documents = True
+
+    def test_covered_journey_retrieves_its_sections_and_the_library(self):
+        result, streamed = self.respond("standard")
+        self.patches["route_turn"].assert_called_once()
+        self.patches["decide_phase"].assert_called_once()
+        self.patches["get_current_prompt"].assert_called_once()
         self.patches["retrieve_guideline_sections"].assert_called_once()
-        self.patches["retrieve_from_pgvector"].assert_called_once()
         self.assertEqual(
-            self.patches["retrieve_from_pgvector"].call_args.kwargs["num_results"],
-            chat.GUIDELINE_RESOURCE_COUNT,
+            self.patches["retrieve_guideline_sections"].call_args.kwargs["document_ids"],
+            ["d1"],
         )
+        self.patches["retrieve_from_pgvector"].assert_called_once()
         self.assertEqual(result["phase"], "SUGGESTION")
 
         payload = self.bedrock.converse_stream.call_args.kwargs
-        self.assertEqual(payload["modelId"], config.SONNET_ARN)
-        self.assertIn("<instructions>", payload["system"][0]["text"])
+        self.assertEqual(payload["modelId"], "sonnet")
         dynamic = payload["system"][2]["text"]
         self.assertIn("[1] Situation: Child sent home early", dynamic)
         # Resources continue the numbering after the guide sections.
@@ -229,7 +239,7 @@ class GuidelineModeTest(ChatModeTestBase):
             {"document_id": "d1", "section_key": "J1 > Sent home", "label": "Child sent home early"},
         )
         self.patches["save_journey_state"].assert_not_called()
-        self.patches["save_routing_state"].assert_not_called()
+        self.patches["save_routing_state"].assert_called_once()
 
     _is_guide = staticmethod(_is_guide)
 
@@ -260,6 +270,7 @@ class GuidelineModeTest(ChatModeTestBase):
 
 class GuidelineClarifyTest(ChatModeTestBase):
     reply = CLARIFY_REPLY
+    use_journey_documents = True
 
     def test_clarifying_question_skips_grounding_and_state(self):
         result, streamed = self.respond("guideline")
@@ -271,6 +282,7 @@ class GuidelineClarifyTest(ChatModeTestBase):
 
 
 class GuidelineEmptyCitationsWithSectionTest(ChatModeTestBase):
+    use_journey_documents = True
     """Explicit [] marks a clarifying turn even when a section is chosen."""
     reply = EMPTY_CITATIONS_WITH_SECTION_REPLY
 
@@ -281,6 +293,7 @@ class GuidelineEmptyCitationsWithSectionTest(ChatModeTestBase):
 
 
 class GuidelineGuideOnlyCitationTest(ChatModeTestBase):
+    use_journey_documents = True
     """Regression: the model cited only the guide section, so "More resources"
     was empty. main.py sends sources_used unchanged as complete.sources, so
     asserting sources_used covers the streamed complete payload."""
@@ -300,6 +313,7 @@ class GuidelineGuideOnlyCitationTest(ChatModeTestBase):
 
 
 class GuidelineGuideOnlyNoLinkTest(ChatModeTestBase):
+    use_journey_documents = True
     """Guide-only citation, no link in the answer: resources ordered by score;
     complete.sources is sources_used (see main.py)."""
     reply = GUIDE_ONLY_REPLY
@@ -342,13 +356,15 @@ class EmbeddingSpaceFailureTest(ChatModeTestBase):
         with self.assertRaises(EmbeddingSpaceError):
             self.respond("standard")
 
-    def test_guideline_mode_reraises_embedding_space_error(self):
+    def test_guide_retrieval_reraises_embedding_space_error(self):
+        self.cover_journey()
         self.patches["retrieve_guideline_sections"].side_effect = EmbeddingSpaceError("PROBE_FAILED")
         with self.assertRaises(EmbeddingSpaceError):
-            self.respond("guideline")
+            self.respond("standard")
 
 
 class GuidelineMissingCitationsTest(ChatModeTestBase):
+    use_journey_documents = True
     """No <cited_indices> block at all on a guidance answer."""
     reply = NO_CITATIONS_REPLY
 

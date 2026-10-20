@@ -26,6 +26,7 @@ export type GuidelineDocument = {
   uploaded_by: string | null;
   created_at: string;
   updated_at: string;
+  journey_id: string | null;
   sections: GuidelineSection[];
 };
 
@@ -54,6 +55,27 @@ export const GUIDE_FILE_TYPES: Record<GuideFileKind, { contentType: string; maxB
 export const MAX_LABEL_CHARS = 80;
 export const GUIDE_ACCEPT =
   ".md,.markdown,.docx,.pdf,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** Last heading segment, matching the server's situation identity. */
+export function situationName(heading: string | null | undefined, sectionKey = ""): string {
+  let text = (heading || sectionKey || "").trim();
+  const parts = text.split(" > ");
+  if (parts.length > 1) text = parts[parts.length - 1] ?? text;
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Situation names covered by ready documents. Processing and failed files do not count. */
+export function coveredSituationNames(documents: GuidelineDocument[]): Set<string> {
+  const names = new Set<string>();
+  for (const doc of documents) {
+    if (doc.status !== "ready") continue;
+    for (const section of doc.sections) {
+      const name = situationName(section.heading_path, section.section_key);
+      if (name) names.add(name);
+    }
+  }
+  return names;
+}
 
 export function guideFileKind(name: string): GuideFileKind | null {
   const lower = name.trim().toLowerCase();

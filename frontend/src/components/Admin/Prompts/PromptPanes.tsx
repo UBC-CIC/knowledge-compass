@@ -1,5 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ChevronRight, Plus } from "lucide-react";
+import JourneyGuides from "@/components/Admin/Prompts/JourneyGuides";
+import { useGuideline } from "@/hooks/useGuideline";
+import { coveredSituationNames, situationName } from "@/lib/guideline";
 import {
   Alert,
   BackLink,
@@ -33,6 +36,7 @@ import {
   type ClusterPatch,
   type FeedbackCount,
   type Journey,
+  type SectionFeedback,
   type JourneyCluster,
   type JourneyPatch,
   type JourneyPromptField,
@@ -266,6 +270,7 @@ type JourneyKey = "name" | "description" | "words" | "detective_questions" | "gu
 export function JourneyPagePane({
   journey,
   feedback,
+  sectionFeedback,
   saveVersion,
   activateVersion,
   updateJourney,
@@ -275,6 +280,7 @@ export function JourneyPagePane({
 }: PageProps & {
   journey: Journey;
   feedback?: FeedbackCount;
+  sectionFeedback?: SectionFeedback[];
   saveVersion: (field: JourneyPromptField, ownerId: string, content: string) => Promise<unknown>;
   activateVersion: (versionId: string) => Promise<unknown>;
   updateJourney: (id: string, patch: JourneyPatch) => Promise<unknown>;
@@ -363,6 +369,9 @@ export function JourneyPagePane({
   };
 
   const n = clusters.length;
+  const guides = useGuideline();
+  const journeyDocuments = (guides.state?.documents ?? []).filter((doc) => doc.journey_id === journey.id);
+  const documentsReady = journeyDocuments.some((doc) => doc.status === "ready");
 
   return (
     <>
@@ -410,6 +419,16 @@ export function JourneyPagePane({
           limit={limits.words}
           rows={3}
         />
+        <JourneyGuides
+          journeyId={journey.id}
+          documents={journeyDocuments}
+          sectionFeedback={sectionFeedback}
+          upload={guides.upload}
+          remove={guides.remove}
+          rename={guides.rename}
+        />
+        {documentsReady ? null : (
+        <>
         <QuestionListField
           title="Questions to ask"
           stage="asking"
@@ -431,6 +450,8 @@ export function JourneyPagePane({
           error={emptyPrompt("guidance") ? "This can't be empty." : null}
           footer={history("guidance", "How to guide")}
         />
+        </>
+        )}
 
         <section className="flex flex-col gap-2.5" aria-labelledby={`${journey.id}-situations`}>
           <div className="flex flex-wrap items-end justify-between gap-4">
@@ -548,6 +569,10 @@ export function SituationPagePane({
   const { busy, error, run } = useRunner();
   useReportDirty(draft.changed.length > 0, onDirtyChange);
 
+  const guides = useGuideline();
+  const stepsCovered = coveredSituationNames(
+    (guides.state?.documents ?? []).filter((doc) => doc.journey_id === journey.id)
+  ).has(situationName(cluster.name));
   const stepsLimit = steps?.character_limit ?? DEFAULT_PROMPT_LIMITS.response_pattern;
   const emptySteps = !!live.response_pattern.trim() && !draft.value("response_pattern").trim();
   const problems =
@@ -628,6 +653,11 @@ export function SituationPagePane({
           rows={4}
           error={!draft.value("matches_when").trim() ? "Describe when this situation fits." : null}
         />
+        {stepsCovered ? (
+          <p className="text-[13px] leading-normal text-foreground/75">
+            An uploaded document covers this situation, so its steps come from that file.
+          </p>
+        ) : (
         <FieldSection
           title="Steps to follow"
           stage="guiding"
@@ -646,6 +676,7 @@ export function SituationPagePane({
             />
           }
         />
+        )}
 
         <ArchiveLink what="situation" archived={cluster.is_archived} onToggle={toggleArchive} />
       </Scroll>

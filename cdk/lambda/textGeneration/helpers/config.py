@@ -113,8 +113,9 @@ Follow Inclusion Canada's preferred language: use person-first disability langua
 """.strip()
 
 # Detective and suggestion bases are the plain, admin-editable text published
-# by migration 027: no placeholders and no references to prompt blocks. The
-# app adds those itself (code-owned constants below; helpers/logic.py).
+# by migration 043 (027 published the previous plain text). No placeholders
+# and no references to prompt blocks. The app adds those itself
+# (code-owned constants below; helpers/logic.py).
 DETECTIVE_PHASE_PROMPT = """
 Ask exactly ONE warm, focused question. Acknowledge what the parent said first.
 
@@ -125,9 +126,11 @@ Rights/concept signals (can appear in any journey):
   "personal care," "medication," "appeal," "lawyer," "legal,"
   "inclusive education," "what is PDA"
 
-STEP 2 — UNDERSTAND WHERE THEY ARE by asking the questions listed for the
-family's journey (in order, if unknown). If the journey is not clear yet, ask
-the question that best tells the journeys apart.
+STEP 2 — UNDERSTAND WHERE THEY ARE. Ask until the situation is clear. When a
+journey lists situations from its uploaded guides, ask the one question that
+best tells those situations apart. When a journey still lists its own questions,
+ask those in order. If the journey is not clear yet, ask the question that best
+tells the journeys apart.
 
 STRICT RULES:
 - ONE question only per turn. Never list multiple questions.
@@ -138,6 +141,11 @@ STRICT RULES:
 """.strip()
 
 SUGGESTION_PHASE_PROMPT = """
+When this turn includes an uploaded guide section, follow that one section.
+Use its steps, order and wording. Do not add steps that are not in that section
+or in a supporting library source you cite. If the section says to ask something
+first, ask that. Cite the section and every library source you used.
+
 If the conversation spans multiple situations, address the most pressing need
 first and note the other briefly as a follow-up.
 
@@ -188,18 +196,21 @@ CROSS-CUTTING RESPONSE PRINCIPLES
 DETECTIVE_STATUS = "CURRENT STATUS: Exchange {exchange_count}.\n{readiness_note}"
 
 DETECTIVE_JOURNEY_GUIDE = (
-    "Use the journeys listed in the <journeys> block below to identify the family's journey, "
-    "and ask that journey's questions in order. If the journey is not clear yet, ask the "
-    "question that best tells the journeys apart."
+    "Use the journeys listed in the <journeys> block below to identify the family's journey. "
+    "When a journey lists situations from its uploaded guides, ask one question that tells "
+    "those situations apart. Otherwise ask that journey's questions in order. If the journey "
+    "is not clear yet, ask the question that best tells the journeys apart."
 )
 
 DETECTIVE_FOCUS_RULE = "If a <focus> block is provided, aim your question at that missing information."
 
 SUGGESTION_JOURNEYS_PREFACE = (
     "The <journeys> block below lists only the journeys and situations that apply to this "
-    "conversation. Review the full conversation history, identify the situation that best "
-    "fits, and follow its steps. A <routing_hint> block may suggest a primary and secondary "
-    "situation; treat it as a hint, the conversation is authoritative."
+    "conversation. When a <guide_sections> block is present, follow the one section that "
+    "best fits and do not add steps that are not in it. Cite that section and any library "
+    "source you used. Otherwise follow the steps in the <journeys> block. A <routing_hint> "
+    "block may suggest a primary and secondary situation; treat it as a hint, the "
+    "conversation is authoritative."
 )
 
 OUTPUT_FORMAT_DETECTIVE = """
@@ -447,20 +458,14 @@ PROMPT_MODES = ("standard", "guideline")
 
 def resolve_prompt_mode(global_mode: str, override: Optional[str] = None) -> str:
     """
-    The prompt mode for one chat turn. This is the single resolution point:
-    chat.py asks here instead of reading PROMPT_MODE directly.
+    One chat path. Journey documents supply covered situations and typed
+    journey text covers the rest. The old standard/guideline switch, including
+    chat_sessions.prompt_mode_override, no longer selects a pipeline.
 
-    override is chat_sessions.prompt_mode_override (migration 035), which only
-    a verified evaluation-harness tag can set; None means "use the global
-    guideline_config.prompt_mode". The globals are never changed per request,
-    so a warm container cannot carry one session's mode into the next.
-
-    When standard and guideline modes are merged into a dual mode, replace the
-    body of this function (and the override column) rather than the callers.
+    The arguments are kept so older callers still import this function.
     """
-    if override in PROMPT_MODES:
-        return override
-    return global_mode if global_mode in PROMPT_MODES else "standard"
+    del global_mode, override
+    return "standard"
 
 
 def apply_guideline_config(guideline: dict) -> None:

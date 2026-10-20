@@ -7,12 +7,13 @@ from helpers.crud import (
     fetch_recent_messages, insert_message, update_last_active_session,
     get_exchange_count, get_session_title, update_session_title, save_journey_state,
     get_session_context, save_routing_state, get_guide_state, save_guide_state,
-    get_prompt_mode_override
 )
 from helpers.guideline_retrieval import GUIDELINE_SOURCE_TYPE, retrieve_guideline_sections
-from helpers.guideline_prompt import build_guideline_prompt, parse_guide_state
+from helpers.guideline_prompt import build_guideline_prompt, format_sections, parse_guide_state
+from helpers.journey_guides import document_ids_for_turn, fetch_journey_coverage, outlines_for
+from helpers.journeys import apply_document_coverage
 from helpers.logic import get_current_prompt
-from helpers.routing import RoutingState, decide_phase, route_turn, touched_keys
+from helpers.routing import DETECTIVE, RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
 from helpers.embedding_space import EmbeddingSpaceError
 from helpers.retrieval import (
@@ -39,6 +40,16 @@ GUIDELINE_RESOURCE_COUNT = 6
 # Library resources shown under "More resources" when a guidance answer cited
 # no resource itself (matches the prompt's "no more than two").
 GUIDELINE_FALLBACK_RESOURCE_COUNT = 2
+
+# Appended on guidance turns that retrieved a journey's documents. Numbers
+# match the combined source list: guide sections first, then library sources.
+GUIDE_CITE_NOTE = """
+The <guide_sections> block is numbered [1], [2], ... and the library sources in
+<retrieved_context> continue after them. When you give guidance from a section,
+include that section's number in <cited_indices>, plus any library source you
+linked. Also output <guide_state>section: n</guide_state> with that section's
+number, or 0 if you did not use one.
+""".strip()
 
 def _generate_session_title(
     query: str,
@@ -131,17 +142,6 @@ def _prepare_conversation(
         logger.error(f"DB Error: {e}")
         raise
 
-    # Guideline mode (migration 031): answer only from uploaded guides. Skips
-    # the router, phases, journey catalog and corpus retrieval entirely.
-    # The mode is resolved per session (config.resolve_prompt_mode): a verified
-    # evaluation session may override the global setting without changing it.
-    prompt_mode = config.resolve_prompt_mode(
-        config.PROMPT_MODE,
-        get_prompt_mode_override(db_connection, chat_session_id),
-    )
-    if prompt_mode == "guideline":
-        return _prepare_guideline_conversation(query, region, chat_session_id, db_connection, raw_history)
-
     # 4. Load session context. The user message is already saved, so the
     #    count equals the number of completed exchanges before this message.
     exchange_count = get_exchange_count(chat_session_id, db_connection)
@@ -175,16 +175,26 @@ def _prepare_conversation(
         config.ROUTING_MODE, phase, exchange_count, route is not None,
     )
 
+    # Ready documents replace typed questions, journey guidance and the steps
+    # of the situations they cover. A journey with none keeps the typed text.
+    coverage = fetch_journey_coverage(db_connection)
+    catalog = apply_document_coverage(config.JOURNEY_CATALOG, coverage)
+    previous_section = get_guide_state(db_connection, chat_session_id) if phase != DETECTIVE else None
+    if previous_section and previous_section.get("label"):
+        search_query = f"{search_query}\n\n{previous_section['label']}"
+
     # 6. Build the phase prompt.
     static_system_prompt, num_retrieval_results, phase_name, phase_instructions, model_arn = get_current_prompt(
         phase=phase,
         exchange_count=exchange_count,
         journey_state=journey_state,
         route=route,
+        catalog=catalog,
+        outlines=outlines_for(coverage),
     )
-    routing_ctx = {"phase": phase, "route": route, "state": routing_state}
 
-    # 7. RAG Retrieval (using the routed query)
+    # 7. RAG Retrieval (using the routed query). Journey documents are hidden
+    # from this search; they are retrieved separately below.
     sources = retrieve_from_pgvector(
         search_query,
         db_connection,
@@ -192,14 +202,45 @@ def _prepare_conversation(
         num_results=num_retrieval_results,
     )
 
-    # 8. Build Context
-    context_block = format_context_for_prompt(sources)
-    
-    # 9. Construct Final System Prompt.
-    # The phase block (from logic.get_current_prompt) already carries the
-    # phase-appropriate <output_format> — including the <answer>/<cited_indices>
-    # contract for the suggestion phase — so chat.py only appends retrieved context.
-    dynamic_prompt = f"""{phase_instructions}
+    sections: List[Dict[str, Any]] = []
+    if phase != DETECTIVE:
+        document_ids = document_ids_for_turn(route, coverage)
+        if document_ids:
+            sections = retrieve_guideline_sections(
+                search_query,
+                db_connection,
+                region,
+                previous_section=previous_section,
+                document_ids=document_ids,
+            )
+    routing_ctx = {
+        "phase": phase,
+        "route": route,
+        "state": routing_state,
+        "has_guides": bool(sections),
+        "previous_section": previous_section,
+    }
+
+    # 8. Guide sections are numbered first. Library sources continue after them
+    # so <cited_indices> refers to one list.
+    if sections:
+        context_block = format_context_for_prompt(sources, start=len(sections) + 1)
+        sources = list(sections) + list(sources)
+        dynamic_prompt = f"""{phase_instructions}
+
+{GUIDE_CITE_NOTE}
+
+<guide_sections>
+{format_sections(sections)}
+</guide_sections>
+
+<retrieved_context>
+{context_block}
+</retrieved_context>
+"""
+    else:
+        context_block = format_context_for_prompt(sources)
+        dynamic_prompt = f"""{phase_instructions}
 
 <retrieved_context>
 {context_block}
@@ -472,12 +513,17 @@ def get_response(
     cited_indices = []
     parsed_indices = None
     expect_answer_tags = phase_name == "SUGGESTION"
-    is_guideline = routing_ctx.get("mode") == "guideline"
+    # The retired guideline-only pipeline set mode. The merged path sets
+    # has_guides when this turn retrieved a journey's documents. Both hide
+    # guide citations and record the chosen section. Only the old pipeline
+    # skipped journey and routing state.
+    exclusive_guideline = routing_ctx.get("mode") == "guideline"
+    has_guides = exclusive_guideline or bool(routing_ctx.get("has_guides"))
     # Hidden metadata tags that must never reach the stream. Guideline mode
     # adds <guide_state>; standard mode keeps its original tag lists.
     stream_stop_tags = ["</answer>", "<cited", "<detective_state"]
     stream_hold_tags = ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]
-    if is_guideline:
+    if has_guides:
         stream_stop_tags.append("<guide_state")
         stream_hold_tags.extend(["<guide_state>", "</guide_state>"])
 
@@ -577,14 +623,14 @@ def get_response(
         for source in used_sources
         if source.get("source_type") != GUIDELINE_SOURCE_TYPE
     ]
-    guide_state = parse_guide_state(full_response_text, sources) if is_guideline else None
+    guide_state = parse_guide_state(full_response_text, sources) if has_guides else None
 
     # Guideline mode: a guidance answer that cited only its guide section
     # still keeps "More resources", using library resources only (never
     # guides). An explicit [] marks a clarifying turn, which shows none.
     # Fallback items are display-only and are not sent to grounding.
     fallback_count = 0
-    if (is_guideline and guide_state and not public_sources and parsed_indices != []
+    if (has_guides and guide_state and not public_sources and parsed_indices != []
             and answer_text and not answer_text.startswith("I encountered an error")):
         public_sources = [
             to_public_source(s)
@@ -599,7 +645,7 @@ def get_response(
 
     # Guideline mode: a clarifying question cites no section, so there is
     # nothing to verify; answers are checked against the full sections.
-    run_grounding_check = phase_name == "SUGGESTION" and (not is_guideline or bool(used_sources))
+    run_grounding_check = phase_name == "SUGGESTION" and (not has_guides or bool(used_sources))
 
     if run_grounding_check and answer_text and not answer_text.startswith("I encountered an error"):
         try:
@@ -626,9 +672,9 @@ def get_response(
         warning_text
     )
 
-    # Guideline mode keeps its own state (the chosen section) under
-    # metadata.guide_state and never touches journey/routing state.
-    if is_guideline:
+    # The chosen guide section is stored for the next turn and for admins.
+    # Journey and routing state are still saved on the merged path.
+    if has_guides:
         logger.info(
             "Guideline turn: sources=%d cited=%d fallback_resources=%d selected_section=%s",
             len(sources), len(used_sources), fallback_count,
@@ -646,7 +692,7 @@ def get_response(
     # Suggestion phase: <journey_state> after <cited_indices>.
     # Detective phase: <detective_state> after the visible response.
     # Both are never streamed to the user.
-    if full_response_text and not is_guideline:
+    if full_response_text and not exclusive_guideline:
         try:
             state_text = None
             if phase_name == "SUGGESTION":
@@ -675,7 +721,7 @@ def get_response(
 
     # Advance routing state only after a successful reply, so a failed
     # generation does not count as a question asked or guidance given.
-    if not is_guideline and answer_text and not answer_text.startswith("I encountered an error"):
+    if not exclusive_guideline and answer_text and not answer_text.startswith("I encountered an error"):
         try:
             # Journey/situation keys only (no text) for feedback analytics.
             journeys_touched, clusters_touched = touched_keys(
@@ -684,10 +730,16 @@ def get_response(
             next_state = routing_ctx["state"].advance(
                 routing_ctx["phase"], journeys_touched, clusters_touched
             )
+            routing_metadata = next_state.to_metadata(routing_ctx["route"])
+            if guide_state:
+                routing_metadata["guide_section"] = {
+                    "document_id": guide_state["document_id"],
+                    "section_key": guide_state["section_key"],
+                }
             save_routing_state(
                 db_connection,
                 chat_session_id,
-                next_state.to_metadata(routing_ctx["route"]),
+                routing_metadata,
             )
             db_connection.commit()
         except Exception as e:

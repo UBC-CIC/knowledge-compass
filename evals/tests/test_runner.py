@@ -139,9 +139,9 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(files, ["X01_guideline.json", "X01_standard.json"])
         self.assertEqual(manifest["sessions_created"], manifest["sessions_deleted"])
         self.assertEqual(manifest["errors"], [])
-        # Guideline transcripts carry no routing readback.
+        # One chat path, so both modes record the journey key and any cited section.
         g = json.loads((self.root / "run_test" / "journeys" / "X01_guideline.json").read_text(encoding="utf-8"))
-        self.assertTrue(all(turn["routing"] == {} for turn in g["turns"]))
+        self.assertTrue(all(turn["routing"]["journey"] == "J1" for turn in g["turns"]))
 
     def test_probes_only_and_journeys_only(self):
         backend = FakeBackend()

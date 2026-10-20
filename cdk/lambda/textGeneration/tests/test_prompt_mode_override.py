@@ -19,72 +19,24 @@ from test_chat_guideline_mode import ChatModeTestBase, GUIDELINE_REPLY  # noqa: 
 
 
 class ResolvePromptModeTest(unittest.TestCase):
-    def test_override_wins(self):
-        self.assertEqual(config.resolve_prompt_mode("standard", "guideline"), "guideline")
-        self.assertEqual(config.resolve_prompt_mode("guideline", "standard"), "standard")
-
-    def test_no_override_uses_global(self):
-        self.assertEqual(config.resolve_prompt_mode("guideline", None), "guideline")
-        self.assertEqual(config.resolve_prompt_mode("standard", None), "standard")
-
-    def test_invalid_values_fall_back(self):
-        self.assertEqual(config.resolve_prompt_mode("guideline", "admin"), "guideline")
-        self.assertEqual(config.resolve_prompt_mode("bogus", None), "standard")
-        self.assertEqual(config.resolve_prompt_mode(None, ""), "standard")
+    def test_switch_is_retired(self):
+        # Journey documents and typed text share one path. Neither the global
+        # mode nor a session override selects a second pipeline.
+        for global_mode in ("standard", "guideline", "bogus", None):
+            for override in ("guideline", "standard", "admin", None, ""):
+                self.assertEqual(config.resolve_prompt_mode(global_mode, override), "standard")
 
 
 class OverrideRoutingTest(ChatModeTestBase):
     reply = GUIDELINE_REPLY
 
-    def _guideline_path_taken(self):
-        return self.patches["retrieve_guideline_sections"].called
-
-    def _reset(self):
-        for m in self.patches.values():
-            m.reset_mock()
-
-    def test_guideline_override_in_standard_global(self):
-        self.patches["get_prompt_mode_override"].return_value = "guideline"
-        result, _ = self.respond("standard")
-        self.assertTrue(self._guideline_path_taken())
-        self.patches["route_turn"].assert_not_called()
+    def test_session_override_does_not_skip_the_router(self):
+        result, _ = self.respond("guideline")
+        self.patches["route_turn"].assert_called_once()
+        self.patches["retrieve_guideline_sections"].assert_not_called()
         self.assertEqual(result["phase"], "SUGGESTION")
-        self.patches["save_routing_state"].assert_not_called()
-        self.assertEqual(config.PROMPT_MODE, "standard")
-
-    def test_standard_override_in_guideline_global(self):
-        self.patches["get_prompt_mode_override"].return_value = "standard"
-        self.respond("guideline")
-        self.assertFalse(self._guideline_path_taken())
-        self.patches["route_turn"].assert_called_once()
+        self.patches["save_routing_state"].assert_called_once()
         self.assertEqual(config.PROMPT_MODE, "guideline")
-
-    def test_null_override_uses_global(self):
-        self.patches["get_prompt_mode_override"].return_value = None
-        self.respond("guideline")
-        self.assertTrue(self._guideline_path_taken())
-        self._reset()
-        self.respond("standard")
-        self.assertFalse(self._guideline_path_taken())
-
-    def test_override_does_not_leak_to_next_session(self):
-        # An eval session in guideline mode, then a normal session on the same
-        # warm container: the normal one must follow the (standard) global.
-        self.patches["get_prompt_mode_override"].return_value = "guideline"
-        self.respond("standard")
-        self.assertTrue(self._guideline_path_taken())
-
-        self._reset()
-        self.patches["get_prompt_mode_override"].return_value = None
-        self.respond("standard")
-        self.assertFalse(self._guideline_path_taken())
-        self.patches["route_turn"].assert_called_once()
-        self.assertEqual(config.PROMPT_MODE, "standard")
-
-    def test_override_is_read_for_the_turns_session(self):
-        self.respond("standard")
-        args = self.patches["get_prompt_mode_override"].call_args.args
-        self.assertEqual(args[1], "s1")
 
 
 class _Cursor:

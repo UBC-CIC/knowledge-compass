@@ -279,7 +279,37 @@ def build_journey_list(catalog: JourneyCatalog) -> str:
     return "<supported_journeys>\n" + "\n".join(lines) + "\n</supported_journeys>"
 
 
-def build_detective_block(catalog: JourneyCatalog, route: Any) -> str:
+def apply_document_coverage(catalog: JourneyCatalog, coverage: dict) -> JourneyCatalog:
+    """
+    Journeys with ready documents stop pasting their question list and journey
+    guidance. A situation whose name matches a document section also drops its
+    typed steps. Situations the documents do not cover keep their steps.
+    """
+    if not coverage or catalog.is_empty:
+        return catalog
+    journeys = []
+    for journey in catalog.journeys:
+        info = coverage.get(journey.key)
+        if not info:
+            journeys.append(journey)
+            continue
+        names = info.get("names") or set()
+        clusters = tuple(
+            replace(cluster, response_pattern="")
+            if _one_line(cluster.name).casefold() in names
+            else cluster
+            for cluster in journey.clusters
+        )
+        journeys.append(replace(
+            journey,
+            detective_questions="",
+            guidance="",
+            clusters=clusters,
+        ))
+    return JourneyCatalog(tuple(journeys))
+
+
+def build_detective_block(catalog: JourneyCatalog, route: Any, outlines: Optional[dict] = None) -> str:
     """
     <journeys> block for DETECTIVE turns: every journey's description, signals
     and cluster index (so the journey can be identified), plus the detective
@@ -302,6 +332,9 @@ def build_detective_block(catalog: JourneyCatalog, route: Any) -> str:
         if (focus is None or focus.key == journey.key) and journey.detective_questions.strip():
             lines.append("  Questions to ask (in this order if unknown):")
             lines.append(_indent(journey.detective_questions.strip(), "    "))
+        outline = (outlines or {}).get(journey.key)
+        if outline:
+            lines.append(outline)
         sections.append("\n".join(lines))
     return "<journeys>\n" + "\n\n".join(sections) + "\n</journeys>"
 

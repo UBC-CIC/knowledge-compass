@@ -46,7 +46,7 @@ let demoState: GuidelineState = structuredClone(EMPTY_GUIDELINE_STATE);
 
 type UploadUrl = { presignedUrl: string; key: string; contentType: string };
 
-async function uploadOne(file: File, replaceDocumentId?: string): Promise<void> {
+async function uploadOne(file: File, replaceDocumentId?: string, journeyId?: string): Promise<void> {
   const kind = guideFileKind(file.name);
   if (!kind) throw new Error(`"${file.name}" can't be used.`);
   const target = await adminFetch<UploadUrl>("/admin/guideline/upload-url", {
@@ -65,6 +65,7 @@ async function uploadOne(file: File, replaceDocumentId?: string): Promise<void> 
       s3_key: target.key,
       file_name: file.name,
       ...(replaceDocumentId ? { replace_document_id: replaceDocumentId } : {}),
+      ...(journeyId ? { journey_id: journeyId } : {}),
     }),
   });
 }
@@ -134,7 +135,7 @@ export function useGuideline() {
 
   /** Uploads each file; returns plain-language problems for files that failed. */
   const upload = useCallback(
-    async (files: File[], replaceDocumentId?: string): Promise<string[]> => {
+    async (files: File[], replaceDocumentId?: string, journeyId?: string): Promise<string[]> => {
       if (isDemoMode) return ["Uploading guides isn't available in demo mode."];
       const problems: string[] = [];
       for (const file of files) {
@@ -144,7 +145,7 @@ export function useGuideline() {
           continue;
         }
         try {
-          await uploadOne(file, replaceDocumentId);
+          await uploadOne(file, replaceDocumentId, journeyId);
         } catch (e) {
           console.error(e);
           problems.push(e instanceof Error && e.message ? e.message : `Couldn't upload "${file.name}".`);

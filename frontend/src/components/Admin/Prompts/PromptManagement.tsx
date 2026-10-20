@@ -171,6 +171,7 @@ export default function PromptManagement() {
         key={key}
         journey={currentJourney}
         feedback={feedbackByJourney.get(currentJourney.key)}
+        sectionFeedback={(feedback?.sections ?? []).filter((s) => s.journey_key === currentJourney.key)}
         saveVersion={jr.saveVersion}
         activateVersion={jr.activateVersion}
         updateJourney={jr.updateJourney}

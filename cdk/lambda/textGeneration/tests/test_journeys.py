@@ -350,5 +350,48 @@ class SeenKeysTests(unittest.TestCase):
         self.assertEqual(state.clusters_seen, ("A",))
 
 
+class DocumentCoverageTest(unittest.TestCase):
+    def catalog(self):
+        return JourneyCatalog((
+            Journey(
+                key="J1", name="One", description="d", detection_signals="sent home",
+                detective_questions="ask this", guidance="guide this",
+                clusters=(
+                    Cluster(key="A", name="Sent home early", matches_when="m", response_pattern="steps a"),
+                    Cluster(key="B", name="Something else", matches_when="m", response_pattern="steps b"),
+                ),
+            ),
+            Journey(
+                key="J2", name="Two", description="d", detection_signals="w",
+                detective_questions="ask two", guidance="guide two",
+                clusters=(Cluster(key="C", name="Other", matches_when="m", response_pattern="steps c"),),
+            ),
+        ))
+
+    def test_ready_documents_replace_only_the_situations_they_cover(self):
+        covered = journeys.apply_document_coverage(self.catalog(), {
+            "J1": {"names": {"sent home early"}, "document_ids": ["d1"], "sections": []},
+        })
+        one = covered.journey("J1")
+        self.assertEqual(one.detective_questions, "")
+        self.assertEqual(one.guidance, "")
+        self.assertEqual(one.clusters[0].response_pattern, "")
+        self.assertEqual(one.clusters[1].response_pattern, "steps b")
+        two = covered.journey("J2")
+        self.assertEqual(two.detective_questions, "ask two")
+        self.assertEqual(two.guidance, "guide two")
+        self.assertEqual(two.clusters[0].response_pattern, "steps c")
+
+    def test_no_coverage_keeps_typed_text(self):
+        same = journeys.apply_document_coverage(self.catalog(), {})
+        self.assertEqual(same.journey("J1").detective_questions, "ask this")
+
+    def test_detective_block_lists_uploaded_situations(self):
+        block = build_detective_block(self.catalog(), None, {"J1": "  Situations in the uploaded guides:\n    - Sent home early"})
+        self.assertIn("Situations in the uploaded guides:", block)
+        self.assertIn("Sent home early", block)
+        self.assertIn("ask two", block)
+
+
 if __name__ == "__main__":
     unittest.main()

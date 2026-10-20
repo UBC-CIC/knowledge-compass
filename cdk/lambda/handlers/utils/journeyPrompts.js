@@ -238,7 +238,7 @@ function shapeTree(journeyRows, clusterRows, versionRows) {
  * but missing from the catalog are listed with their key as the name.
  */
 function shapeFeedback(countRows, journeyRows, clusterRows, days) {
-  const counts = { journey: new Map(), cluster: new Map() };
+  const counts = { journey: new Map(), cluster: new Map(), section: new Map() };
   let untagged = { up: 0, down: 0, sessions: 0 };
   for (const r of countRows) {
     const value = { up: Number(r.up) || 0, down: Number(r.down) || 0, sessions: Number(r.sessions) || 0 };
@@ -262,7 +262,14 @@ function shapeFeedback(countRows, journeyRows, clusterRows, days) {
   for (const [key, value] of counts.cluster) {
     if (!known.cluster.has(key)) clusters.push({ key, name: key, journey_key: null, is_archived: true, ...value });
   }
-  return { days, journeys, clusters, untagged };
+  const sections = [...counts.section].map(([raw, value]) => {
+    const text = String(raw ?? "");
+    const splitAt = text.indexOf("\u001f");
+    const journey_key = splitAt === -1 ? null : text.slice(0, splitAt) || null;
+    const key = splitAt === -1 ? text : text.slice(splitAt + 1);
+    return { key, journey_key, ...value };
+  });
+  return { days, journeys, clusters, sections, untagged };
 }
 
 // ------------------------------------------------------------------
@@ -299,6 +306,23 @@ async function fetchTree(sql) {
 }
 
 const ownerColumn = (field) => (JOURNEY_FIELDS.includes(field) ? "journey_id" : "cluster_id");
+
+function situationName(heading, sectionKey) {
+  let text = String(heading || sectionKey || "").trim();
+  const parts = text.split(" > ");
+  if (parts.length > 1) text = parts[parts.length - 1];
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function readySituationNames(tx, journeyId) {
+  const rows = await tx`
+    SELECT s.heading_path, s.section_key
+      FROM guideline_sections s
+      JOIN guideline_documents d ON d.id = s.document_id
+     WHERE d.journey_id = ${journeyId} AND d.status = 'ready'
+  `;
+  return new Set(rows.map((r) => situationName(r.heading_path, r.section_key)).filter(Boolean));
+}
 
 async function insertVersion(tx, field, ownerId, content, adminId) {
   const column = ownerColumn(field);
@@ -370,7 +394,7 @@ async function feedbackCounts(sql, days) {
          AND cs.eval_run_id IS NULL
     ),
     tagged AS (
-      SELECT rating,
+      SELECT rating, r,
         CASE
           WHEN jsonb_typeof(r->'journeys_seen') = 'array' AND jsonb_array_length(r->'journeys_seen') > 0
             THEN r->'journeys_seen'
@@ -402,6 +426,15 @@ async function feedbackCounts(sql, days) {
            COUNT(*)::int
       FROM tagged, jsonb_array_elements_text(clusters) AS k
      GROUP BY k
+    UNION ALL
+    SELECT 'section',
+           COALESCE(r->'route'->>'journey', '') || chr(31) || (r->'guide_section'->>'section_key'),
+           COUNT(*) FILTER (WHERE rating = 'up')::int,
+           COUNT(*) FILTER (WHERE rating = 'down')::int,
+           COUNT(*)::int
+      FROM tagged
+     WHERE COALESCE(r->'guide_section'->>'section_key', '') <> ''
+     GROUP BY COALESCE(r->'route'->>'journey', ''), r->'guide_section'->>'section_key'
     UNION ALL
     SELECT 'untagged', NULL,
            COUNT(*) FILTER (WHERE rating = 'up')::int,
@@ -550,6 +583,24 @@ async function route(sql, event, routeKey) {
           ? await tx`SELECT id FROM journeys WHERE id = ${ownerId} FOR UPDATE`
           : await tx`SELECT id FROM journey_clusters WHERE id = ${ownerId} FOR UPDATE`;
         if (owner.length === 0) throw new InputError("Journey or situation not found", 404);
+        if (JOURNEY_FIELDS.includes(field)) {
+          const covered = await readySituationNames(tx, ownerId);
+          if (covered.size > 0) {
+            throw new InputError(
+              "This journey's questions and guidance come from its uploaded documents. Replace a document to change them.",
+              409
+            );
+          }
+        } else {
+          const cluster = await tx`SELECT journey_id, name FROM journey_clusters WHERE id = ${ownerId}`;
+          const covered = cluster[0] ? await readySituationNames(tx, cluster[0].journey_id) : new Set();
+          if (covered.has(situationName(cluster[0]?.name))) {
+            throw new InputError(
+              "This situation is covered by an uploaded document. Replace that document to change its steps.",
+              409
+            );
+          }
+        }
         return insertVersion(tx, field, ownerId, content, adminId);
       });
       return { statusCode: 200, body: await fetchVersion(sql, id) };

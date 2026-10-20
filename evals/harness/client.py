@@ -200,6 +200,7 @@ class ApiClient:
             "clusters_seen": list(routing.get("clusters_seen") or []),
             "last_phase": routing.get("last_phase"),
             "journey_state": metadata.get("journey_state"),
+            "guide_section": routing.get("guide_section") if isinstance(routing.get("guide_section"), dict) else None,
         }
 
     def delete_session(self, user: EvalUser, session_id: str) -> None:

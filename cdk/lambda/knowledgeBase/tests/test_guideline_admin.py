@@ -303,13 +303,37 @@ class StateTest(AdminTestBase):
     def test_groups_sections_under_documents(self):
         conn = FakeConnection({
             "FROM guideline_config": [("guideline", "a@x.org", "2026-01-01")],
-            "FROM guideline_documents": [(DOC_ID, "guide.md", "ready", None, 1, "a@x.org", "t", "t")],
+            "FROM guideline_documents": [(DOC_ID, "guide.md", "ready", None, 1, "a@x.org", "t", "t", None)],
             "FROM guideline_sections": [(SECTION_ID, DOC_ID, "A > B", "A > B", "Auto", "Override", "Sum")],
         })
         response, _ = self.call(_event("GET", "/admin/guideline"), conn=conn)
         body = _body(response)
         self.assertEqual(body["mode"], "guideline")
         self.assertEqual(body["documents"][0]["sections"][0]["label"], "Override")
+        self.assertIsNone(body["documents"][0]["journey_id"])
+
+    def test_register_attaches_a_journey(self):
+        journey = "99999999-9999-9999-9999-999999999999"
+        conn = FakeConnection({
+            "FROM journeys WHERE id": [(1,)],
+            "INSERT INTO guideline_documents": [(DOC_ID,)],
+        })
+        response, conn = self.call(
+            _event("POST", "/admin/guideline/documents"),
+            {"s3_key": KEY, "file_name": "guide.md", "journey_id": journey},
+            conn,
+        )
+        self.assertEqual(response["statusCode"], 202)
+        self.assertEqual(conn.sql_with("INSERT INTO guideline_documents")[0][1][3], journey)
+
+    def test_unknown_journey_is_rejected(self):
+        response, conn = self.call(
+            _event("POST", "/admin/guideline/documents"),
+            {"s3_key": KEY, "file_name": "guide.md", "journey_id": DOC_ID},
+        )
+        self.assertEqual(response["statusCode"], 404)
+        self.lam.invoke.assert_not_called()
+        self.assertFalse(conn.sql_with("INSERT INTO guideline_documents"))
 
 
 if __name__ == "__main__":

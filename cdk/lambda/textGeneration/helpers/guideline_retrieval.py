@@ -36,15 +36,17 @@ DEFAULT_MAX_WORDS = 2500
 CANDIDATE_LIMIT = 40
 _WINDOW_RE = re.compile(r"^window-(\d+)$")
 
-def build_candidate_sql(space) -> str:
+def build_candidate_sql(space, restrict_documents: bool = False) -> str:
     """
     Candidate query over the guideline chunks' vectors in `space`. The space id
     is inlined as a validated literal and the dimension cast matches the space's
     index expression (see retrieval_core.build_standard_sql). A vector only
     counts when its embed_hash matches the chunk's current embed_text.
-    Parameters: query vector (score), query vector (ORDER BY), LIMIT.
+    Parameters: query vector (score), optional document id list, query vector
+    (ORDER BY), LIMIT.
     """
     space_uuid, dims = space_literals(space)
+    document_filter = "\n          AND d.id = ANY(%s::uuid[])" if restrict_documents else ""
     return f"""
     WITH g AS MATERIALIZED (
         SELECT s.metadata->>'guideline_document_id' AS document_id,
@@ -58,7 +60,7 @@ def build_candidate_sql(space) -> str:
         JOIN sources s ON s.id = c.source_id
         JOIN guideline_documents d ON d.id::text = s.metadata->>'guideline_document_id'
         WHERE s.metadata->>'kb_role' = 'guideline'
-          AND d.status = 'ready'
+          AND d.status = 'ready'{document_filter}
     )
     SELECT document_id, section_key, 1 - (embedding <=> %s::vector) AS score
     FROM g
@@ -157,6 +159,7 @@ def retrieve_guideline_sections(
     max_sections: int = DEFAULT_MAX_SECTIONS,
     max_words: int = DEFAULT_MAX_WORDS,
     embed_model_id: str = EMBED_MODEL_ID,
+    document_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Up to `max_sections` full guideline sections most relevant to `query`,
@@ -166,7 +169,12 @@ def retrieve_guideline_sections(
     Returns [] on a transient failure so the model falls back to asking a
     clarifying question instead of the turn failing. A missing or inconsistent
     embedding space raises EmbeddingSpaceError instead; it is not swallowed.
+
+    document_ids limits the search to those guides. None searches every ready
+    guide. An empty list searches nothing.
     """
+    if document_ids is not None and len(document_ids) == 0:
+        return []
     space = get_active_space(db_connection, region=region)
     try:
         embedding = embed_query(
@@ -180,7 +188,13 @@ def retrieve_guideline_sections(
     vector = _vector_literal(embedding)
     try:
         with db_connection.cursor() as cur:
-            cur.execute(build_candidate_sql(space), (vector, vector, CANDIDATE_LIMIT))
+            if document_ids is None:
+                cur.execute(build_candidate_sql(space), (vector, vector, CANDIDATE_LIMIT))
+            else:
+                cur.execute(
+                    build_candidate_sql(space, restrict_documents=True),
+                    (vector, list(document_ids), vector, CANDIDATE_LIMIT),
+                )
             candidates = cur.fetchall()
 
             top = _rank_sections(candidates, previous_section, max_sections)

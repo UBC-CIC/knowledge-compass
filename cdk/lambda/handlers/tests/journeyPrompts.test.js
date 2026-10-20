@@ -110,6 +110,7 @@ test("shapeFeedback lists every catalog item with counts and keeps unknown keys"
       { kind: "journey", key: "J1", up: 3, down: 1, sessions: 4 },
       { kind: "journey", key: "OLD", up: 1, down: 0, sessions: 1 },
       { kind: "cluster", key: "C", up: 2, down: 1, sessions: 3 },
+      { kind: "section", key: "J1\u001fSent home", up: 4, down: 1, sessions: 5 },
       { kind: "untagged", key: null, up: 0, down: 2, sessions: 2 },
     ],
     [{ id: "j1", key: "J1", name: "One", is_archived: false }, { id: "j2", key: "J2", name: "Two", is_archived: true }],
@@ -118,6 +119,7 @@ test("shapeFeedback lists every catalog item with counts and keeps unknown keys"
   );
   assert.deepEqual(out.journeys.map((j) => [j.key, j.up, j.down]), [["J1", 3, 1], ["J2", 0, 0], ["OLD", 1, 0]]);
   assert.equal(out.clusters[0].journey_key, "J1");
+  assert.deepEqual(out.sections, [{ key: "Sent home", journey_key: "J1", up: 4, down: 1, sessions: 5 }]);
   assert.deepEqual(out.untagged, { up: 0, down: 2, sessions: 2 });
   assert.equal(out.days, 30);
   // Counts only: no comment or message fields.
@@ -210,6 +212,23 @@ test("new prompt version over the character limit is rejected", async () => {
   );
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.character_limit, 10);
+  assert.ok(!sql.calls.some((c) => c.text.includes("INSERT INTO journey_prompt_versions")));
+});
+
+test("a ready document blocks a new journey guidance version", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+    if (text.includes("FOR UPDATE")) return [{ id: UUID }];
+    if (text.includes("guideline_sections")) return [{ heading_path: "Journey > Sent home", section_key: "k" }];
+    return [];
+  });
+  const res = await call(
+    sql,
+    "POST /admin/journey-prompts",
+    adminEvent({ body: JSON.stringify({ field: "guidance", owner_id: UUID, content: "new guidance" }) })
+  );
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /uploaded documents/);
   assert.ok(!sql.calls.some((c) => c.text.includes("INSERT INTO journey_prompt_versions")));
 });
 

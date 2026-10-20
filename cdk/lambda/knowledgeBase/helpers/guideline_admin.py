@@ -199,7 +199,8 @@ def get_guideline_state(connection) -> dict:
 
         cur.execute(
             """
-            SELECT id::text, file_name, status, error, section_count, uploaded_by, created_at, updated_at
+            SELECT id::text, file_name, status, error, section_count, uploaded_by,
+                   created_at, updated_at, journey_id::text
             FROM guideline_documents
             ORDER BY created_at, id
             """
@@ -208,7 +209,8 @@ def get_guideline_state(connection) -> dict:
             {
                 "id": r[0], "file_name": r[1], "status": r[2], "error": r[3],
                 "section_count": r[4], "uploaded_by": r[5],
-                "created_at": r[6], "updated_at": r[7], "sections": [],
+                "created_at": r[6], "updated_at": r[7], "journey_id": r[8],
+                "sections": [],
             }
             for r in cur.fetchall()
         ]
@@ -285,6 +287,7 @@ def register_document(event, body, connection):
     s3_key = str(body.get("s3_key") or "")
     file_name = _clean_file_name(body.get("file_name"))
     replace_id = body.get("replace_document_id")
+    journey_id = body.get("journey_id")
 
     if not _KEY_RE.match(s3_key):
         return _response(event, 400, {"error": "Invalid upload key."})
@@ -294,6 +297,8 @@ def register_document(event, body, connection):
         return _response(event, 400, {"error": _UNSUPPORTED})
     if replace_id is not None and not _is_uuid(replace_id):
         return _response(event, 400, {"error": "Invalid document id."})
+    if journey_id is not None and not _is_uuid(journey_id):
+        return _response(event, 400, {"error": "Invalid journey id."})
 
     max_bytes = _FILE_TYPES[key_kind][3]
     try:
@@ -312,6 +317,10 @@ def register_document(event, body, connection):
     admin = _admin_email(event)
     old_key = None
     with connection.cursor() as cur:
+        if journey_id is not None:
+            cur.execute("SELECT 1 FROM journeys WHERE id = %s::uuid", (journey_id,))
+            if not cur.fetchone():
+                return _response(event, 404, {"error": "Journey not found."})
         if replace_id:
             cur.execute(
                 "SELECT s3_key FROM guideline_documents WHERE id = %s::uuid",
@@ -325,20 +334,21 @@ def register_document(event, body, connection):
                 """
                 UPDATE guideline_documents
                    SET file_name = %s, s3_key = %s, uploaded_by = %s,
+                       journey_id = COALESCE(%s::uuid, journey_id),
                        status = 'processing', error = NULL, updated_at = now()
                  WHERE id = %s::uuid
                 RETURNING id::text
                 """,
-                (file_name, s3_key, admin, replace_id),
+                (file_name, s3_key, admin, journey_id, replace_id),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO guideline_documents (file_name, s3_key, uploaded_by, status)
-                VALUES (%s, %s, %s, 'processing')
+                INSERT INTO guideline_documents (file_name, s3_key, uploaded_by, status, journey_id)
+                VALUES (%s, %s, %s, 'processing', %s)
                 RETURNING id::text
                 """,
-                (file_name, s3_key, admin),
+                (file_name, s3_key, admin, journey_id),
             )
         document_id = cur.fetchone()[0]
     connection.commit()
