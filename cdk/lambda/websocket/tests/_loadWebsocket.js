@@ -130,6 +130,13 @@ function load(name, { connections = new Map(), secretError } = {}) {
       DeleteConnectionCommand,
     },
     "@aws-sdk/client-dynamodb": dynamoFake(connections, dynamoCalls),
+    // messageLimit.js requires postgres at load time. Default-route tests never
+    // configure the database, so a call here is a test bug.
+    postgres: () => {
+      const sql = () => Promise.reject(new Error("unexpected database call"));
+      sql.end = async () => {};
+      return sql;
+    },
   };
 
   const dir = path.resolve(__dirname, "..");

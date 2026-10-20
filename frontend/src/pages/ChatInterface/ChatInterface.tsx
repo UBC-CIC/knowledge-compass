@@ -36,7 +36,9 @@ type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
 };
 
-const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 50000;
+// Same missed-load default as textGeneration/helpers/config.py. A failed
+// fetch must not leave the composer more permissive than the server.
+const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
 
 // Legacy (pre-Inclusion Canada) auto-sent opener. No longer sent; kept verbatim
 // only so older chat histories that start with it hide that first message.

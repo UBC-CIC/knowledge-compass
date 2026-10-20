@@ -2,8 +2,10 @@
  * Assistant settings (GET/PUT /admin/system-settings) in plain language.
  *
  * RECOMMENDED matches the runtime fallbacks in
- * cdk/lambda/textGeneration/helpers/config.py and the GET fallback in
- * cdk/lambda/handlers/adminHandler.js. Keep the three in sync.
+ * cdk/lambda/textGeneration/helpers/config.py, the GET fallback in
+ * cdk/lambda/handlers/adminHandler.js, and the missed-load default for
+ * max_characters_per_user_message on the public read route, the WebSocket
+ * frame cap, and the chat composer. Keep them in sync.
  */
 
 export type RoutingMode = "fixed" | "dynamic";

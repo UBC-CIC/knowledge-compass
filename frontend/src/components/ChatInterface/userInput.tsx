@@ -24,7 +24,7 @@ export function AiChatInput({
   disabled = false,
   className,
   onSend,
-  maxLength = 50000,
+  maxLength = 2000,
 }: AiChatInputProps) {
   const editableRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);

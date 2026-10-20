@@ -162,6 +162,38 @@ class MainDailyLimitTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 400)
         self.reserve.assert_not_called()
 
+    def _with_loaded_cap(self, cap):
+        """load_config applies `cap` the way a DB read would, before the check."""
+        original = main.config.MAX_CHARACTERS_PER_USER_MESSAGE
+
+        def load(_conn):
+            main.config.MAX_CHARACTERS_PER_USER_MESSAGE = cap
+
+        self.addCleanup(setattr, main.config, "MAX_CHARACTERS_PER_USER_MESSAGE", original)
+        return mock.patch.object(main.config, "load_config", side_effect=load)
+
+    def test_length_check_uses_the_cap_loaded_for_this_request(self):
+        # Cold container: the module global is still the hard-coded 2000 until
+        # load_config returns. A lower administrator cap must bind this request.
+        main.config.MAX_CHARACTERS_PER_USER_MESSAGE = 2000
+        with self._with_loaded_cap(100):
+            result = main.handler(make_event("x" * 150))
+
+        self.assertEqual(result["statusCode"], 400)
+        self.assertIn("100", json.loads(result["body"])["error"])
+        self.reserve.assert_not_called()
+        self.get_response.assert_not_called()
+
+    def test_raised_cap_accepts_a_message_over_the_hardcoded_default(self):
+        main.config.MAX_CHARACTERS_PER_USER_MESSAGE = 2000
+        query = "x" * 3000
+        with self._with_loaded_cap(4000):
+            result = main.handler(make_event(query))
+
+        self.assertEqual(result["statusCode"], 200)
+        self.get_response.assert_called_once()
+        self.assertEqual(self.get_response.call_args.kwargs["query"], query)
+
     def test_global_budget_spent_sends_busy_error_and_skips_generation(self):
         self.reserve.return_value = (False, {**USAGE, "reason": main.GLOBAL_LIMIT_REASON})
         result = main.handler(make_event())

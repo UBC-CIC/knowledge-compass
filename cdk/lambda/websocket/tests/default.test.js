@@ -162,6 +162,30 @@ test("a secret fetch failure during frame verification is 500 with a generic eve
   assert.equal(deletes.length, 0);
 });
 
+test("a query is truncated to the configured cap, including one above the old 10000 cutoff", async () => {
+  const loaded = loadDefault(bound());
+  const messageLimit = require("../messageLimit.js");
+  messageLimit.getMaxCharactersPerUserMessage = async () => 12000;
+  const res = await quietly(() => loaded.handler(generate({ query: "y".repeat(11000) })));
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(JSON.parse(loaded.invocations[0].Payload).body);
+  assert.equal(body.query.length, 11000);
+
+  const capped = loadDefault(bound());
+  require("../messageLimit.js").getMaxCharactersPerUserMessage = async () => 12;
+  await quietly(() => capped.handler(generate({ query: "z".repeat(40) })));
+  const short = JSON.parse(JSON.parse(capped.invocations[0].Payload).body);
+  assert.equal(short.query, "z".repeat(12));
+});
+
+test("without a loaded cap the query is cut at 2000, not 10000", async () => {
+  const { handler, invocations } = loadDefault(bound());
+  const res = await quietly(() => handler(generate({ query: "x".repeat(2500) })));
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(JSON.parse(invocations[0].Payload).body);
+  assert.equal(body.query.length, 2000);
+});
+
 test("only the error event type is emitted", async () => {
   const { handler, posts } = loadDefault(bound());
   await quietly(() => handler(generate({ token: undefined })));

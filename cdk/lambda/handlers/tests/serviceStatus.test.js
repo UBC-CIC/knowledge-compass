@@ -228,6 +228,22 @@ test("the public read falls back to normal with no row, an unknown value, or a n
   assert.deepEqual(normal.body, { service_status: "normal", service_message: null });
 });
 
+test("the public character cap returns the stored value, or 2000 when the row is missing", async () => {
+  const getCap = (sql) =>
+    invoke("systemMessagesHandler", sql, {
+      httpMethod: "GET",
+      resource: "/system-settings/max-characters-per-user-message",
+    });
+
+  const stored = await getCap(fakeSql(() => [{ max_characters_per_user_message: 750 }]));
+  assert.equal(stored.statusCode, 200);
+  assert.deepEqual(stored.body, { max_characters_per_user_message: 750 });
+
+  const missing = await getCap(fakeSql(() => []));
+  assert.equal(missing.statusCode, 200);
+  assert.deepEqual(missing.body, { max_characters_per_user_message: 2000 });
+});
+
 test("read_only is returned as-is", async () => {
   const res = await getPublic(fakeSql(() => [{ service_status: "read_only", service_message: "Chat is paused." }]));
   assert.deepEqual(res.body, { service_status: "read_only", service_message: "Chat is paused." });

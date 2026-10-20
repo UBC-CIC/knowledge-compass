@@ -148,16 +148,10 @@ def handler(event, context=None):
         return fail(status_code, error, "Your session has expired. Please refresh the page and try again.")
 
     # Presence/type check must come before the length check (len(None) raises).
+    # The length check itself runs only after config.load_config, below: on a
+    # cold container the module global is still the hard-coded fallback.
     if not isinstance(query, str) or not query.strip() or not chat_session_id:
         return fail(400, 'Missing query or chat_session_id')
-
-    # Perform Query Length Validation
-    if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
-        return fail(
-            400,
-            f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters',
-            f'Your message is too long. Please keep it under {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters.',
-        )
 
     # Sanitize session ID before querying DB
     try:
@@ -194,8 +188,18 @@ def handler(event, context=None):
                 service['message'] or READ_ONLY_DEFAULT_MESSAGE,
             )
 
-        # Load dynamic configuration from DB
+        # Load dynamic configuration from DB before the per-message cap.
+        # MAX_CHARACTERS_PER_USER_MESSAGE stays at the hard-coded fallback until
+        # this runs, and load_config refreshes it when the TTL has elapsed, so
+        # the check has to read the global afterwards.
         config.load_config(conn)
+
+        if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
+            return fail(
+                400,
+                f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters',
+                f'Your message is too long. Please keep it under {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters.',
+            )
 
         # One in-flight generation per user. Claimed before the daily
         # reservation so a rejected parallel message is not counted. The Lambda

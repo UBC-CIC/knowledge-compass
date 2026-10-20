@@ -2298,7 +2298,10 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
-    // Default route Lambda for handling messages
+    // Default route Lambda for handling messages.
+    // Private subnets (the database security group already admits them) so each
+    // frame can be truncated to system_settings.max_characters_per_user_message
+    // (websocket/messageLimit.js) instead of a hard-coded length.
     const defaultFunction = new lambda.Function(this, `${id}-DefaultFunction`, {
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: "default.handler",
@@ -2307,16 +2310,20 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 256,
       reservedConcurrentExecutions: reservedConcurrency(50),
       tracing: lambda.Tracing.ACTIVE,
+      vpc: vpcStack.vpc,
       environment: {
         TEXT_GEN_FUNCTION_NAME: lambdaTextGen.functionName,
         // Each generate_text message's access token is verified here.
         JWT_SECRET: jwtSecret.secretArn,
         JWT_ISSUER: jwtIssuer,
+        SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+        RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
       },
-      layers: [jwt],
+      layers: [jwt, postgres],
       functionName: `${id}-DefaultFunction`,
     });
     jwtSecret.grantRead(defaultFunction);
+    db.secretPathUser.grantRead(defaultFunction);
 
     new cloudwatch.Alarm(this, 'DefaultFunctionConcurrencyAlarm', {
       metric: defaultFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),

@@ -1065,8 +1065,10 @@ exports.handler = async (event) => {
           LEFT JOIN users u ON u.id = latest.updated_by
         `;
 
-        // But keep a safe fallback to avoid crashing UI. Keep in sync with
-        // textGeneration/helpers/config.py and frontend lib/assistantSettings.ts.
+        // Safe fallback when the table has no row. max_characters_per_user_message
+        // is 2000, the same missed-load default as textGeneration/helpers/config.py,
+        // the public GET route, and websocket/messageLimit.js. The 1..200000 write
+        // check below is the range an administrator may save, not a fallback.
         const fallback = {
           max_messages_per_day: 45,
           min_messages_before_suggest: 4,
@@ -1297,6 +1299,9 @@ exports.handler = async (event) => {
           break;
         }
 
+        // 1..200000 is the range an administrator may save. A missing value
+        // stays 2000 (config.py, the admin GET fallback, and the public read),
+        // not this upper bound.
         if (
           patch.max_characters_per_user_message !== undefined &&
           (!isFiniteInt(patch.max_characters_per_user_message) ||

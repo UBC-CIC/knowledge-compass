@@ -8,6 +8,8 @@
  * must be valid and name the bound user, so freshness and revocation still
  * apply per frame. Text generation receives only the bound user id; a
  * frame-supplied user_id is checked against it and never forwarded.
+ * generate_text queries are truncated to system_settings.max_characters_per_user_message
+ * (messageLimit.js), which falls back to 2000 when that read misses.
  */
 
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
@@ -18,6 +20,7 @@ const {
 } = require("@aws-sdk/client-apigatewaymanagementapi");
 const { verifyAccessToken } = require("./accessToken.js");
 const { getConnectionUserId } = require("./connections.js");
+const messageLimit = require("./messageLimit.js");
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,7 +30,7 @@ const validateUUID = (value, fieldName = "id") => {
   return { valid: true };
 };
 
-const sanitizeString = (value, maxLength = 10000) => {
+const sanitizeString = (value, maxLength = messageLimit.DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE) => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed.slice(0, maxLength);
@@ -111,9 +114,7 @@ exports.handler = async (event) => {
     const { action, query, chat_session_id, user_id, token } = body;
 
     if (action === "generate_text") {
-      // Validate inputs before invoking text generation Lambda
-      const sanitizedQuery = sanitizeString(query, 10000);
-      if (!sanitizedQuery) {
+      if (typeof query !== "string" || query.trim().length === 0) {
         return { statusCode: 400, body: JSON.stringify({ error: "query is required and must be a non-empty string" }) };
       }
 
@@ -138,6 +139,15 @@ exports.handler = async (event) => {
         console.warn("WebSocket frame rejected: user_id differs from connection", { connectionId });
         await sendErrorEvent(event, "user_id does not match the session token", SESSION_EXPIRED_MESSAGE);
         return { statusCode: 403, body: JSON.stringify({ error: "user_id does not match the session token" }) };
+      }
+
+      // Truncate to the administrator's per-message cap (system_settings), not a
+      // hard-coded length. Read it only after the frame is authenticated. A
+      // missed read uses the conservative default.
+      const maxCharacters = await messageLimit.getMaxCharactersPerUserMessage();
+      const sanitizedQuery = sanitizeString(query, maxCharacters);
+      if (!sanitizedQuery) {
+        return { statusCode: 400, body: JSON.stringify({ error: "query is required and must be a non-empty string" }) };
       }
 
       // Invoke the text generation Lambda function. The bound user goes in

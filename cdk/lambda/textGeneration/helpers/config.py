@@ -42,6 +42,10 @@ ROUTING_MODE = "fixed"                    # "fixed" (exchange count only) | "dyn
 # "guideline" = answer only from uploaded guideline documents.
 PROMPT_MODE = "standard"
 GUIDELINE_OUTLINE = []                    # [{document_id, file_name, section_key, label}]
+# Missed-load default for the per-message cap. A container that has not read
+# system_settings yet must not allow more than this. Keep in sync with the
+# public GET fallback (systemMessagesHandler.js), the admin GET fallback
+# (adminHandler.js), websocket/messageLimit.js, and the chat UI default.
 MAX_CHARACTERS_PER_USER_MESSAGE = 2000
 MAX_CHARACTERS_PER_DAY = 10000            # characters one user can send per UTC day (migration 034)
 MAX_MESSAGES_PER_DAY_GLOBAL = 5000        # messages all public users together can send per UTC day (migration 036)

@@ -78,6 +78,21 @@ describe("recommended values stay in sync with the backend", () => {
     expect(py).toMatch(new RegExp(`^ROUTING_MODE = "${RECOMMENDED.routing_mode}"`, "m"));
   });
 
+  it("uses 2000 as the missed-load cap everywhere a request can miss the database", () => {
+    const cap = RECOMMENDED.max_characters_per_user_message;
+    const read = (rel: string) => readFileSync(resolve(repo, rel), "utf8");
+    expect(read("cdk/lambda/handlers/systemMessagesHandler.js")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("cdk/lambda/websocket/messageLimit.js")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("frontend/src/pages/ChatInterface/ChatInterface.tsx")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("frontend/src/components/ChatInterface/userInput.tsx")).toContain(`maxLength = ${cap},`);
+  });
+
   it("matches the GET fallback in adminHandler.js", () => {
     const js = readFileSync(resolve(repo, "cdk/lambda/handlers/adminHandler.js"), "utf8");
     const block = js.slice(js.indexOf("const fallback = {"), js.indexOf("};", js.indexOf("const fallback = {")));

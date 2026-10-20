@@ -7,6 +7,11 @@ const {
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
 
+// Missed-load default. Must match textGeneration/helpers/config.py
+// MAX_CHARACTERS_PER_USER_MESSAGE. A missing row must not publish a higher
+// cap than that runtime fallback will enforce.
+const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
+
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
 
@@ -131,7 +136,7 @@ exports.handler = async (event) => {
                 `;
 
                 const fallback = {
-                max_characters_per_user_message: 50000,
+                max_characters_per_user_message: DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE,
                 };
 
                 response.statusCode = 200;
