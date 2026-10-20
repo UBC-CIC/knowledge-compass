@@ -1080,9 +1080,9 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  # Guideline mode (migration 031; lambda/knowledgeBase/helpers/guideline_admin.py).
-  # Runs alongside the standard prompt system; PUT /admin/guideline/mode picks
-  # which one the public chat uses.
+  # Journey documents (migrations 031 and 042; lambda/knowledgeBase/helpers/guideline_admin.py).
+  # Chat always uses the journey path. A document's journey_id attaches it to
+  # that journey. PUT /admin/guideline/mode no longer changes which pipeline runs.
   /admin/guideline:
     <<: *commonOptions
     get:
@@ -1113,6 +1113,7 @@ paths:
                           { type: string, enum: [processing, ready, failed] }
                         error: { type: string, nullable: true }
                         section_count: { type: integer }
+                        journey_id: { type: string, format: uuid, nullable: true }
                         sections:
                           type: array
                           items:
@@ -1196,6 +1197,7 @@ paths:
                 s3_key: { type: string }
                 file_name: { type: string }
                 replace_document_id: { type: string, format: uuid }
+                journey_id: { type: string, format: uuid }
       responses:
         "202":
           description: Guide accepted; status is processing
