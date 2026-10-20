@@ -5,13 +5,15 @@ app can call.
 The catalog is the three providers in helpers/embeddings.py. Whether a model
 can be called, and the id or inference-profile ARN to send, comes from the
 Bedrock control plane in this region (`list_foundation_models` and
-`list_inference_profiles`). A model Bedrock does not list is not offered as
-callable. Unknown embedding models are left out: each provider needs that
-adapter's request shape.
+`list_inference_profiles`). A model is callable when it is on demand here or
+an active inference profile wraps it. Unknown embedding models are left out:
+each provider needs that adapter's request shape.
 
 `model_id` is the foundation-model id (the weekly lifecycle check looks it up).
 `invoke_target` is that id when the model supports on-demand inference here,
-otherwise the ARN of an active inference profile that wraps it.
+otherwise the ARN of an active inference profile that wraps it. A profile is
+enough on its own: some models are callable from this region only that way,
+and are absent from the regional foundation-model list.
 """
 
 import logging
@@ -126,6 +128,15 @@ def _profile_target(profile: Dict[str, Any]) -> str:
     return (profile.get("inferenceProfileArn") or profile.get("inferenceProfileId") or "").strip()
 
 
+def _matched_known_id(profile: Dict[str, Any], known_ids: Sequence[str]) -> Optional[str]:
+    for model_id in _profile_model_ids(profile):
+        bare = strip_geo_prefix(model_id)
+        for known_id in known_ids:
+            if model_id == known_id or bare == known_id:
+                return known_id
+    return None
+
+
 def _matching_profiles(
     profiles: Iterable[Dict[str, Any]], known_ids: Sequence[str], region: str
 ) -> List[Dict[str, Any]]:
@@ -164,8 +175,9 @@ def match_models(
 ) -> List[Dict[str, Any]]:
     """
     One entry per catalog provider, in catalog order. A provider is available
-    only when Bedrock lists a matching foundation model that is on-demand here
-    or wrapped by an active inference profile.
+    when Bedrock lists a matching foundation model that is on-demand here, or
+    an active inference profile that wraps it. The profile alone is enough:
+    the foundation model is often missing from this region's model list.
     """
     summaries = [m for m in foundation_models if isinstance(m, dict) and m.get("modelId")]
     profiles = list(inference_profiles)
@@ -195,6 +207,15 @@ def match_models(
                 entry["cross_region"] = _profile_cross_region(profile, region)
                 entry["unavailable_reason"] = None
                 break
+        if not entry["available"]:
+            wrapped = _matching_profiles(profiles, known_ids, region)
+            if wrapped:
+                profile = wrapped[0]
+                entry["available"] = True
+                entry["model_id"] = _matched_known_id(profile, known_ids) or known_ids[0]
+                entry["invoke_target"] = _profile_target(profile)
+                entry["cross_region"] = _profile_cross_region(profile, region)
+                entry["unavailable_reason"] = None
         if saw_model and not entry["available"]:
             entry["unavailable_reason"] = NOT_CALLABLE
         results.append(entry)
@@ -238,7 +259,17 @@ def _inference_profiles(client) -> List[Dict[str, Any]]:
 
 
 def list_embedding_models(client=None, region: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Catalog entries filled from the Bedrock control plane. Raises if Bedrock cannot be called."""
+    """
+    Catalog entries filled from the Bedrock control plane. Raises if the
+    foundation-model list cannot be read. A failed inference-profile list
+    does not hide models that are on demand in this region.
+    """
     region = region or deployment_region()
     client = client or _bedrock_client(region)
-    return match_models(_foundation_models(client), _inference_profiles(client), region)
+    foundation = _foundation_models(client)
+    try:
+        profiles = _inference_profiles(client)
+    except Exception as error:  # noqa: BLE001 - the message must not include the Bedrock error text
+        logger.error("Inference profile lookup failed: %s", type(error).__name__)
+        profiles = []
+    return match_models(foundation, profiles, region)

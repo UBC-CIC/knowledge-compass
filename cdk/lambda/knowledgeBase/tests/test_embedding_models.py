@@ -92,6 +92,21 @@ class MatchModelsTest(unittest.TestCase):
         self.assertEqual(entries["titan_v2"]["invoke_target"], f"us.{TITAN}")
         self.assertTrue(entries["titan_v2"]["cross_region"])
 
+    def test_a_profile_is_enough_when_the_foundation_model_is_not_listed(self):
+        arn = f"arn:aws:bedrock:{REGION}:111122223333:inference-profile/us.{COHERE_V4}"
+        entries = by_provider(em.match_models(
+            [],
+            [profile(COHERE_V4, arn=arn, profile_id=f"us.{COHERE_V4}", model_region="us-east-1")],
+            REGION,
+        ))
+        chosen = entries["cohere_v4"]
+        self.assertTrue(chosen["available"])
+        self.assertEqual(chosen["model_id"], COHERE_V4)
+        self.assertEqual(chosen["invoke_target"], arn)
+        self.assertTrue(chosen["cross_region"])
+        self.assertIsNone(chosen["unavailable_reason"])
+        self.assertFalse(entries["titan_v2"]["available"])
+
     def test_an_unlisted_model_is_unavailable(self):
         entries = by_provider(em.match_models([foundation(COHERE)], [], REGION))
         titan = entries["titan_v2"]
@@ -169,4 +184,19 @@ class ListEmbeddingModelsTest(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], ["models", "profiles", "profiles"])
         self.assertEqual(calls[2][1], {"nextToken": "page-2"})
         self.assertTrue(entries["titan_v2"]["available"])
-        self.assertFalse(entries["cohere_v3"]["available"])
+        # The Cohere profile arrives on the second page and is enough on its own.
+        self.assertTrue(entries["cohere_v3"]["available"])
+        self.assertEqual(entries["cohere_v3"]["model_id"], COHERE)
+
+    def test_a_failed_profile_list_still_returns_on_demand_models(self):
+        class Client:
+            def list_foundation_models(self, **kwargs):
+                return {"modelSummaries": [foundation(COHERE)]}
+
+            def list_inference_profiles(self, **kwargs):
+                raise RuntimeError("access denied")
+
+        entries = by_provider(em.list_embedding_models(client=Client(), region=REGION))
+        self.assertTrue(entries["cohere_v3"]["available"])
+        self.assertEqual(entries["cohere_v3"]["invoke_target"], COHERE)
+        self.assertFalse(entries["titan_v2"]["available"])
