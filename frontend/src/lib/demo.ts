@@ -360,7 +360,7 @@ export const DEMO_RECENT_FEEDBACK = [
   },
 ];
 
-// Starred ignores the date range, so it can include older feedback.
+// Review later ignores the date range, so it can include older feedback.
 export const DEMO_STARRED_FEEDBACK = [
   { ...DEMO_RECENT_FEEDBACK[1], starred: true },
   {
@@ -493,6 +493,39 @@ export const DEMO_ADMIN_MESSAGES: Record<
       content:
         "I'm sorry you're dealing with this. Has this been happening since the start of the school year?",
       created_at: "2026-09-02T14:01:20.000Z",
+    },
+  ],
+  "demo-feedback-2": [
+    {
+      id: "m5",
+      chat_session_id: "demo-feedback-2",
+      sender: "user",
+      content: "What are my options if the school is in another province?",
+      created_at: "2026-09-12T18:00:00.000Z",
+    },
+    {
+      id: "m6",
+      chat_session_id: "demo-feedback-2",
+      sender: "AI",
+      content: "Rules differ by province. Tell me which province the school is in.",
+      created_at: "2026-09-12T18:00:20.000Z",
+    },
+  ],
+  "demo-feedback-4": [
+    {
+      id: "m7",
+      chat_session_id: "demo-feedback-4",
+      sender: "user",
+      content: "Can you give me a checklist for an IEP meeting?",
+      created_at: "2026-06-02T16:00:00.000Z",
+    },
+    {
+      id: "m8",
+      chat_session_id: "demo-feedback-4",
+      sender: "AI",
+      content:
+        "Yes. Families often ask what support is in place, who is responsible, and when it will be reviewed.",
+      created_at: "2026-06-02T16:00:20.000Z",
     },
   ],
   "demo-history-field-trip": [
