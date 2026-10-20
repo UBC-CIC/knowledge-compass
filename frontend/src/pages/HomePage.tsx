@@ -17,8 +17,7 @@ import {
 import { getPublicToken as getUserToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
 
-const DEFAULT_WELCOME_MESSAGE =
-  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_WELCOME_MESSAGE = "";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 

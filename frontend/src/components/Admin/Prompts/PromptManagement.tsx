@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Eye, Lock, Plus, Search } from "lucide-react";
 import { PreviewDrawer } from "@/components/Admin/Prompts/Drawers";
 import { AddJourneyDialog, AddSituationDialog } from "@/components/Admin/Prompts/PromptDialogs";
+import GuidelineMode from "@/components/Admin/Guideline/GuidelineMode";
 import { JourneyPagePane, SharedPagePane, SituationPagePane } from "@/components/Admin/Prompts/PromptPanes";
 import { Alert, SELECTED_BG, Spinner } from "@/components/Admin/Prompts/parts";
 import DeveloperSwitch from "@/components/Admin/DeveloperSwitch";
@@ -21,10 +22,11 @@ import type { FeedbackCount, Journey } from "@/types/journeys";
 
 type Page =
   | { type: "shared"; id: SharedPageId }
+  | { type: "guides" }
   | { type: "journey"; id: string }
   | { type: "situation"; id: string };
 
-const pageKey = (p: Page) => `${p.type}:${p.id}`;
+const pageKey = (p: Page) => (p.type === "guides" ? "guides" : `${p.type}:${p.id}`);
 
 const isKeyConflict = (e: unknown) => e instanceof Error && /already exists/i.test(e.message);
 
@@ -165,13 +167,14 @@ export default function PromptManagement() {
         onDirtyChange={onDirtyChange}
       />
     );
+  } else if (page.type === "guides") {
+    pane = <GuidelineMode key={key} />;
   } else if (currentJourney) {
     pane = (
       <JourneyPagePane
         key={key}
         journey={currentJourney}
         feedback={feedbackByJourney.get(currentJourney.key)}
-        sectionFeedback={(feedback?.sections ?? []).filter((s) => s.journey_key === currentJourney.key)}
         saveVersion={jr.saveVersion}
         activateVersion={jr.activateVersion}
         updateJourney={jr.updateJourney}
@@ -204,8 +207,8 @@ export default function PromptManagement() {
         <div>
           <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">Prompts</h1>
           <p className="mt-1.5 max-w-[720px] text-[15px] leading-relaxed text-foreground/80">
-            Shared pages hold rules for every journey. Anything about a specific journey lives only in that journey.
-            Changes reach new messages within about five minutes.
+            Shared pages hold rules for every journey. Guides hold the files the assistant can answer from. Anything
+            about a specific journey lives only in that journey. Changes reach new messages within about five minutes.
           </p>
           <p className="mt-1 max-w-[720px] text-[13.5px] leading-relaxed text-foreground/70">{STAGE_SUMMARY}</p>
         </div>
@@ -232,6 +235,20 @@ export default function PromptManagement() {
             <ul className="flex flex-col gap-0.5">
               {sharedItem("assistant")}
               {sharedItem("talks")}
+              <li>
+                <button
+                  type="button"
+                  aria-current={page.type === "guides" ? "page" : undefined}
+                  onClick={() => go({ type: "guides" })}
+                  className={itemClass(page.type === "guides")}
+                  style={itemStyle(page.type === "guides")}
+                >
+                  <span className="block text-sm font-semibold leading-snug">Guides</span>
+                  <span className="mt-0.5 block text-[12.5px] leading-snug text-foreground/72">
+                    Uploaded files the assistant can answer from
+                  </span>
+                </button>
+              </li>
             </ul>
           </section>
 

@@ -70,23 +70,25 @@ const WELCOME_STARTERS = [
 ];
 
 const WELCOME_HEADING =
-  "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.";
-const WELCOME_ASK =
-  "Type in information about what's happening. Is there something happening with your child's schooling right now?";
-// Earlier heading/ask wording. Still stripped from the stored welcome message
-// so admin-edited copies that kept it don't render it twice.
+  "Hello, I'm here to help you navigate support that is available to you.";
+const WELCOME_ASK = "Type in information about what's happening.";
+// Longer/older heading, ask, and body wording. Stripped before the current
+// heading/ask so leftover phrases (e.g. "from Inclusion Canada") do not show.
 const LEGACY_WELCOME_CHROME = [
+  "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.",
   "Hi, I'm here to help you navigate your child's education.",
+  "Type in information about what's happening. Is there something happening with your child's schooling right now?",
   "Tell me what's been happening. What's going on with your child's schooling right now?",
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone.",
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.",
 ];
-const DEFAULT_WELCOME_MESSAGE =
-  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_WELCOME_MESSAGE = "";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 
 function welcomeBody(message: string): string {
   let text = message.trim();
-  for (const chrome of [WELCOME_HEADING, WELCOME_ASK, ...LEGACY_WELCOME_CHROME]) {
+  for (const chrome of [...LEGACY_WELCOME_CHROME, WELCOME_HEADING, WELCOME_ASK]) {
     text = text.split(chrome).join("");
   }
   return text.replace(/\n{3,}/g, "\n\n").trim();

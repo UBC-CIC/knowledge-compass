@@ -126,11 +126,11 @@ export const DEFAULT_SYSTEM_MESSAGES: Record<SystemMessageType, SystemMessageVer
   ],
   welcome_message: [
     {
-      id: "seed-welcome_message-v3",
+      id: "seed-welcome_message-v4",
       type: "welcome_message",
-      content: "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.\n\nWhether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone.\n\nType in information about what's happening. Is there something happening with your child's schooling right now?",
+      content: "Hello, I'm here to help you navigate support that is available to you.\n\nType in information about what's happening.",
       character_limit: 2000,
-      version: 3,
+      version: 4,
       is_active: true,
       affects_text_generation: false,
       created_by_email: null,

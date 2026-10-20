@@ -364,14 +364,12 @@ export default function GuidelineMode() {
   const isOn = mode === "guideline";
 
   return (
-    <div className="mx-auto max-w-[1000px] space-y-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-[26px] pt-[22px] pb-[26px]">
       <div>
-        <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">Guideline mode</h1>
-        <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
-          Upload the guides your team already uses to help families. The assistant finds the situations in them, picks
-          the one that fits each family, and follows that part of the guide. It still links families to supporting
-          videos and documents from your knowledge base. There are no prompts to write.
-          Your existing prompts and settings stay as they are, so you can switch back at any time.
+        <h2 className="text-[20px] font-bold tracking-[-0.01em]">Guides</h2>
+        <p className="mt-1.5 max-w-[640px] text-[13.5px] leading-relaxed text-foreground/75">
+          Upload the guides your team already uses. The assistant finds the situation that fits and follows that part
+          of the guide. Your other prompt pages stay as they are, so you can switch back at any time.
         </p>
       </div>
 

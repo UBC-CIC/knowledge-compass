@@ -342,7 +342,7 @@ next_need: understand the school's reason and expected duration
 """.strip()
 
 WELCOME_MESSAGE = """
-Hello, I'm here to help you navigate support that is available to you from Inclusion Canada. Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone. Type in information about what's happening. Is there something happening with your child's schooling right now?
+Hello, I'm here to help you navigate support that is available to you. Type in information about what's happening.
 """.strip()
 
 
