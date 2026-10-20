@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { CalendarRange } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { ChartCard, CustomTooltip } from "@/components/Admin/analyticsCharts";
 import FeedbackSection, {
@@ -124,13 +125,13 @@ export default function Analytics() {
           <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
             Analytics
           </h1>
-          <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+          <p className="mt-2 max-w-[540px] text-[15.5px] leading-relaxed text-foreground/80">
             Volume and feedback over time. Select a comment to review the
             reply it was left on.
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 sm:items-end">
-          <div className="flex rounded-[10px] border border-foreground/14 bg-white p-1 text-[13px] font-semibold">
+        <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+          <div className="flex rounded-[13px] border border-foreground/12 bg-white p-1 text-[13px] font-semibold shadow-sm">
             {(
               [
                 ["last", "Last N days"],
@@ -141,12 +142,13 @@ export default function Analytics() {
                 key={mode}
                 type="button"
                 onClick={() => setRangeMode(mode)}
-                className={`rounded-md px-3 py-1 transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors ${
                   rangeMode === mode
-                    ? "bg-primary text-primary-foreground"
-                    : "text-foreground/70 hover:text-foreground"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-foreground/70 hover:bg-secondary hover:text-foreground"
                 }`}
               >
+                {mode === "between" && <CalendarRange className="size-3.5" />}
                 {label}
               </button>
             ))}
