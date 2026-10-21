@@ -14,8 +14,9 @@
  *
  * Lives under authorization/ because the PostConfirmation Lambda's asset is
  * lambda/authorization; handlers require it via ../../authorization/.
- * knowledgeBase/helpers/admin_user.py mirrors this algorithm and SQL; keep the
- * two in sync.
+ * knowledgeBase/helpers/admin_user.py follows the same find/link rules, but
+ * the ingestion path never writes role 'admin' (finding f-c4d6f814). Keep
+ * the lookup SQL in sync; do not copy elevate=true into that helper.
  *
  * Never logs email addresses, display names or ids.
  */

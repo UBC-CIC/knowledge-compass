@@ -35,7 +35,7 @@ class FakeCursor:
         text = " ".join(sql.split())
         self.conn.executed.append((text, params))
         self._one, self._all, self.rowcount = None, [], 0
-        if text.startswith("SELECT id, email, role FROM users WHERE cognito_sub"):
+        if text.startswith("SELECT id, email FROM users WHERE cognito_sub"):
             self._one = self.conn.by_sub
         elif text.startswith("SELECT id, identity_source, cognito_sub"):
             self._all = list(self.conn.holders)
@@ -73,7 +73,10 @@ class RequestIdentityTests(unittest.TestCase):
     def test_email_comes_from_the_authorizer_only(self):
         event = {"requestContext": {"authorizer": {"email": " Admin@Staff.Example "}}}
         self.assertEqual(admin_user.admin_email_from_request(event, {"created_by": "x@y.z"}), EMAIL)
-        self.assertEqual(admin_user.admin_email_from_request({}, {"created_by": "spoof@example.org"}), "")
+        self.assertIsNone(admin_user.admin_email_from_request({}, {"created_by": "spoof@example.org"}))
+        self.assertIsNone(admin_user.admin_email_from_request(
+            {"requestContext": {"authorizer": {"email": "  "}}}, {"created_by": "spoof@example.org"}
+        ))
 
     def test_sub_comes_from_the_authorizer_user_id(self):
         self.assertEqual(admin_user.admin_sub_from_request({"requestContext": {"authorizer": {"userId": f" {SUB} "}}}), SUB)
@@ -91,16 +94,19 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         self.assertEqual(conn.executed, [])
 
     def test_sub_hit_returns_that_row_without_an_email_lookup(self):
-        conn = FakeConnection(by_sub=(ROW, EMAIL, "admin"))
+        conn = FakeConnection(by_sub=(ROW, EMAIL))
         self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, EMAIL), ROW)
         self.assertFalse(conn.sql_with("INSERT INTO users"))
         self.assertFalse([t for t, _ in conn.executed if "lower(email)" in t])
+        (text, _), = conn.sql_with("UPDATE users SET last_seen_at")
+        self.assertNotIn("role", text)
 
     def test_legacy_cognito_row_is_linked_and_credentials_revoked(self):
         conn = FakeConnection(holders=[(ROW, "cognito", None, False, "admin")])
         self.assertEqual(admin_user.get_or_create_admin_user_id(conn, SUB, "Admin@Staff.Example"), ROW)
         (text, params), = conn.sql_with("UPDATE users SET cognito_sub")
         self.assertIn("credential_version = credential_version + 1", text)
+        self.assertNotIn("role", text)
         self.assertEqual(params, (SUB, ROW))
         self.assertFalse(conn.sql_with("INSERT INTO users"))
         (_, holder_params), = conn.sql_with("SELECT id, identity_source")
@@ -117,6 +123,8 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         self.assertEqual(detach_params, (EMAIL,))
         (insert_text, insert_params), = conn.sql_with("INSERT INTO users")
         self.assertIn("'cognito'", insert_text)
+        self.assertIn("'student'::user_role", insert_text)
+        self.assertNotIn("'admin'", insert_text)
         self.assertEqual(insert_params, (EMAIL, EMAIL, SUB))
         for line in logs.output:
             self.assertNotIn(EMAIL, line)
@@ -142,7 +150,6 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
         cases = [
             (FakeConnection(), "created"),
             (FakeConnection(holders=[(ROW, "cognito", None, False, "admin")]), "linked"),
-            (FakeConnection(by_sub=(ROW, EMAIL, "user")), "elevated"),
         ]
         for conn, outcome in cases:
             with self.subTest(outcome=outcome):
@@ -151,9 +158,15 @@ class GetOrCreateAdminUserIdTests(unittest.TestCase):
                 self.assertNotIn(EMAIL, output)
                 self.assertNotIn(ROW, output)
 
-    def test_existing_admin_row_logs_no_provision_line(self):
-        _, lines, _ = self._provision_lines(FakeConnection(by_sub=(ROW, EMAIL, "admin")))
-        self.assertEqual(lines, [])
+    def test_existing_row_keeps_its_role_and_logs_nothing(self):
+        for role in ("admin", "student"):
+            with self.subTest(role=role):
+                conn = FakeConnection(by_sub=(ROW, EMAIL))
+                _, lines, _ = self._provision_lines(conn)
+                self.assertEqual(lines, [])
+                (text, _), = conn.sql_with("UPDATE users SET last_seen_at")
+                self.assertNotIn("role", text)
+                self.assertNotIn(role, text)
 
     def test_only_the_link_lookup_matches_on_email(self):
         conn = FakeConnection(holders=[(GUEST, "guest", None, False, "student")])

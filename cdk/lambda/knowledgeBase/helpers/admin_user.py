@@ -6,19 +6,23 @@ row is an administrator (finding f-23c5bf7c). Staff rows have
 identity_source = 'cognito' and cognito_sub = the Cognito sub from the admin
 authorizer (requestContext.authorizer.userId); see migration 039.
 
-Mirrors cdk/lambda/authorization/staffIdentity.js (ensureStaffUser with
-role='admin', elevate=True); keep the algorithm and SQL in sync. An email
-match is only used to link a legacy 'cognito' row with role 'admin' that has
-no sub and owns no chat sessions, or to take the verified address away from
-any other row. The email select orders by admin role, then id, so two holders
+The audit email comes only from that authorizer, never from the request body
+(finding f-c4d6f814). This module does not grant role 'admin': a new row is
+created as 'student' and an existing row keeps its role. Elevation is
+POST /admin/promote_user.
+
+Finding and linking follow cdk/lambda/authorization/staffIdentity.js, except
+this path never elevates and never links a non-admin row. An email match is
+only used to link a legacy 'cognito' row with role 'admin' that has no sub
+and owns no chat sessions, or to take the verified address away from any
+other row. The email select orders by admin role, then id, so two holders
 cannot resolve to an arbitrary row. A guest or any other non-admin row is
 never linked or returned. (The JS-only `onWrite` hook, used for the
 promote_user admin_audit insert, has no Python counterpart.)
 
-Never logs email addresses or users ids. A privilege-changing write (admin
-row created, legacy row linked, or a non-admin row elevated) logs one
-structured line with the acting admin's Cognito sub and the outcome only
-(finding f-7f03f151).
+Never logs email addresses or users ids. Creating a row or linking a legacy
+admin row logs one structured line with the acting admin's Cognito sub and
+the outcome only (finding f-7f03f151).
 """
 
 import json
@@ -29,7 +33,7 @@ logger.setLevel(logging.INFO)
 
 
 def _log_provision(actor_sub: str, outcome: str) -> None:
-    """One audit line for an admin-row write: actor sub and outcome, nothing else."""
+    """One audit line for a users-row write: actor sub and outcome, nothing else."""
     logger.info(json.dumps({"audit": "admin_user.provision", "actor_sub": actor_sub, "outcome": outcome}))
 
 
@@ -41,10 +45,13 @@ def _authorizer(event) -> dict:
     return ((event or {}).get("requestContext") or {}).get("authorizer") or {}
 
 
-def admin_email_from_request(event, body=None) -> str:
-    """The Cognito email from the admin authorizer. `body` is ignored (kept
-    for call compatibility): a request body must never pick the identity."""
-    return normalize_email(_authorizer(event).get("email"))
+def admin_email_from_request(event, body=None) -> str | None:
+    """The Cognito email from the admin authorizer, or None when it is absent.
+
+    `body` is ignored (kept for call compatibility). A request body must never
+    pick the audit identity (finding f-c4d6f814).
+    """
+    return normalize_email(_authorizer(event).get("email")) or None
 
 
 def admin_sub_from_request(event) -> str | None:
@@ -70,10 +77,12 @@ def _detach_email(cursor, email: str, keep_id: str | None) -> None:
 
 def get_or_create_admin_user_id(connection, sub: str | None, email: str | None = None) -> str | None:
     """
-    Return the users.id of the admin with this Cognito sub: the row already
-    linked to the sub, else the admin's legacy row (linked now), else a new
-    'cognito' row. The row is set to role 'admin' (the admin authorizer has
-    proved Cognito admin-group membership). The caller commits.
+    Return the users.id for this Cognito sub: the row already linked to the
+    sub, else the admin's legacy row (linked now), else a new 'cognito' row.
+
+    Does not grant role 'admin'. An existing row keeps its role; a new row is
+    'student'. Elevation is POST /admin/promote_user (finding f-c4d6f814).
+    The caller commits.
     """
     cognito_sub = sub.strip() if isinstance(sub, str) else ""
     if not cognito_sub:
@@ -88,7 +97,7 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
         )
 
         cursor.execute(
-            "SELECT id, email, role FROM users WHERE cognito_sub = %s FOR UPDATE",
+            "SELECT id, email FROM users WHERE cognito_sub = %s FOR UPDATE",
             (cognito_sub,),
         )
         row = cursor.fetchone()
@@ -98,18 +107,18 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
             if normalized and row[1] != normalized:
                 _detach_email(cursor, normalized, user_id)
                 next_email = normalized
+            # Role is left as it is. Cognito admin-group membership is not a
+            # users.role grant (finding f-c4d6f814).
             cursor.execute(
                 """
                 UPDATE users
-                SET last_seen_at = now(), role = 'admin'::user_role, email = %s
+                SET last_seen_at = now(), email = %s
                 WHERE id = %s::uuid
                 RETURNING id
                 """,
                 (next_email, user_id),
             )
             updated = cursor.fetchone()
-            if row[2] != "admin":
-                _log_provision(cognito_sub, "elevated")
             return str(updated[0]) if updated else user_id
 
         if normalized:
@@ -148,7 +157,6 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
                     UPDATE users
                     SET cognito_sub = %s,
                         last_seen_at = now(),
-                        role = 'admin'::user_role,
                         credential_version = credential_version + 1,
                         credential_rotated_at = NULL
                     WHERE id = %s::uuid
@@ -167,7 +175,7 @@ def get_or_create_admin_user_id(connection, sub: str | None, email: str | None =
             INSERT INTO users (
                 id, email, display_name, role, identity_source, cognito_sub, created_at, last_seen_at
             )
-            VALUES (uuid_generate_v4(), %s, %s, 'admin'::user_role, 'cognito', %s, now(), now())
+            VALUES (uuid_generate_v4(), %s, %s, 'student'::user_role, 'cognito', %s, now(), now())
             RETURNING id
             """,
             (normalized, normalized, cognito_sub),

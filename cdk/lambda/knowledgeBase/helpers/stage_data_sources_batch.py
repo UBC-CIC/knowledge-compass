@@ -31,9 +31,11 @@ def stage_data_sources_batch(event, body, connection):
     ("replaced"), a byte-identical re-upload is dropped ("unchanged"), and a
     source that is mid-ingestion is left alone ("skipped").
 
+    The acting admin is the authorizer email. A created_by field in the body
+    is ignored.
+
     Request body:
     {
-      "created_by": "admin@example.com",
       "items": [
         {
           "type": "csv" | "markdown",
@@ -52,13 +54,14 @@ def stage_data_sources_batch(event, body, connection):
     if locked:
         return locked
 
-    # Admin identity is the Cognito sub, never an email (see admin_user.py).
-    created_by = admin_email_from_request(event, body)
+    # Audit identity is the authorizer only. A missing email is 401, and the
+    # body is never consulted (finding f-c4d6f814).
+    created_by = admin_email_from_request(event)
     admin_sub = admin_sub_from_request(event)
-    items = body.get("items")
-
-    if not admin_sub:
+    if not admin_sub or not created_by:
         return _response(event, 401, {"error": "Unauthorized"})
+
+    items = body.get("items")
 
     if not isinstance(items, list) or len(items) == 0:
         return _response(event, 400, {"error": "items must be a non-empty array"})

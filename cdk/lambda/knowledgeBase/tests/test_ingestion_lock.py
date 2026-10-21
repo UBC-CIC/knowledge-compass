@@ -110,7 +110,7 @@ EVENT = {"headers": {}, "requestContext": {}}
 
 ENTRY_POINTS = {
     # Each call, with an empty request, stops at its own validation once the lock check passes:
-    # 400 for bad input, or 401 because the empty request has no authorizer sub (admin_user.py).
+    # 401 because the empty request has no authorizer sub or email (admin_user.py).
     "start_ingestion_job": lambda conn: start.start_ingestion_job(EVENT, {}, conn),
     "stage_data_sources": lambda conn: stage.stage_data_sources(EVENT, {}, conn),
     "stage_data_sources_batch": lambda conn: batch.stage_data_sources_batch(EVENT, {}, conn),
@@ -146,6 +146,30 @@ class EntryPointTest(unittest.TestCase):
                 conn = conn_with(UNLOCKED)
                 conn.fail_next(LOCK_SQL, PgError("42P01"))
                 self.assertIn(call(conn)["statusCode"], (400, 401))
+
+    def test_authorizer_without_email_is_401_and_ignores_body_created_by(self):
+        event = {
+            "headers": {},
+            "requestContext": {"authorizer": {"userId": "admin-sub"}},
+        }
+        body = {"created_by": "spoof@example.org", "type": "website", "items": [{"type": "csv"}]}
+        calls = {
+            "start_ingestion_job": lambda conn: start.start_ingestion_job(event, body, conn),
+            "stage_data_sources": lambda conn: stage.stage_data_sources(event, body, conn),
+            "stage_data_sources_batch": lambda conn: batch.stage_data_sources_batch(event, body, conn),
+            "retry_ingestion_run": lambda conn: retry.retry_ingestion_run(
+                event, body, conn, "44444444-4444-4444-8444-444444444444"
+            ),
+        }
+        for name, call in calls.items():
+            with self.subTest(entry_point=name):
+                conn = conn_with(UNLOCKED)
+                response = call(conn)
+                self.assertEqual(response["statusCode"], 401)
+                self.assertEqual(json.loads(response["body"]), {"error": "Unauthorized"})
+                self.assertEqual(len(conn.executed), 1)
+                self.assertIn(LOCK_SQL, conn.executed[0][0])
+                self.assertEqual(conn.commits, 0)
 
 
 if __name__ == "__main__":

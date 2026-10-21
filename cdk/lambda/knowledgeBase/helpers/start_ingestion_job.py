@@ -90,10 +90,11 @@ def start_ingestion_job(event, body, connection):
     if locked:
         return locked
 
-    # Admin identity is the Cognito sub, never an email (see admin_user.py).
-    created_by = admin_email_from_request(event, body)
+    # Audit identity is the authorizer only. A missing email is 401, and the
+    # body is never consulted (finding f-c4d6f814).
+    created_by = admin_email_from_request(event)
     admin_sub = admin_sub_from_request(event)
-    if not admin_sub:
+    if not admin_sub or not created_by:
         return _response(event, 401, {"error": "Unauthorized"})
 
     created_by_user_id = get_or_create_admin_user_id(connection, admin_sub, created_by)
