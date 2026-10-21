@@ -1187,13 +1187,6 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Redundant secrets manager access block removed
 
-    coglambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["ssm:GetParameter"],
-        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/*`],
-      })
-    );
-
     // Attach roles to the identity pool
     new cognito.CfnIdentityPoolRoleAttachment(this, `${id}-IdentityPoolRoles`, {
       identityPoolId: this.identityPool.ref,
@@ -1374,6 +1367,13 @@ export class ApiGatewayStack extends cdk.Stack {
       memorySize: 128,
       role: coglambdaRole,
     });
+
+    // preSignUp.js reads only this parameter (SecureString under aws/ssm).
+    coglambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${allowedEmailDomainsParamName}`],
+    }));
 
     preSignupLambda.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
     preSignupLambda.addToRolePolicy(new iam.PolicyStatement({

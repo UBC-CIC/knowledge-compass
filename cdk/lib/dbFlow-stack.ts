@@ -26,13 +26,22 @@ export class DBFlowStack extends Stack {
     lambdaRole.addToPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: [
-          // Secrets Manager
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-        ],
+        actions: ["secretsmanager:GetSecretValue"],
         resources: [
         `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${db.secretPathAdminName}-*`,
+        db.secretPathUser.secretArn,
+        db.secretPathTableCreator.secretArn,
+        ]
+      })
+    );
+
+    // db_setup/index.js writes only the rotated app-user and table-creator
+    // credentials; the admin secret is read, never written.
+    lambdaRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:PutSecretValue"],
+        resources: [
         db.secretPathUser.secretArn,
         db.secretPathTableCreator.secretArn,
         ]
@@ -62,11 +71,6 @@ export class DBFlowStack extends Stack {
         ],
         resources: ["*"],
       })
-    );
-
-    // Add additional managed policies
-    lambdaRole.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMReadOnlyAccess")
     );
 
     // Create a Lambda layer for node-pg-migrate
