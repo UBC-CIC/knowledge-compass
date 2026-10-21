@@ -46,14 +46,24 @@ function accessToken(claims = {}, secret = SECRET) {
   return `signed:${Buffer.from(JSON.stringify({ payload, secret })).toString("base64url")}`;
 }
 
+const conditionFailed = () =>
+  Object.assign(new Error("conditional check failed"), { name: "ConditionalCheckFailedException" });
+
+// The three rate-limit UpdateItem shapes in connections.js consumeGenerateAllowance.
+const RL_INCREMENT = "attribute_exists(connectionId) AND rlWindow = :w AND rlCount < :max";
+const RL_START = "attribute_exists(connectionId) AND (attribute_not_exists(rlWindow) OR rlWindow < :w)";
+
 /**
  * Fake @aws-sdk/client-dynamodb. `connections` is a Map<connectionId, userId>
- * (read, written and deleted) or an Error that every send throws. Every
- * command input is pushed to `calls` as { name, input }.
+ * (read, written and deleted) or an Error that every send throws. `rateState`
+ * is a Map<connectionId, { rlWindow, rlCount }> the UpdateItem fake evaluates;
+ * `updateError` is thrown by UpdateItem only. Every command input is pushed to
+ * `calls` as { name, input }.
  */
-function dynamoFake(connections, calls = []) {
+function dynamoFake(connections, calls = [], { rateState = new Map(), updateError } = {}) {
   class GetItemCommand extends FakeCommand {}
   class PutItemCommand extends FakeCommand {}
+  class UpdateItemCommand extends FakeCommand {}
   class DeleteItemCommand extends FakeCommand {}
   return {
     DynamoDBClient: class {
@@ -61,6 +71,25 @@ function dynamoFake(connections, calls = []) {
         calls.push({ name: command.constructor.name, input: command.input });
         if (connections instanceof Error) throw connections;
         const id = command.input.Key?.connectionId?.S ?? command.input.Item?.connectionId?.S;
+        if (command instanceof UpdateItemCommand) {
+          if (updateError) throw updateError;
+          if (!connections.has(id)) throw conditionFailed();
+          const values = command.input.ExpressionAttributeValues;
+          const w = Number(values[":w"].N);
+          const state = rateState.get(id);
+          const { ConditionExpression: condition, UpdateExpression: update } = command.input;
+          if (condition === RL_INCREMENT && update === "ADD rlCount :one") {
+            if (!state || state.rlWindow !== w || !(state.rlCount < Number(values[":max"].N))) throw conditionFailed();
+            state.rlCount += 1;
+            return {};
+          }
+          if (condition === RL_START && update === "SET rlWindow = :w, rlCount = :one") {
+            if (state && !(state.rlWindow < w)) throw conditionFailed();
+            rateState.set(id, { rlWindow: w, rlCount: 1 });
+            return {};
+          }
+          throw new Error(`unexpected UpdateItem shape: ${condition}`);
+        }
         if (command instanceof GetItemCommand) {
           return connections.has(id)
             ? { Item: { connectionId: { S: id }, userId: { S: connections.get(id) } } }
@@ -68,7 +97,7 @@ function dynamoFake(connections, calls = []) {
         }
         if (command instanceof PutItemCommand) {
           if (command.input.ConditionExpression === "attribute_not_exists(connectionId)" && connections.has(id)) {
-            throw Object.assign(new Error("conditional check failed"), { name: "ConditionalCheckFailedException" });
+            throw conditionFailed();
           }
           connections.set(id, command.input.Item.userId.S);
           return {};
@@ -82,6 +111,7 @@ function dynamoFake(connections, calls = []) {
     },
     GetItemCommand,
     PutItemCommand,
+    UpdateItemCommand,
     DeleteItemCommand,
   };
 }
@@ -90,9 +120,11 @@ function dynamoFake(connections, calls = []) {
  * Fresh-require websocket/<name>.js. Options:
  *   connections - Map<connectionId, userId> or Error (see dynamoFake)
  *   secretError - Error thrown by Secrets Manager
- * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections }.
+ *   updateError - Error thrown by DynamoDB UpdateItem only
+ * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections, rateState }.
  */
-function load(name, { connections = new Map(), secretError } = {}) {
+function load(name, { connections = new Map(), secretError, updateError } = {}) {
+  const rateState = new Map();
   const invocations = [];
   const posts = [];
   const deletes = [];
@@ -129,7 +161,7 @@ function load(name, { connections = new Map(), secretError } = {}) {
       PostToConnectionCommand,
       DeleteConnectionCommand,
     },
-    "@aws-sdk/client-dynamodb": dynamoFake(connections, dynamoCalls),
+    "@aws-sdk/client-dynamodb": dynamoFake(connections, dynamoCalls, { rateState, updateError }),
     // messageLimit.js requires postgres at load time. Default-route tests never
     // configure the database, so a call here is a test bug.
     postgres: () => {
@@ -150,7 +182,7 @@ function load(name, { connections = new Map(), secretError } = {}) {
   };
   try {
     const mod = require(path.join(dir, `${name}.js`));
-    return { handler: mod.handler, module: mod, invocations, posts, deletes, dynamoCalls, connections };
+    return { handler: mod.handler, module: mod, invocations, posts, deletes, dynamoCalls, connections, rateState };
   } finally {
     Module._load = originalLoad;
   }
