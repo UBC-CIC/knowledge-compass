@@ -1390,6 +1390,10 @@ paths:
           description: Invalid key, file type or size
         "404":
           description: Guide to replace not found
+        "409":
+          description: >-
+            A search-index cutover is in progress (body {"error": "...", "code":
+            "CUTOVER_LOCKED"}). Try again in a few minutes.
         "500":
           description: Internal Server Error
         "502":
@@ -1462,6 +1466,10 @@ paths:
           description: Invalid id or label
         "404":
           description: Situation not found
+        "409":
+          description: >-
+            A search-index cutover is in progress (body {"error": "...", "code":
+            "CUTOVER_LOCKED"}). The label is not saved; try again in a few minutes.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

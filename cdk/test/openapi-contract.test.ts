@@ -176,6 +176,8 @@ describe("OpenAPI definition", () => {
       ["/admin/data_sources/sync", "post"],
       ["/admin/data_sources/batch", "post"],
       ["/admin/data_sources/{id}/retry", "post"],
+      ["/admin/guideline/documents", "post"],
+      ["/admin/guideline/sections/{id}", "patch"],
     ];
     const missing = ops.filter(([p, m]) => {
       const op = spec.paths[p]?.[m] as { responses?: Record<string, { description?: string }> } | undefined;

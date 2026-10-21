@@ -26,6 +26,7 @@ from helpers.admin_user import normalize_email
 from helpers.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
 from helpers.guideline_extract import file_kind
+from helpers.ingestion_lock import reject_if_locked
 from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
@@ -314,12 +315,20 @@ def register_document(event, body, connection):
         _delete_object_quietly(s3_key)
         return _response(event, 400, {"error": "This file is empty. Please check it and upload it again."})
 
+    # Held until the commit below: a cutover either answers 409 here or waits for the
+    # 'processing' row, which its wait_idle step then counts.
+    locked = reject_if_locked(event, connection, hold=True)
+    if locked:
+        connection.rollback()
+        return locked
+
     admin = _admin_email(event)
     old_key = None
     with connection.cursor() as cur:
         if journey_id is not None:
             cur.execute("SELECT 1 FROM journeys WHERE id = %s::uuid", (journey_id,))
             if not cur.fetchone():
+                connection.rollback()
                 return _response(event, 404, {"error": "Journey not found."})
         if replace_id:
             cur.execute(
@@ -328,6 +337,7 @@ def register_document(event, body, connection):
             )
             existing = cur.fetchone()
             if not existing:
+                connection.rollback()
                 return _response(event, 404, {"error": "Guide not found."})
             old_key = existing[0]
             cur.execute(
@@ -403,6 +413,11 @@ def rename_section(event, body, connection, section_id):
     label = re.sub(r"\s+", " ", raw or "").strip()
     if len(label) > MAX_LABEL_CHARS:
         return _response(event, 400, {"error": f"Please keep the name under {MAX_LABEL_CHARS} characters."})
+
+    # The rename re-embeds its chunks, so it is ingestion and waits out a cutover.
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
 
     with connection.cursor() as cur:
         cur.execute(

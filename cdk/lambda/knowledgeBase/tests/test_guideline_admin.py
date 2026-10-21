@@ -286,6 +286,56 @@ class RenameSectionTest(AdminTestBase):
         self.lam.invoke.assert_not_called()
 
 
+# cutover_locked, cutover_locked_at, cutover_job_id, expired
+LOCKED_ROW = [(True, None, "job-1", False)]
+
+
+class CutoverLockTest(AdminTestBase):
+    """Uploads and renames embed, so they wait out a search-index cutover (409)."""
+
+    def assert_locked(self, response, conn, write_fragment):
+        self.assertEqual(response["statusCode"], 409)
+        self.assertEqual(_body(response)["code"], "CUTOVER_LOCKED")
+        self.assertFalse(conn.sql_with(write_fragment))
+        self.assertEqual(conn.commits, 0)
+        self.lam.invoke.assert_not_called()
+
+    def test_register_document_is_rejected_and_releases_the_row(self):
+        conn = FakeConnection({"FROM embedding_active_space": LOCKED_ROW,
+                               "INSERT INTO guideline_documents": [(DOC_ID,)]})
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md"}, conn)
+        self.assert_locked(response, conn, "INSERT INTO guideline_documents")
+        self.assertGreaterEqual(conn.rollbacks, 1)
+
+    def test_register_document_holds_the_pointer_row_until_its_commit(self):
+        conn = FakeConnection({"INSERT INTO guideline_documents": [(DOC_ID,)]})
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md"}, conn)
+        self.assertEqual(response["statusCode"], 202)
+        check = conn.sql_with("FROM embedding_active_space")
+        self.assertEqual(len(check), 1)
+        self.assertIn("FOR SHARE", check[0][0])
+        first_write = next(i for i, (sql, _) in enumerate(conn.executed) if "INSERT INTO guideline_documents" in sql)
+        self.assertLess(conn.executed.index(check[0]), first_write)
+
+    def test_unknown_journey_releases_the_row(self):
+        conn = FakeConnection()
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md",
+                                    "journey_id": "66666666-6666-4666-8666-666666666666"}, conn)
+        self.assertEqual(response["statusCode"], 404)
+        self.assertEqual(conn.rollbacks, 1)
+
+    def test_rename_section_is_rejected(self):
+        conn = FakeConnection({"FROM embedding_active_space": LOCKED_ROW,
+                               "UPDATE guideline_sections": [(SECTION_ID, "Auto")]})
+        event = _event("PATCH", f"/admin/guideline/sections/{SECTION_ID}",
+                       resource="/admin/guideline/sections/{id}", path_id=SECTION_ID)
+        response, conn = self.call(event, {"label": "New"}, conn)
+        self.assert_locked(response, conn, "UPDATE guideline_sections")
+
+
 class ModeTest(AdminTestBase):
     def test_valid_mode(self):
         response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "guideline"})

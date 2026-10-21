@@ -9,9 +9,12 @@ answering from the old space until the flip; only SYNCING is paused, for a few m
 
 Steps (persisted in embedding_jobs.steps / current_step; the UI polls plain text):
 
-  1 lock              cutover_locked = true on the pointer row. The four ingestion entry
-                      points then answer 409 CUTOVER_LOCKED (helpers/ingestion_lock.py).
-  2 wait_idle         wait until no ingestion run is 'running'
+  1 lock              cutover_locked = true on the pointer row. The ingestion entry points
+                      (sync routes, guideline upload and rename) then answer 409
+                      CUTOVER_LOCKED and a finished Transcribe job defers its run
+                      (helpers/ingestion_lock.py).
+  2 wait_idle         wait until no ingestion run is 'running' and no guideline document
+                      is 'processing'
                       (ACTIVATE_IDLE_TIMEOUT_SECONDS, default 900; fail and unlock on timeout)
   3 delta             embed what the target space still lacks (reembed_space.run_delta,
                       inline). Rollback: the same, on the RETIRED target.
@@ -266,8 +269,21 @@ def _step_lock(connection, ctx: _Context, progress: _Progress, time_left):
 
 
 def _running_ingestion_count(connection) -> int:
+    """
+    Running ingestion runs plus guideline documents still being read. A 'processing'
+    guideline row older than the longest Lambda run (15 min) is a dead worker, not a
+    writer, so it cannot hold the cutover until the idle timeout.
+    """
     with connection.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM ingestion_runs WHERE status = 'running'::ingestion_status")
+        cursor.execute(
+            """
+            SELECT (SELECT count(*) FROM ingestion_runs
+                     WHERE status = 'running'::ingestion_status)
+                 + (SELECT count(*) FROM guideline_documents
+                     WHERE status = 'processing'
+                       AND updated_at > now() - interval '15 minutes')
+            """
+        )
         count = int(cursor.fetchone()[0])
     connection.commit()
     return count

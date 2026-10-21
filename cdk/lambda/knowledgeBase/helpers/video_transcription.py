@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import boto3
 
+from helpers.ingestion_lock import is_locked
 from helpers.process_crawler_batch import launch_transcriber_for_run
 
 logger = logging.getLogger()
@@ -167,7 +168,32 @@ def handle_transcribe_complete(event, connection):
             """,
             (json.dumps(metadata), data_source_id),
         )
-        if run_status in ("pending", "queued"):
+    connection.commit()
+
+    if run_status in ("pending", "queued"):
+        # Held until launch_transcriber_for_run commits the run as 'running' (or the
+        # rollback below): a cutover either sees the lock here or waits for that commit
+        # and then counts the run in wait_idle.
+        if is_locked(connection, hold=True):
+            # Keep the transcript: the run stays pending and the next sync launches it.
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE ingestion_runs
+                    SET status = 'pending'::ingestion_status,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s::uuid
+                    """,
+                    (
+                        json.dumps({"source": "transcribe_complete", "deferred_by_cutover": True}),
+                        ingestion_run_id,
+                    ),
+                )
+            connection.commit()
+            logger.info("Cutover in progress; deferred transcriber launch for run %s", ingestion_run_id)
+            return {"job_name": job_name, "status": "deferred", "ingestion_run_id": ingestion_run_id}
+
+        with connection.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE ingestion_runs
@@ -177,9 +203,6 @@ def handle_transcribe_complete(event, connection):
                 """,
                 (json.dumps({"source": "transcribe_complete"}), ingestion_run_id),
             )
-    connection.commit()
-
-    if run_status in ("pending", "queued"):
         try:
             launched = launch_transcriber_for_run(
                 connection,

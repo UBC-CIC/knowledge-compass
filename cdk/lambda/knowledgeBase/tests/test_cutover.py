@@ -339,6 +339,13 @@ class FailurePathTest(CutoverBase):
         self.assertIn("after 30 s", self.job["last_error"])
         self.assertFalse(self.lock["locked"])
 
+    def test_wait_idle_also_counts_guideline_documents_being_read(self):
+        self.go()
+        idle = self.db.statements("FROM ingestion_runs")
+        self.assertTrue(idle)
+        self.assertIn("FROM guideline_documents", idle[0][1])
+        self.assertIn("status = 'processing'", idle[0][1])
+
     def test_an_unreleasable_lock_is_reported_and_left_to_the_ttl(self):
         original = self.db.handle
 
