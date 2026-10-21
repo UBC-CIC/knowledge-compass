@@ -108,12 +108,10 @@ export const STAGE_SUMMARY =
 
 /**
  * Notes shown while the live text is still the cleaned-up version published
- * by a migration (025 system_role, 027 How it talks) and an older version
- * exists to go back to. The shipped text is in defaultSystemMessages.ts.
+ * by migration 027 (How it talks) and an older version exists to go back to.
+ * The shipped text is in defaultSystemMessages.ts.
  */
 export const CLEANUP_NOTES: Partial<Record<SystemMessageType, string>> = {
-  system_role:
-    "Cleaned up: the hard-coded Journey 1 and Journey 2 descriptions were removed. The journey list is now added automatically.",
   detective_phase_prompt: "Cleaned up: app instructions are now added automatically.",
   suggestion_phase_prompt: "Cleaned up: app instructions are now added automatically.",
 };
