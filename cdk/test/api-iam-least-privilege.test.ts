@@ -124,6 +124,18 @@ describe("API Lambda IAM least privilege", () => {
     }
   });
 
+  test("Cognito triggers use the readwrite DB credential, never the tablecreator one", () => {
+    const secretStatements = statementsFor(cognitoTriggerRole()).filter((s) =>
+      [s.Action].flat().some((a: string) => a.startsWith("secretsmanager:"))
+    );
+    expect(secretStatements.length).toBeGreaterThan(0);
+    expect(JSON.stringify(secretStatements)).not.toMatch(/TableCreator/i);
+
+    const envOf = (name: string) => resources[fnIdByName(name)].Properties.Environment.Variables;
+    expect(envOf("KC-Api-addMemberOnSignUp").SM_DB_CREDENTIALS).toEqual(envOf("KC-Api-adminFunction").SM_DB_CREDENTIALS);
+    expect(JSON.stringify(envOf("KC-Api-addMemberOnSignUp"))).not.toMatch(/TableCreator/i);
+  });
+
   test("no statement grants iam:AddUserToGroup", () => {
     expect(JSON.stringify(resources)).not.toContain("iam:AddUserToGroup");
   });

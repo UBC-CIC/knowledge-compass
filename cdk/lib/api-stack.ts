@@ -1135,8 +1135,9 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
-    // Grant access to specific secret instead of '*'
-    db.secretPathTableCreator.grantRead(coglambdaRole);
+    // Readwrite (DML only): the PostConfirmation trigger only upserts users rows,
+    // so this role must not be able to read the DDL-capable tablecreator secret.
+    db.secretPathUser.grantRead(coglambdaRole);
 
     // Grant access to EC2
     coglambdaRole.addToPolicy(
@@ -1403,7 +1404,7 @@ export class ApiGatewayStack extends cdk.Stack {
         handler: "addAdminOnSignUp.handler",
         timeout: Duration.seconds(30),
         environment: {
-          SM_DB_CREDENTIALS: db.secretPathTableCreator.secretName,
+          SM_DB_CREDENTIALS: db.secretPathUser.secretName,
           RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         },
         vpc: vpcStack.vpc,
