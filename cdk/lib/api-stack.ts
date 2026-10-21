@@ -2499,9 +2499,11 @@ export class ApiGatewayStack extends cdk.Stack {
         // No $context.message: the client frame holds the visitor's question and
         // token, so it is never logged. No $context.authorizer.* either: this API has
         // no API Gateway authorizer (websocket/connect.js verifies the token itself),
-        // so those fields would always be empty.
+        // so those fields would always be empty. `ip` (same key as the REST access
+        // log) lets abuse on the socket be traced to a client and matched to WAF logs.
         format: JSON.stringify({
           requestId: "$context.requestId",
+          ip: "$context.identity.sourceIp",
           requestTime: "$context.requestTime",
           routeKey: "$context.routeKey",
           connectionId: "$context.connectionId",

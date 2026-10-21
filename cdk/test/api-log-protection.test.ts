@@ -98,6 +98,7 @@ test("WebSocket stage never logs client frames", () => {
   expect(props.DefaultRouteSettings.DataTraceEnabled).toBe(false);
   const format = JSON.parse(props.AccessLogSettings.Format);
   expect(format).not.toHaveProperty("message");
+  expect(format.ip).toBe("$context.identity.sourceIp");
   for (const value of Object.values(format)) {
     for (const pattern of FORBIDDEN_FORMAT) expect(String(value)).not.toMatch(pattern);
   }
