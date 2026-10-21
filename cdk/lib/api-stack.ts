@@ -1107,6 +1107,10 @@ export class ApiGatewayStack extends cdk.Stack {
     db.secretPathUser.grantRead(userFunctionRole);
     const textGenRole = newExecutionRole("textGenRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(textGenRole);
+    // chatSessionFunction: own role so the eval signing-secret grant (when enabled)
+    // reaches only the handler that verifies eval tags (finding f-7277748f).
+    const chatSessionRole = newExecutionRole("chatSessionRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(chatSessionRole);
     const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(knowledgeBaseRole);
     // Shared token that authenticates lambdaKnowledgeBase self-invocations
@@ -2197,7 +2201,7 @@ export class ApiGatewayStack extends cdk.Stack {
         memorySize: 512,
         reservedConcurrentExecutions: reservedConcurrency(25),
         layers: [postgres],
-        role: lambdaRole,
+        role: chatSessionRole,
         tracing: lambda.Tracing.ACTIVE,
       }
     );
@@ -2218,9 +2222,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Evaluation-harness session tags (handlers/utils/evalTag.js). Read-only
     // access to the one signing secret; "-??????" is the random suffix Secrets
-    // Manager appends to secret ARNs. Note: this function uses the shared
-    // postgres lambdaRole (which reads the DB user secret), so the grant lands
-    // on that role; only chatSessionHandler reads the secret.
+    // Manager appends to secret ARNs. Lands on chatSessionRole only.
     if (props.evalSigningSecretName) {
       lambdaChatSessionFunction.addEnvironment("EVAL_SIGNING_SECRET_NAME", props.evalSigningSecretName);
       lambdaChatSessionFunction.addToRolePolicy(new iam.PolicyStatement({
