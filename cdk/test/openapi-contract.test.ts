@@ -7,6 +7,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as YAML from "yaml";
+import { GATEWAY_ALLOWED_ORIGIN_VARIABLE } from "../lib/api-stack";
 
 const CDK_ROOT = path.resolve(__dirname, "..");
 const SWAGGER_PATH = path.join(CDK_ROOT, "OpenAPI_Swagger_Definition.yaml");
@@ -14,6 +15,35 @@ const HANDLER_DIR = path.join(CDK_ROOT, "lambda", "handlers");
 const KB_MAIN = path.join(CDK_ROOT, "lambda", "knowledgeBase", "main.py");
 
 const HTTP_METHODS = ["get", "post", "put", "delete", "patch"];
+const CORS_METHOD_ORDER = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+/** Response-parameter entries whose key is an Access-Control-Allow-Origin mapping. */
+function allowOriginParameters(
+  node: unknown,
+  found: { at: string; value: unknown }[] = [],
+  at = "",
+): { at: string; value: unknown }[] {
+  if (Array.isArray(node)) {
+    node.forEach((item, i) => allowOriginParameters(item, found, `${at}[${i}]`));
+    return found;
+  }
+  if (!node || typeof node !== "object") return found;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    const here = at ? `${at}.${key}` : key;
+    if (key.includes("header.Access-Control-Allow-Origin")) found.push({ at: here, value });
+    allowOriginParameters(value, found, here);
+  }
+  return found;
+}
+
+function listedCorsMethods(value: unknown): string[] {
+  return String(value)
+    .replace(/'/g, "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+}
 
 function parseSwagger() {
   const doc = YAML.parseDocument(fs.readFileSync(SWAGGER_PATH, "utf8"), {
@@ -167,5 +197,43 @@ describe("OpenAPI definition", () => {
           .map(([m]) => `${m.toUpperCase()} ${p}`),
       );
     expect(unprotected).toEqual([]);
+  });
+
+  test("no response parameter allows every origin", () => {
+    const params = allowOriginParameters(doc.toJS());
+    expect(params.length).toBeGreaterThan(0);
+    const wildcard = params.filter((p) => p.value === "'*'");
+    expect(wildcard).toEqual([]);
+    const origin = `stageVariables.${GATEWAY_ALLOWED_ORIGIN_VARIABLE}`;
+    expect(params.map((p) => p.value)).toEqual(params.map(() => origin));
+  });
+
+  test("preflight Allow-Methods lists only the methods that path serves", () => {
+    const mismatches = Object.entries(spec.paths).flatMap(([p, ops]) => {
+      const expected = ["OPTIONS", ...CORS_METHOD_ORDER.filter((m) => m.toLowerCase() in ops)].sort();
+      const parameters = (
+        ops.options as {
+          "x-amazon-apigateway-integration"?: {
+            responses?: { default?: { responseParameters?: Record<string, string> } };
+          };
+        }
+      )?.["x-amazon-apigateway-integration"]?.responses?.default?.responseParameters;
+      const actual = listedCorsMethods(parameters?.["method.response.header.Access-Control-Allow-Methods"]);
+      return actual.join(",") === expected.join(",") ? [] : [`${p}: ${actual.join(",")} != ${expected.join(",")}`];
+    });
+    expect(mismatches).toEqual([]);
+  });
+
+  test("UNAUTHORIZED does not return authorizer error detail", () => {
+    const responses = (doc.toJS() as { "x-amazon-apigateway-gateway-responses": Record<string, {
+      responseTemplates?: Record<string, string>;
+      responseParameters?: Record<string, string>;
+    }> })["x-amazon-apigateway-gateway-responses"];
+    const unauthorized = responses.UNAUTHORIZED;
+    const body = unauthorized.responseTemplates?.["application/json"] ?? "";
+    expect(body).not.toContain("error.messageString");
+    expect(body).not.toContain("$context");
+    expect(unauthorized.responseParameters?.["gatewayresponse.header.Access-Control-Allow-Headers"]).not.toBe("'*'");
+    expect(unauthorized.responseParameters?.["gatewayresponse.header.Access-Control-Allow-Methods"]).not.toBe("'*'");
   });
 });

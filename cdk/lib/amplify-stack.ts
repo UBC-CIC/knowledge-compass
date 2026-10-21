@@ -7,7 +7,7 @@ import * as cdk from "aws-cdk-lib";
 import { BuildSpec } from "aws-cdk-lib/aws-codebuild";
 import { Construct } from "constructs";
 import * as yaml from "yaml";
-import { ApiGatewayStack } from "./api-stack";
+import { ApiGatewayStack, GATEWAY_ALLOWED_ORIGIN_VARIABLE, REST_API_STAGE_NAME } from "./api-stack";
 
 interface AmplifyStackProps extends cdk.StackProps {
   githubRepo: string;
@@ -106,7 +106,9 @@ export class AmplifyStack extends cdk.Stack {
     // Set the allowed origins to the Amplify URL.
     // To add additional origins (e.g. custom domains), update the SSM parameter manually.
     // See Docs/DEPLOYMENT_GUIDE.md for instructions.
-    new cdk.custom_resources.AwsCustomResource(this, "UpdateSSMAllowedOrigins", {
+    // Lambda responses honor the full list. Gateway error and preflight CORS
+    // can carry only this one SPA origin (stage variable allowedOrigin).
+    const updateAllowedOrigins = new cdk.custom_resources.AwsCustomResource(this, "UpdateSSMAllowedOrigins", {
       onCreate: {
         service: "SSM",
         action: "putParameter",
@@ -124,6 +126,39 @@ export class AmplifyStack extends cdk.Stack {
         ],
       }),
     });
+
+    // Pin the gateway stage variable to the same SPA origin written above.
+    // onUpdate covers a later branch change; it does not rewrite the SSM list,
+    // so manually appended origins stay in place for Lambda responses.
+    const pinGatewayOrigin: cdk.custom_resources.AwsSdkCall = {
+      service: "APIGateway",
+      action: "updateStage",
+      parameters: {
+        restApiId: apiStack.getRestApiId(),
+        stageName: apiStack.getRestApiStageName(),
+        patchOperations: [
+          {
+            op: "replace",
+            path: `/variables/${GATEWAY_ALLOWED_ORIGIN_VARIABLE}`,
+            value: amplifyUrl,
+          },
+        ],
+      },
+      physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("GatewayAllowedOriginStage"),
+    };
+    const pinGatewayAllowedOrigin = new cdk.custom_resources.AwsCustomResource(this, "PinGatewayAllowedOrigin", {
+      onCreate: pinGatewayOrigin,
+      onUpdate: pinGatewayOrigin,
+      policy: cdk.custom_resources.AwsCustomResourcePolicy.fromStatements([
+        new cdk.aws_iam.PolicyStatement({
+          actions: ["apigateway:PATCH"],
+          resources: [
+            `arn:${this.partition}:apigateway:${this.region}::/restapis/${apiStack.getRestApiId()}/stages/${REST_API_STAGE_NAME}`,
+          ],
+        }),
+      ]),
+    });
+    pinGatewayAllowedOrigin.node.addDependency(updateAllowedOrigins);
 
     new cdk.custom_resources.AwsCustomResource(this, "UpdateS3BucketCors", {
       onCreate: {

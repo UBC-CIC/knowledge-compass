@@ -28,6 +28,13 @@ import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
+import * as path from "path";
+
+// REST stage name. The WAF association and execute-api ARNs also use "prod".
+export const REST_API_STAGE_NAME = "prod";
+// OpenAPI gateway responses and OPTIONS mocks read this stage variable.
+// gatewayCorsOrigin copies the deployed SPA origin into it; never "*".
+export const GATEWAY_ALLOWED_ORIGIN_VARIABLE = "allowedOrigin";
 
 function computeConfigHash(config: object): string {
   return crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
@@ -55,6 +62,159 @@ export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[
     inputEnabled: true,
   },
 ];
+
+/**
+ * Per-IP WAF rate rules (finding f-9bda4252).
+ *
+ * WAF runs before the API Gateway authorizer and never sees its result, so a
+ * bucket must not be chosen from the Authorization header. `Authorization:
+ * Bearer x` is attacker-controlled and was enough to leave the 100-request
+ * bucket for the 2000-request one. A limit is scoped to the URI path, or it
+ * is a ceiling on every request.
+ */
+export function wafIpRateLimitRules(): wafv2.CfnWebACL.RuleProperty[] {
+  return [
+    // GET /user/publicToken is the only data route with no authorizer. The
+    // match is the URI path, including a stage prefix (`/prod/user/publicToken`).
+    // URL_DECODE so `/user%2FpublicToken` cannot skip it. LimitIdentityMinting
+    // below is the tighter cap (60/5 min) and also covers a trailing slash and
+    // POST /user.
+    {
+      name: "LimitUnauthenticatedRequests",
+      priority: 3,
+      action: { block: {} },
+      statement: {
+        rateBasedStatement: {
+          limit: 100,
+          aggregateKeyType: "IP",
+          evaluationWindowSec: 300,
+          scopeDownStatement: {
+            byteMatchStatement: {
+              searchString: "/user/publicToken",
+              fieldToMatch: { uriPath: {} },
+              textTransformations: [{ priority: 0, type: "URL_DECODE" }],
+              positionalConstraint: "ENDS_WITH",
+            },
+          },
+        },
+      },
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: "LimitUnauthenticatedRequests",
+      },
+    },
+
+    // Global per-IP ceiling. No scope-down: sending a header cannot raise the
+    // limit. A rate rule under its limit does not terminate evaluation, so the
+    // tighter path rules (token minting, /chat_sessions) still block.
+    // The name is unchanged so the existing CloudWatch metric stays continuous.
+    {
+      name: "LimitAuthenticatedRequests",
+      priority: 4,
+      action: { block: {} },
+      statement: {
+        rateBasedStatement: {
+          limit: 2000,
+          aggregateKeyType: "IP",
+          evaluationWindowSec: 300,
+        },
+      },
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: "LimitAuthenticatedRequests",
+      },
+    },
+
+    // Moderate limit for expensive AI endpoints (1000 req/5min per IP).
+    {
+      name: "LimitExpensiveEndpoints",
+      priority: 5,
+      action: { block: {} },
+      statement: {
+        rateBasedStatement: {
+          limit: 1000, // prevents abuse while allowing rapid conversational flow
+          aggregateKeyType: "IP",
+          scopeDownStatement: {
+            byteMatchStatement: {
+              searchString: "/chat_sessions",
+              fieldToMatch: { uriPath: {} },
+              textTransformations: [{ priority: 0, type: "NONE" }],
+              positionalConstraint: "CONTAINS",
+            },
+          },
+        },
+      },
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: "LimitExpensiveEndpoints",
+      },
+    },
+
+    // Strict limit on anonymous identity minting (60 req/5min per IP).
+    // POST /user creates a new anonymous user and /user/publicToken mints
+    // credentials for it. Neither requires prior identity, so without a
+    // dedicated cap a single client can mint unlimited identities and
+    // sidestep every per-user limit. A legitimate first visit needs ~3 of
+    // these calls and each 15-minute refresh needs 1.
+    // Paths are URL-decoded and matched with an optional trailing slash so
+    // variants such as `/prod/user/` or `/prod/user%2FpublicToken` that API
+    // Gateway may still route to the same resource cannot skip this cap.
+    {
+      name: "LimitIdentityMinting",
+      priority: 6,
+      action: { block: {} },
+      statement: {
+        rateBasedStatement: {
+          limit: 60,
+          evaluationWindowSec: 300,
+          aggregateKeyType: "IP",
+          scopeDownStatement: {
+            orStatement: {
+              statements: [
+                {
+                  regexMatchStatement: {
+                    regexString: "/user/publicToken/?$",
+                    fieldToMatch: { uriPath: {} },
+                    textTransformations: [{ priority: 0, type: "URL_DECODE" }],
+                  },
+                },
+                {
+                  andStatement: {
+                    statements: [
+                      {
+                        regexMatchStatement: {
+                          regexString: "/user/?$",
+                          fieldToMatch: { uriPath: {} },
+                          textTransformations: [{ priority: 0, type: "URL_DECODE" }],
+                        },
+                      },
+                      {
+                        byteMatchStatement: {
+                          searchString: "POST",
+                          fieldToMatch: { method: {} },
+                          textTransformations: [{ priority: 0, type: "NONE" }],
+                          positionalConstraint: "EXACTLY",
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: "LimitIdentityMinting",
+      },
+    },
+  ];
+}
 
 interface ApiGatewayStackProps extends cdk.StackProps {
   ecrRepositories: { [key: string]: ecr.Repository };
@@ -93,6 +253,8 @@ export class ApiGatewayStack extends cdk.Stack {
   // Operational alarm topic; the CostStack sends budget and anomaly alerts here too.
   public readonly opsAlarmTopic: sns.ITopic;
   public getEndpointUrl = () => this.api.url;
+  public getRestApiId = () => this.api.restApiId;
+  public getRestApiStageName = () => REST_API_STAGE_NAME;
   public getUserPoolId = () => this.userPool.userPoolId;
   public getUserPoolClientId = () => this.appClient.userPoolClientId;
   public getIdentityPoolId = () => this.identityPool.ref;
@@ -423,7 +585,7 @@ export class ApiGatewayStack extends cdk.Stack {
       deploy: true,
       cloudWatchRole: true,
       deployOptions: {
-        stageName: "prod",
+        stageName: REST_API_STAGE_NAME,
         tracingEnabled: true,
         description: "Deployment with flashcard support - Nov 18 2025",
         // Data trace would record full request and response bodies, including the
@@ -482,7 +644,54 @@ export class ApiGatewayStack extends cdk.Stack {
     this.stageARN_APIGW = this.api.deploymentStage.stageArn;
     this.apiGW_basedURL = this.api.urlForPath();
 
-    // Waf Firewall - Enhanced with endpoint-specific and authentication-aware rate limiting
+    // Gateway error responses and OPTIONS mocks cannot run the Lambda origin
+    // allow-list. They read the stage variable named in the OpenAPI spec.
+    // Seed it from AllowedOrigins (first entry, never "*") so the variable
+    // exists; the Amplify stack then pins it to the deployed SPA origin.
+    // The stage's Variables property is left unset so a later API deploy does
+    // not clear that pin.
+    const gatewayCorsOriginFn = new lambda.Function(this, `${id}-GatewayCorsOrigin`, {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../lambda/gatewayCorsOrigin"), {
+        exclude: ["tests", "tests/**"],
+      }),
+      timeout: Duration.seconds(30),
+      description: "Publishes the SPA origin onto the API Gateway CORS stage variable",
+      environment: {
+        ALLOWED_ORIGINS_PARAM: this.allowedOriginsParamName,
+        REST_API_ID: this.api.restApiId,
+        REST_API_STAGE: REST_API_STAGE_NAME,
+        ALLOWED_ORIGIN_VARIABLE: GATEWAY_ALLOWED_ORIGIN_VARIABLE,
+      },
+    });
+    gatewayCorsOriginFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+    gatewayCorsOriginFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["apigateway:GET", "apigateway:PATCH"],
+      resources: [
+        `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/${REST_API_STAGE_NAME}`,
+      ],
+    }));
+    const gatewayCorsOrigin = new cdk.CustomResource(this, `${id}-GatewayCorsOriginSync`, {
+      serviceToken: new cr.Provider(this, `${id}-GatewayCorsOriginProvider`, {
+        onEventHandler: gatewayCorsOriginFn,
+      }).serviceToken,
+      properties: {
+        paramName: this.allowedOriginsParamName,
+        restApiId: this.api.restApiId,
+        // Re-read AllowedOrigins when the API deployment changes (a replaced
+        // stage would otherwise drop the variable). Stable when the API is unchanged.
+        deploymentId: this.api.latestDeployment?.deploymentId ?? "none",
+      },
+    });
+    gatewayCorsOrigin.node.addDependency(initAllowedOrigins);
+    gatewayCorsOrigin.node.addDependency(this.api.deploymentStage);
+
+    // WAF. Tighter limits are scoped by URI path. No rule selects a bucket from
+    // the Authorization header (finding f-9bda4252): WAF runs before the authorizer.
     const waf = new wafv2.CfnWebACL(this, `${id}-waf`, {
       description: "WAF for KC",
       scope: "REGIONAL",
@@ -594,184 +803,7 @@ export class ApiGatewayStack extends cdk.Stack {
           },
         },
 
-        // Rule 2: Strict limit for unauthenticated requests (100 req/5min per IP)
-        {
-          name: "LimitUnauthenticatedRequests",
-          priority: 3,
-          action: {
-            block: {},
-          },
-          statement: {
-            rateBasedStatement: {
-              limit: 100, // Reduced from 1000 to 100 for anonymous users
-              aggregateKeyType: "IP",
-              scopeDownStatement: {
-                // Only apply to requests WITHOUT Authorization header
-                notStatement: {
-                  statement: {
-                    byteMatchStatement: {
-                      searchString: "Bearer",
-                      fieldToMatch: {
-                        singleHeader: {
-                          name: "authorization",
-                        },
-                      },
-                      textTransformations: [
-                        {
-                          priority: 0,
-                          type: "NONE",
-                        },
-                      ],
-                      positionalConstraint: "CONTAINS",
-                    },
-                  },
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: "LimitUnauthenticatedRequests",
-          },
-        },
-
-        // Rule 3: More lenient for authenticated requests (2000 req/5min per IP)
-        {
-          name: "LimitAuthenticatedRequests",
-          priority: 4,
-          action: {
-            block: {},
-          },
-          statement: {
-            rateBasedStatement: {
-              limit: 2000, // Increased from 1000 to 2000 for authenticated users
-              aggregateKeyType: "IP",
-              scopeDownStatement: {
-                // Only apply to requests WITH Authorization header
-                byteMatchStatement: {
-                  searchString: "Bearer",
-                  fieldToMatch: {
-                    singleHeader: {
-                      name: "authorization",
-                    },
-                  },
-                  textTransformations: [
-                    {
-                      priority: 0,
-                      type: "NONE",
-                    },
-                  ],
-                  positionalConstraint: "CONTAINS",
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: "LimitAuthenticatedRequests",
-          },
-        },
-
-        // Rule 4: Moderate limit for expensive AI endpoints (500 req/5min per IP)
-        {
-          name: "LimitExpensiveEndpoints",
-          priority: 5,
-          action: {
-            block: {},
-          },
-          statement: {
-            rateBasedStatement: {
-              limit: 1000, // 500 reqs / 5 mins prevents abuse while allowing rapid conversational flow
-              aggregateKeyType: "IP",
-              scopeDownStatement: {
-                // Apply to chat_sessions endpoints
-                byteMatchStatement: {
-                  searchString: "/chat_sessions",
-                  fieldToMatch: {
-                    uriPath: {},
-                  },
-                  textTransformations: [
-                    {
-                      priority: 0,
-                      type: "NONE",
-                    },
-                  ],
-                  positionalConstraint: "CONTAINS",
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: "LimitExpensiveEndpoints",
-          },
-        },
-
-        // Rule 5: Strict limit on anonymous identity minting (60 req/5min per IP).
-        // POST /user creates a new anonymous user and /user/publicToken mints
-        // credentials for it. Neither requires prior identity, so without a
-        // dedicated cap a single client can mint unlimited identities and
-        // sidestep every per-user limit. A legitimate first visit needs ~3 of
-        // these calls and each 15-minute refresh needs 1.
-        // Paths are URL-decoded and matched with an optional trailing slash so
-        // variants such as `/prod/user/` or `/prod/user%2FpublicToken` that API
-        // Gateway may still route to the same resource cannot skip this cap.
-        {
-          name: "LimitIdentityMinting",
-          priority: 6,
-          action: {
-            block: {},
-          },
-          statement: {
-            rateBasedStatement: {
-              limit: 60,
-              evaluationWindowSec: 300,
-              aggregateKeyType: "IP",
-              scopeDownStatement: {
-                orStatement: {
-                  statements: [
-                    {
-                      regexMatchStatement: {
-                        regexString: "/user/publicToken/?$",
-                        fieldToMatch: { uriPath: {} },
-                        textTransformations: [{ priority: 0, type: "URL_DECODE" }],
-                      },
-                    },
-                    {
-                      andStatement: {
-                        statements: [
-                          {
-                            regexMatchStatement: {
-                              regexString: "/user/?$",
-                              fieldToMatch: { uriPath: {} },
-                              textTransformations: [{ priority: 0, type: "URL_DECODE" }],
-                            },
-                          },
-                          {
-                            byteMatchStatement: {
-                              searchString: "POST",
-                              fieldToMatch: { method: {} },
-                              textTransformations: [{ priority: 0, type: "NONE" }],
-                              positionalConstraint: "EXACTLY",
-                            },
-                          },
-                        ],
-                      },
-                    },
-                  ],
-                },
-              },
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: "LimitIdentityMinting",
-          },
-        },
+        ...wafIpRateLimitRules(),
 
         // Rule 6: AWS Managed IP reputation list (known botnets, scanners and
         // other malicious sources).
