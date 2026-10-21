@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlsplit
 
 from evals.judge import routing_metrics
 
@@ -219,9 +220,43 @@ def _assistant_block(turn: Dict[str, Any]) -> List[str]:
     if sources:
         lines += ["", "Sources:"]
         for s in sources:
-            title = s.get("title") or s.get("url") or "untitled"
-            lines.append(f"- [{title}]({s['url']})" if s.get("url") else f"- {title}")
+            lines.append(_source_line(s))
     return lines
+
+
+# Source titles and URLs come from retrieval/model output, so they are escaped
+# before they reach Markdown: a title cannot inject HTML or break out of the
+# link text, and only http(s) URLs become links.
+_MD_TEXT_ESCAPES = str.maketrans({
+    **{c: "\\" + c for c in "\\`*_[]"},
+    "<": "&lt;", ">": "&gt;", "&": "&amp;",
+})
+
+
+def _md_text(value: Any) -> str:
+    return " ".join(str(value).split()).translate(_MD_TEXT_ESCAPES)
+
+
+def _link_url(url: str) -> Optional[str]:
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return None
+    # Percent-encode anything that could end the link destination or open HTML.
+    return quote(url.strip(), safe=":/?#@!$&'*+,;=%-._~")
+
+
+def _source_line(source: Dict[str, Any]) -> str:
+    url = source.get("url")
+    title = _md_text(source.get("title") or url or "untitled")
+    href = _link_url(url) if isinstance(url, str) else None
+    if href:
+        return f"- [{title}]({href})"
+    if url and source.get("title"):
+        return f"- {title} ({_md_text(url)})"
+    return f"- {title}"
 
 
 def transcripts_markdown(run_dir: Path) -> str:
