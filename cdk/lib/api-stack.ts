@@ -1246,9 +1246,14 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
 
-    adminAuthorizationFunction.grantInvoke(
-      new iam.ServicePrincipal("apigateway.amazonaws.com")
-    );
+    // Pinned to this account's authorizers (finding f-a52b51f4): a bare grantInvoke to
+    // the apigateway principal lets an API in any account invoke it. Wildcard API id,
+    // like the handler permissions: Lambdas must never Ref this.api (SpecRestApi cycle).
+    adminAuthorizationFunction.addPermission("AllowApiGatewayInvoke", {
+      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+      action: "lambda:InvokeFunction",
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/authorizers/*`,
+    });
 
     // --- Operational alarm notifications ---------------------------------------------
     // Every cloudwatch.Alarm in this stack notifies this topic. The subscription address is
@@ -1328,9 +1333,12 @@ export class ApiGatewayStack extends cdk.Stack {
       }
     );
     jwtSecret.grantRead(userAuthFunction);
-    userAuthFunction.grantInvoke(
-      new iam.ServicePrincipal("apigateway.amazonaws.com")
-    );
+    // Same pinning as the admin authorizer (finding f-a52b51f4).
+    userAuthFunction.addPermission("AllowApiGatewayInvoke", {
+      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+      action: "lambda:InvokeFunction",
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/authorizers/*`,
+    });
 
     new cloudwatch.Alarm(this, 'UserAuthorizerConcurrencyAlarm', {
       metric: userAuthFunction.metric('ConcurrentExecutions', { statistic: cloudwatch.Stats.MAXIMUM }),

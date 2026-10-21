@@ -370,6 +370,30 @@ describe("API Lambda IAM least privilege", () => {
     }
   });
 
+  // Finding f-a52b51f4: a service-principal permission with no SourceArn lets any
+  // account's API Gateway invoke the function (confused deputy).
+  test("every API Gateway invoke permission is pinned to this account", () => {
+    const perms = Object.values(resources).filter(
+      (r: any) =>
+        r.Type === "AWS::Lambda::Permission" &&
+        r.Properties.Principal === "apigateway.amazonaws.com"
+    );
+    expect(perms.length).toBeGreaterThan(0);
+    for (const p of perms as any[]) {
+      expect(JSON.stringify(p.Properties.SourceArn ?? "")).toContain(
+        `:execute-api:${env.region}:${env.account}:`
+      );
+    }
+    for (const fn of ["adminLambdaAuthorizer", "userLambdaAuthorizer"]) {
+      const own = (perms as any[]).filter(
+        (p) => JSON.stringify(p.Properties.FunctionName).includes(`"${fn}"`)
+      );
+      expect(own.map((p) => p.Properties.SourceArn)).toEqual([
+        `arn:aws:execute-api:${env.region}:${env.account}:*/authorizers/*`,
+      ]);
+    }
+  });
+
   test("no intra-stack dependency cycle", () => {
     const ids = new Set(Object.keys(resources));
     const refs = (node: any, out: Set<string>): Set<string> => {
