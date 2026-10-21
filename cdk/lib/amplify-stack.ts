@@ -91,13 +91,18 @@ export class AmplifyStack extends cdk.Stack {
       status: RedirectStatus.NOT_FOUND_REWRITE,
     });
 
+    // No pull-request previews (the construct defaults them on): each preview builds
+    // unreviewed PR code with the app's build environment and serves it on its own
+    // public amplifyapp.com URL.
+    const branchOptions = { pullRequestPreview: false };
+
     // Add main branch
-    amplifyApp.addBranch("main");
+    amplifyApp.addBranch("main", branchOptions);
 
     // Add feature branch if specified and not main
     const branch = props.githubBranch ?? "main";
     if (branch !== "main") {
-      amplifyApp.addBranch(branch);
+      amplifyApp.addBranch(branch, branchOptions);
     }
 
     // -- UPDATE THE SSM PARAMETER TO POINT TO THE AMPLIFY APP URL --
