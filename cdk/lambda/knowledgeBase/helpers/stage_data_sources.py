@@ -110,6 +110,24 @@ def _validated_public_url(value: str, field: str) -> tuple[str | None, str | Non
         return None, f"{field} could not be resolved; check the address and try again"
 
 
+def _source_type_at_url(connection, url: str) -> str | None:
+    """source_type of the sources row stored at this exact URL, if any."""
+    if not url:
+        return None
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT source_type::text
+            FROM sources
+            WHERE url = %s
+            LIMIT 1
+            """,
+            (url,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
 def _existing_website_row_id(connection, *, names: list[str]) -> str | None:
     """Check whether a website data source with any of these URLs already exists"""
     with connection.cursor() as cursor:
@@ -627,6 +645,21 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             400,
             {"error": "video_url must be a public http(s) URL used for citations and deep-links"},
         )
+    # sources.url is shared with crawled pages. The transcriber stores this
+    # exact string there, so a URL already held by a non-video row is rejected
+    # before transcription starts and before any chunk rewrite.
+    occupant = _source_type_at_url(connection, video_url)
+    if occupant and occupant != "video":
+        error = (
+            "video_url is already a crawled web page and cannot be used as a video source"
+            if occupant == "web"
+            else "video_url is already used by another source and cannot be overwritten"
+        )
+        return _response(
+            event,
+            409,
+            {"error": error, "existing_source_type": occupant, "video_url": video_url},
+        )
 
     try:
         etag = head_etag(s3_bucket, s3_key)
@@ -781,6 +814,18 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             event,
             400,
             {"error": "document_url is required and must be a public http(s) URL used for citations"},
+        )
+    # The link is display-only, but it is the public citation. A crawled page's
+    # URL is not reused as that citation.
+    if _source_type_at_url(connection, document_url) == "web":
+        return _response(
+            event,
+            409,
+            {
+                "error": "document_url is already a crawled web page and cannot be used as a citation",
+                "existing_source_type": "web",
+                "document_url": document_url,
+            },
         )
 
     try:

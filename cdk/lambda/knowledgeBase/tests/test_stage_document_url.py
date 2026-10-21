@@ -44,6 +44,11 @@ class StageDocumentUrlTests(unittest.TestCase):
         head = mock.patch.object(stage, "head_etag", side_effect=AssertionError("S3 must not be called"))
         head.start()
         self.addCleanup(head.stop)
+        # These tests cover the link's shape. The crawled-page collision check
+        # is a separate query and is not what "reaches S3" means here.
+        occupant = mock.patch.object(stage, "_source_type_at_url", return_value=None)
+        occupant.start()
+        self.addCleanup(occupant.stop)
 
     def stage(self, request_body):
         return stage._stage_document(

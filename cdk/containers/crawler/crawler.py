@@ -176,21 +176,30 @@ def get_db_connection():
     return db_config.get_db_connection()
 
 
-def upsert_source(conn, url: str, name: str, source_type: str = "web") -> str:
+def upsert_source(conn, url: str, name: str, source_type: str = "web") -> str | None:
+    """
+    Insert or refresh a crawled source.
+
+    sources.url is unique across crawled pages and uploads. On conflict, only
+    an existing row of the same source_type is updated, and its type is left
+    unchanged. A URL held by an upload returns None; the caller must not
+    replace that row's chunks.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO sources (name, url, source_type)
             VALUES (%s, %s, %s)
             ON CONFLICT (url) DO UPDATE SET
-              name        = EXCLUDED.name,
-              source_type = EXCLUDED.source_type,
-              updated_at  = now()
+              name       = EXCLUDED.name,
+              updated_at = now()
+            WHERE sources.source_type = EXCLUDED.source_type
             RETURNING id
             """,
             (name, url, source_type),
         )
-        return str(cur.fetchone()[0])
+        row = cur.fetchone()
+        return str(row[0]) if row else None
 
 
 # ── Crawl provenance (migration 038 web_source_owners) ───────────────────────
@@ -577,8 +586,14 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
             owner_id = None
             print("[db] web_source_owners table missing; pages will not be stamped", file=sys.stderr)
 
-        # One source row for the seed domain (the website as a whole)
+        # One source row for the seed domain (the website as a whole).
+        # A seed that is already an upload is not adopted: attaching this run
+        # to it and then replacing its chunks would destroy that corpus.
         seed_source_id = upsert_source(conn, seed_url, seed_url, source_type="web")
+        if not seed_source_id:
+            raise RuntimeError(
+                "seed URL belongs to an uploaded source; refusing to overwrite its chunks"
+            )
         if owner_id:
             record_source_owner(conn, seed_source_id, owner_id)
         conn.commit()
@@ -592,8 +607,16 @@ def write_to_db(pages: list, seed_url: str, max_pages: int, max_words: int, job_
                 stats["pages_skipped"] += 1
                 continue
 
-            # Each page is its own source row
+            # Each page is its own source row. An upload that already occupies
+            # this URL is left untouched, including its chunks.
             page_source_id = upsert_source(conn, page["url"], page["title"] or page["url"], source_type="web")
+            if not page_source_id:
+                print(
+                    f"  [db] {page['url']} — skipped; URL belongs to a non-web source",
+                    file=sys.stderr,
+                )
+                stats["pages_skipped"] += 1
+                continue
             if owner_id:
                 record_source_owner(conn, page_source_id, owner_id)
 

@@ -114,6 +114,13 @@ class StageWebsiteUrlSafetyTests(_Base):
 
 
 class StageVideoAndDocumentUrlSafetyTests(_Base):
+    def setUp(self):
+        super().setUp()
+        # Collision checks hit the database; these tests cover URL shape only.
+        patcher = mock.patch.object(stage, "_source_type_at_url", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_private_video_url_is_rejected_before_s3_and_transcribe(self):
         with mock.patch.object(stage, "head_etag") as head, \
                 mock.patch.object(stage, "start_transcription_job") as transcribe:
@@ -134,6 +141,94 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
         )
         head.assert_not_called()
         transcribe.assert_not_called()
+
+    def test_video_url_colliding_with_a_crawled_page_is_rejected(self):
+        with mock.patch.object(stage, "_source_type_at_url", return_value="web") as lookup, \
+                mock.patch.object(stage, "head_etag") as head, \
+                mock.patch.object(stage, "start_transcription_job") as transcribe:
+            response = stage._stage_video(
+                {},
+                {
+                    "video_file_name": "talk.mp4",
+                    "video_s3_bucket": "bucket",
+                    "video_s3_key": "uploads/video/talk.mp4",
+                    "video_url": "https://www.youtube.com/watch?v=x",
+                },
+                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+            )
+        self.assertEqual(response["statusCode"], 409)
+        body = json.loads(response["body"])
+        self.assertEqual(
+            body["error"],
+            "video_url is already a crawled web page and cannot be used as a video source",
+        )
+        self.assertEqual(body["existing_source_type"], "web")
+        self.assertEqual(body["video_url"], "https://www.youtube.com/watch?v=x")
+        lookup.assert_called_once_with(self.connection, "https://www.youtube.com/watch?v=x")
+        head.assert_not_called()
+        transcribe.assert_not_called()
+        self.connection.commit.assert_not_called()
+
+    def test_video_url_colliding_with_a_document_source_is_rejected(self):
+        with mock.patch.object(stage, "_source_type_at_url", return_value="document"), \
+                mock.patch.object(stage, "head_etag") as head, \
+                mock.patch.object(stage, "start_transcription_job") as transcribe:
+            response = stage._stage_video(
+                {},
+                {
+                    "video_file_name": "talk.mp4",
+                    "video_s3_bucket": "bucket",
+                    "video_s3_key": "uploads/video/talk.mp4",
+                    "video_url": "https://www.youtube.com/watch?v=x",
+                },
+                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+            )
+        self.assertEqual(response["statusCode"], 409)
+        self.assertIn("another source", json.loads(response["body"])["error"])
+        head.assert_not_called()
+        transcribe.assert_not_called()
+
+    def test_video_url_already_used_by_a_video_is_not_a_conflict(self):
+        with mock.patch.object(stage, "_source_type_at_url", return_value="video"), \
+                mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")), \
+                mock.patch.object(stage, "start_transcription_job") as transcribe:
+            response = stage._stage_video(
+                {},
+                {
+                    "video_file_name": "talk.mp4",
+                    "video_s3_bucket": "bucket",
+                    "video_s3_key": "uploads/video/talk.mp4",
+                    "video_url": "https://www.youtube.com/watch?v=x",
+                },
+                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+            )
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("does not exist in S3", json.loads(response["body"])["error"])
+        transcribe.assert_not_called()
+
+    def test_document_url_colliding_with_a_crawled_page_is_rejected(self):
+        with mock.patch.object(stage, "_source_type_at_url", return_value="web") as lookup, \
+                mock.patch.object(stage, "head_etag") as head:
+            response = stage._stage_document(
+                {},
+                {
+                    "document_file_name": "handbook.pdf",
+                    "document_s3_bucket": "bucket",
+                    "document_s3_key": "uploads/document/handbook.pdf",
+                    "document_url": "https://example.org/handbook.pdf",
+                },
+                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+            )
+        self.assertEqual(response["statusCode"], 409)
+        body = json.loads(response["body"])
+        self.assertEqual(
+            body["error"],
+            "document_url is already a crawled web page and cannot be used as a citation",
+        )
+        self.assertEqual(body["document_url"], "https://example.org/handbook.pdf")
+        lookup.assert_called_once_with(self.connection, "https://example.org/handbook.pdf")
+        head.assert_not_called()
+        self.connection.commit.assert_not_called()
 
     def test_public_video_url_passes_validation(self):
         with mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")), \

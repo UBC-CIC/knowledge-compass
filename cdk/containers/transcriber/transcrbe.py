@@ -374,6 +374,13 @@ def get_db_connection():
 
 
 def upsert_source(conn, video_url: str, name: str) -> str:
+    """
+    Insert or refresh the video's sources row.
+
+    sources.url is unique across crawled pages and uploads. The conflict update
+    runs only when the existing row is already a video, so a crawled page (or
+    any other type) is never adopted and its chunks are never replaced.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -381,11 +388,18 @@ def upsert_source(conn, video_url: str, name: str) -> str:
             VALUES (%s, %s, 'video')
             ON CONFLICT (url) DO UPDATE SET
               name = EXCLUDED.name, updated_at = now()
+            WHERE sources.source_type = 'video'::source_type
             RETURNING id
             """,
             (name, video_url),
         )
-        return str(cur.fetchone()[0])
+        row = cur.fetchone()
+        if row:
+            return str(row[0])
+    raise RuntimeError(
+        "video URL is already stored as a non-video source; "
+        "refusing to replace its chunks with a transcript"
+    )
 
 
 def get_existing_chunk_hashes(conn, source_id: str, space_id: str) -> dict:

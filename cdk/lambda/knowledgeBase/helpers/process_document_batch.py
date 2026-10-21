@@ -431,21 +431,34 @@ def _fail_runs(connection, run_ids: list, error_message: str):
 
 
 def _upsert_source(connection, *, url: str, name: str, metadata: dict | None = None) -> str:
+    """
+    Insert or refresh an uploaded document/csv/markdown source.
+
+    On url conflict, only an existing document row is updated. A crawled page
+    or other type that already holds the url is left unchanged and this raises,
+    so its chunks are not replaced.
+    """
     with connection.cursor() as cursor:
         cursor.execute(
             """
             INSERT INTO sources (name, url, source_type, metadata)
             VALUES (%s, %s, 'document', %s::jsonb)
             ON CONFLICT (url) DO UPDATE SET
-              name        = EXCLUDED.name,
-              source_type = EXCLUDED.source_type,
-              metadata    = EXCLUDED.metadata,
-              updated_at  = now()
+              name       = EXCLUDED.name,
+              metadata   = EXCLUDED.metadata,
+              updated_at = now()
+            WHERE sources.source_type = 'document'::source_type
             RETURNING id
             """,
             (name, url, json.dumps(metadata or {})),
         )
-        return str(cursor.fetchone()[0])
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError(
+                "source URL is already stored as a non-document source; "
+                "refusing to replace its chunks"
+            )
+        return str(row[0])
 
 
 def _chunk_metadata(chunk: dict) -> dict:

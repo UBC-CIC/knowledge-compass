@@ -398,7 +398,7 @@ export default function GuidelineMode() {
             <div className="flex flex-wrap items-center justify-between gap-4 rounded-[11px] border border-foreground/12 bg-white px-4 py-3">
               <div>
                 <div className="text-[15px] font-bold">
-                  {isOn ? "Answering from your uploaded guides" : "Answering with the standard prompts"}
+                  {isOn ? "Answering with your uploaded guidelines" : "Answering with prompts"}
                 </div>
                 <div className="mt-0.5 text-[13px] text-foreground/70">
                   {modeChanged ?? "Standard prompts are used until you turn guideline mode on."}
