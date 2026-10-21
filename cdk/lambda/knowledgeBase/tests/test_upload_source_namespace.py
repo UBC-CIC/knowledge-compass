@@ -97,6 +97,8 @@ class StagedLinkCollisionTests(unittest.TestCase):
         for patcher in (
             mock.patch.object(stage, "get_cors_headers", return_value={}),
             mock.patch("socket.getaddrinfo", _public_dns),
+            mock.patch.object(stage, "has_unclaimed_uploads", return_value=True),
+            mock.patch.dict("os.environ", {"KNOWLEDGE_BASE_BUCKET_NAME": "bucket"}),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -113,7 +115,7 @@ class StagedLinkCollisionTests(unittest.TestCase):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "https://example.org/page",
                 },
-                conn, created_by="admin@example.org", created_by_user_id="u1",
+                conn, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 409)
         self.assertEqual(json.loads(response["body"])["existing_source_type"], "web")

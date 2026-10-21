@@ -20,6 +20,7 @@ from helpers.upload_identity import (
     find_existing_upload,
     head_etag,
     is_ingestion_in_flight,
+    is_issued_upload,
     parse_s3_uri,
     rename_source,
     rename_source_url,
@@ -29,6 +30,7 @@ from helpers.upload_identity import (
     update_data_source,
     upload_source_key,
 )
+from helpers.upload_issuance import claim_issued_uploads, has_unclaimed_uploads
 
 DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt")
 
@@ -43,6 +45,19 @@ class StageRejected(Exception):
         super().__init__(body.get("error"))
         self.status_code = status_code
         self.body = body
+
+
+# The client names where its upload landed; only a location the presigned-URL
+# endpoint issues is accepted, so staging cannot read, transcribe, or later
+# delete any other object in the bucket.
+UPLOAD_LOCATION_ERROR = "Uploaded file location must be one issued by the upload URL endpoint"
+# The location must also have been issued to this admin, recently, and not yet
+# staged (helpers/upload_issuance.py), so one admin cannot stage, and through
+# a later replace delete, another admin's upload.
+UPLOAD_NOT_ISSUED_ERROR = (
+    "This upload was not issued to you, has expired, or was already staged. Upload the file again."
+)
+UPLOAD_ALREADY_CLAIMED_ERROR = "This upload is already being staged by another request. Upload the file again."
 
 
 def _response(event, status_code: int, body: dict):
@@ -334,6 +349,7 @@ def stage_file_pair(
     connection,
     *,
     created_by_user_id: str,
+    issued_to: str,
     source_type: str,
     primary_file_name: str,
     primary_s3_bucket: str,
@@ -366,6 +382,15 @@ def stage_file_pair(
     if pair_error:
         raise StageRejected(400, {"error": pair_error})
 
+    if not (
+        is_issued_upload(primary_s3_bucket, primary_s3_key)
+        and is_issued_upload(metadata_s3_bucket, metadata_s3_key)
+    ):
+        raise StageRejected(400, {"error": UPLOAD_LOCATION_ERROR})
+    new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
+    if not has_unclaimed_uploads(connection, issued_to=issued_to, objects=new_uploads):
+        raise StageRejected(400, {"error": UPLOAD_NOT_ISSUED_ERROR})
+
     try:
         primary_etag = head_etag(primary_s3_bucket, primary_s3_key)
         metadata_etag = head_etag(metadata_s3_bucket, metadata_s3_key)
@@ -393,12 +418,15 @@ def stage_file_pair(
     link_metadata = {key: links[key] for key in role_fields if links[key]}
 
     source_key = upload_source_key(source_type, primary_file_name)
-    new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
 
     existing = find_existing_upload(
         connection, data_source_type=source_type, source_key=source_key, file_name=primary_file_name
     )
     _reject_if_not_replaceable(existing, s3_key=primary_s3_key, file_name=primary_file_name)
+    # The first write: a batch keeps going after a rejected item, so nothing
+    # may be written for an item before this succeeds.
+    if not claim_issued_uploads(connection, issued_to=issued_to, objects=new_uploads):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     same_link_config = existing and all(
         existing["metadata"].get(key) == link_metadata.get(key) for key in role_fields
@@ -629,7 +657,7 @@ def _apply_details_without_reprocessing(
     return superseded
 
 
-def _stage_video(event, body, connection, *, created_by: str, created_by_user_id: str):
+def _stage_video(event, body, connection, *, created_by: str, created_by_user_id: str, admin_sub: str):
     file_name = body.get("video_file_name")
     s3_bucket = body.get("video_s3_bucket")
     s3_key = body.get("video_s3_key")
@@ -661,6 +689,11 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             {"error": error, "existing_source_type": occupant, "video_url": video_url},
         )
 
+    if not is_issued_upload(s3_bucket, s3_key):
+        return _response(event, 400, {"error": UPLOAD_LOCATION_ERROR})
+    if not has_unclaimed_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        return _response(event, 400, {"error": UPLOAD_NOT_ISSUED_ERROR})
+
     try:
         etag = head_etag(s3_bucket, s3_key)
     except Exception as e:
@@ -672,6 +705,8 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
         connection, data_source_type="video", source_key=source_key, file_name=file_name
     )
     _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+    if not claim_issued_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     if existing and _content_unchanged(existing, etag):
         superseded = _apply_details_without_reprocessing(
@@ -704,6 +739,8 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             file_name=file_name,
         )
     except Exception as e:
+        # Releases the claim so the same upload can be staged again.
+        connection.rollback()
         logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
         detail = str(e).strip().replace("\n", " ")[:400]
         return _response(
@@ -792,7 +829,7 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
     )
 
 
-def _stage_document(event, body, connection, *, created_by: str, created_by_user_id: str):
+def _stage_document(event, body, connection, *, created_by: str, created_by_user_id: str, admin_sub: str):
     file_name = body.get("document_file_name")
     s3_bucket = body.get("document_s3_bucket")
     s3_key = body.get("document_s3_key")
@@ -828,6 +865,11 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             },
         )
 
+    if not is_issued_upload(s3_bucket, s3_key):
+        return _response(event, 400, {"error": UPLOAD_LOCATION_ERROR})
+    if not has_unclaimed_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        return _response(event, 400, {"error": UPLOAD_NOT_ISSUED_ERROR})
+
     try:
         etag = head_etag(s3_bucket, s3_key)
     except Exception as e:
@@ -844,6 +886,8 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         connection, data_source_type="document", source_key=source_key, file_name=file_name
     )
     _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+    if not claim_issued_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     if existing and _content_unchanged(existing, etag):
         superseded = _apply_details_without_reprocessing(
@@ -944,7 +988,9 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
     )
 
 
-def _stage_pair(event, body, connection, *, source_type: str, created_by: str, created_by_user_id: str):
+def _stage_pair(
+    event, body, connection, *, source_type: str, created_by: str, created_by_user_id: str, admin_sub: str
+):
     if source_type == "csv":
         primary_file_name = body.get("csv_file_name")
         primary_s3_bucket = body.get("csv_s3_bucket")
@@ -969,6 +1015,7 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
         result = stage_file_pair(
             connection,
             created_by_user_id=created_by_user_id,
+            issued_to=admin_sub,
             source_type=source_type,
             primary_file_name=primary_file_name,
             primary_s3_bucket=primary_s3_bucket,
@@ -1057,10 +1104,10 @@ def stage_data_sources(event, body, connection):
         if source_type == "website":
             return _stage_website(event, body, connection, **kwargs)
         if source_type == "video":
-            return _stage_video(event, body, connection, **kwargs)
+            return _stage_video(event, body, connection, admin_sub=admin_sub, **kwargs)
         if source_type == "document":
-            return _stage_document(event, body, connection, **kwargs)
-        return _stage_pair(event, body, connection, source_type=source_type, **kwargs)
+            return _stage_document(event, body, connection, admin_sub=admin_sub, **kwargs)
+        return _stage_pair(event, body, connection, source_type=source_type, admin_sub=admin_sub, **kwargs)
 
     except StageRejected as rejected:
         connection.rollback()

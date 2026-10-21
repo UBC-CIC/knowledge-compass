@@ -123,6 +123,7 @@ def stage_data_sources_batch(event, body, connection):
                 result = stage_file_pair(
                     connection,
                     created_by_user_id=created_by_user_id,
+                    issued_to=admin_sub,
                     source_type=source_type,
                     primary_file_name=primary_file_name,
                     primary_s3_bucket=primary_s3_bucket,

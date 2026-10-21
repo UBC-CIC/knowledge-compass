@@ -762,7 +762,7 @@ Generate an S3 presigned URL for uploading a single knowledge base file.
 ```json
 {
   "presignedUrl": "https://s3.amazonaws.com/bucket/path?...",
-  "key": "uploads/csv/1712345678_data.csv",
+  "key": "uploads/csv/1712345678_3f9c2a1b7e4d8c06_data.csv",
   "bucket": "my-kb-bucket"
 }
 ```
@@ -773,6 +773,9 @@ Generate an S3 presigned URL for uploading a single knowledge base file.
 curl -X GET "https://{api-id}.execute-api.{region}.amazonaws.com/prod/admin/generate-presigned-url?file_name=data.csv&content_type=text/csv" \
   -H "Authorization: eyJraWQiOiJ..."
 ```
+
+**Notes:**
+- The returned `bucket`/`key` are recorded against the calling admin. `POST /admin/data_sources` (and `/batch`) only accept a location issued to the same admin, within 24 hours, and each location can be staged once; anything else is rejected with 400. Upload the file again to get a new location.
 
 ---
 
@@ -809,7 +812,7 @@ Generate presigned S3 upload URLs for multiple files in a single request. Use th
     {
       "file_name": "alumni.csv",
       "presigned_url": "https://s3.amazonaws.com/bucket/path?...",
-      "key": "uploads/csv/1712345678_alumni.csv",
+      "key": "uploads/csv/1712345678_a41e9d03c27b5f18_alumni.csv",
       "bucket": "my-kb-bucket"
     }
   ]
@@ -818,6 +821,7 @@ Generate presigned S3 upload URLs for multiple files in a single request. Use th
 
 **Notes:**
 - Presigned URLs expire after 10 minutes
+- Each returned `bucket`/`key` is bound to the calling admin and can be staged once, within 24 hours (see the single-file endpoint)
 - S3 uploads go directly to S3 and do not pass through WAF
 - Supported content types: `text/csv`, `text/markdown`, `application/json`, `text/json`, `application/octet-stream`
 

@@ -94,6 +94,52 @@ def parse_s3_uri(uri: str | None) -> tuple[str, str] | None:
     return (bucket, key) if bucket and key else None
 
 
+# Every key the presigned-URL helpers issue starts with this prefix
+# (generate_presigned_url*.py _infer_upload_prefix).
+UPLOAD_KEY_PREFIX = "uploads/"
+
+
+def ingest_bucket() -> str | None:
+    return os.environ.get("KNOWLEDGE_BASE_BUCKET_NAME") or None
+
+
+def _transcript_key_prefix() -> str:
+    return os.environ.get("TRANSCRIBE_OUTPUT_PREFIX", "transcripts").rstrip("/") + "/"
+
+
+def is_issued_upload(bucket, key) -> bool:
+    """
+    True if (bucket, key) is where a presigned upload URL could have put the
+    object: the ingest bucket, under uploads/. The client names the location
+    when staging, so this is checked before the object is read, transcribed,
+    stored in metadata, or later deleted. Fails closed if the bucket is unset.
+    """
+    expected = ingest_bucket()
+    return (
+        bool(expected)
+        and isinstance(bucket, str)
+        and isinstance(key, str)
+        and bucket == expected
+        and key.startswith(UPLOAD_KEY_PREFIX)
+        and len(key) > len(UPLOAD_KEY_PREFIX)
+    )
+
+
+def _is_deletable(bucket, key) -> bool:
+    """Uploads and Transcribe output in the ingest bucket; nothing else is ever deleted."""
+    if is_issued_upload(bucket, key):
+        return True
+    expected = ingest_bucket()
+    prefix = _transcript_key_prefix()
+    return (
+        bool(expected)
+        and bucket == expected
+        and isinstance(key, str)
+        and key.startswith(prefix)
+        and len(key) > len(prefix)
+    )
+
+
 def head_etag(bucket: str, key: str) -> str:
     """ETag of an uploaded object; raises if the object does not exist."""
     return s3_client.head_object(Bucket=bucket, Key=key)["ETag"].strip('"')
@@ -349,10 +395,18 @@ def delete_s3_objects(objects: list[tuple[str, str]]) -> list[str]:
     """
     Best-effort delete of superseded or discarded uploads. Call after commit.
     Returns the keys that could not be deleted.
+
+    Locations come from data_sources.metadata, which older rows filled from
+    the request body, so anything outside the ingest bucket's upload and
+    transcript prefixes is refused rather than deleted.
     """
     failed = []
     for bucket, key in objects:
         if not bucket or not key:
+            continue
+        if not _is_deletable(bucket, key):
+            logger.warning("Refusing to delete s3://%s/%s: not an upload or transcript", bucket, key)
+            failed.append(key)
             continue
         try:
             s3_client.delete_object(Bucket=bucket, Key=key)

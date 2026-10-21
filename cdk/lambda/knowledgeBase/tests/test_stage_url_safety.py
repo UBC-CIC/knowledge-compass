@@ -44,6 +44,8 @@ class _Base(unittest.TestCase):
         for patcher in (
             mock.patch.object(stage, "get_cors_headers", return_value={}),
             mock.patch("socket.getaddrinfo", fake_getaddrinfo),
+            mock.patch.object(stage, "has_unclaimed_uploads", return_value=True),
+            mock.patch.dict("os.environ", {"KNOWLEDGE_BASE_BUCKET_NAME": "bucket"}),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -132,7 +134,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "http://169.254.169.254/latest",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 400)
         self.assertEqual(
@@ -154,7 +156,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "https://www.youtube.com/watch?v=x",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 409)
         body = json.loads(response["body"])
@@ -181,7 +183,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "https://www.youtube.com/watch?v=x",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 409)
         self.assertIn("another source", json.loads(response["body"])["error"])
@@ -200,7 +202,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "https://www.youtube.com/watch?v=x",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("does not exist in S3", json.loads(response["body"])["error"])
@@ -217,7 +219,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "document_s3_key": "uploads/document/handbook.pdf",
                     "document_url": "https://example.org/handbook.pdf",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 409)
         body = json.loads(response["body"])
@@ -241,7 +243,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "video_s3_key": "uploads/video/talk.mp4",
                     "video_url": "https://www.youtube.com/watch?v=x",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("does not exist in S3", json.loads(response["body"])["error"])
@@ -257,7 +259,7 @@ class StageVideoAndDocumentUrlSafetyTests(_Base):
                     "document_s3_key": "uploads/document/handbook.pdf",
                     "document_url": "http://127.0.0.1/a.pdf",
                 },
-                self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                self.connection, created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1",
             )
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("document_url is required", json.loads(response["body"])["error"])

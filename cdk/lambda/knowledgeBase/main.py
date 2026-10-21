@@ -219,24 +219,6 @@ def handler(event, context=None):
         resource = event.get("resource", "")
         path = event.get("path", "")
 
-        # Route: GET /admin/generate-presigned-url
-        if method == "GET" and (
-            resource == "/admin/generate-presigned-url"
-            or path.endswith("/admin/generate-presigned-url")
-        ):
-            return generate_presigned_url(event=event)
-
-        # Route: POST /admin/generate-presigned-urls/batch
-        if method == "POST" and (
-            resource == "/admin/generate-presigned-urls/batch"
-            or path.endswith("/admin/generate-presigned-urls/batch")
-        ):
-            try:
-                body = _parse_body(event)
-            except ValueError as e:
-                return _response(event, 400, {"error": str(e)})
-            return generate_presigned_urls_batch(event=event, body=body)
-
         try:
             body = _parse_body(event)
         except ValueError as e:
@@ -248,6 +230,22 @@ def handler(event, context=None):
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
             return _response(event, 500, {"error": "Error connecting to database"})
+
+        # Route: GET /admin/generate-presigned-url
+        # Issued keys are recorded per admin (helpers/upload_issuance.py), so
+        # the presign routes need the database too.
+        if method == "GET" and (
+            resource == "/admin/generate-presigned-url"
+            or path.endswith("/admin/generate-presigned-url")
+        ):
+            return generate_presigned_url(event=event, connection=connection)
+
+        # Route: POST /admin/generate-presigned-urls/batch
+        if method == "POST" and (
+            resource == "/admin/generate-presigned-urls/batch"
+            or path.endswith("/admin/generate-presigned-urls/batch")
+        ):
+            return generate_presigned_urls_batch(event=event, body=body, connection=connection)
 
         # Routes: /admin/guideline* (guideline mode; helpers/guideline_admin.py)
         if is_guideline_route(event):

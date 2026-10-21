@@ -41,6 +41,12 @@ class StageDocumentUrlTests(unittest.TestCase):
         cors = mock.patch.object(stage, "get_cors_headers", return_value={})
         cors.start()
         self.addCleanup(cors.stop)
+        env = mock.patch.dict("os.environ", {"KNOWLEDGE_BASE_BUCKET_NAME": "bucket"})
+        env.start()
+        self.addCleanup(env.stop)
+        issued = mock.patch.object(stage, "has_unclaimed_uploads", return_value=True)
+        issued.start()
+        self.addCleanup(issued.stop)
         head = mock.patch.object(stage, "head_etag", side_effect=AssertionError("S3 must not be called"))
         head.start()
         self.addCleanup(head.stop)
@@ -52,7 +58,7 @@ class StageDocumentUrlTests(unittest.TestCase):
 
     def stage(self, request_body):
         return stage._stage_document(
-            {}, request_body, mock.Mock(), created_by="admin@example.org", created_by_user_id="u1"
+            {}, request_body, mock.Mock(), created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1"
         )
 
     def assert_rejected(self, response):
