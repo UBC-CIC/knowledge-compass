@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { fakeSql, loadHandler, quietly } = require("./_loadHandler.js");
+const { fakeSql, loadHandler, quietly, TEST_ALLOWED_ORIGIN } = require("./_loadHandler.js");
 
 async function invoke(handlerName, sql, event) {
   const { handler } = loadHandler(handlerName, sql);
@@ -185,7 +185,11 @@ test("GET /admin/system-settings returns the service fields, and a normal fallba
 // ── GET /system-settings/service-status (public, anonymous-token) ────────────
 
 const getPublic = (sql) =>
-  invoke("systemMessagesHandler", sql, { httpMethod: "GET", resource: "/system-settings/service-status" });
+  invoke("systemMessagesHandler", sql, {
+    httpMethod: "GET",
+    resource: "/system-settings/service-status",
+    headers: { origin: TEST_ALLOWED_ORIGIN },
+  });
 
 test("the public read returns ONLY service_status and service_message, with a short public cache header", async () => {
   const sql = fakeSql(() => [
@@ -206,7 +210,7 @@ test("the public read returns ONLY service_status and service_message, with a sh
   assert.deepEqual(Object.keys(res.body).sort(), ["service_message", "service_status"]);
   assert.deepEqual(res.body, { service_status: "banner", service_message: "Planned work tonight." });
   assert.equal(res.headers["Cache-Control"], "public, max-age=30");
-  assert.ok(res.headers["Access-Control-Allow-Origin"] !== undefined, "CORS headers are kept");
+  assert.equal(res.headers["Access-Control-Allow-Origin"], TEST_ALLOWED_ORIGIN, "CORS headers are kept");
 });
 
 test("the public read selects only the two columns", async () => {

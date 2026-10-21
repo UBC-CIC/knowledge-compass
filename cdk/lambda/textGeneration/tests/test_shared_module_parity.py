@@ -27,6 +27,10 @@ PARITY_GROUPS = [
         "lambda/textGeneration/helpers/eval_scoring.py",
         "lambda/knowledgeBase/helpers/eval_scoring.py",
     ),
+    (
+        "lambda/textGeneration/helpers/cors.py",
+        "lambda/knowledgeBase/helpers/cors.py",
+    ),
     # Synthetic golden set (no personal data); the validate_space task reads the KB copy.
     (
         "lambda/textGeneration/tests/eval/golden_queries.json",

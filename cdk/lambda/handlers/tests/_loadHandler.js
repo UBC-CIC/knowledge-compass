@@ -69,7 +69,13 @@ const fakeToken = (payload, secret = "test-jwt-secret") =>
 /** Claims of a fake-signed token. */
 const decodeFakeToken = (token) => JSON.parse(token.slice("signed:".length));
 
+// The CORS allow-list every loaded handler reads. Tests that need a
+// cross-origin response send `Origin: TEST_ALLOWED_ORIGIN`.
+const TEST_ALLOWED_ORIGINS_PARAM = "/test/API/AllowedOrigins";
+const TEST_ALLOWED_ORIGIN = "https://app.example.test";
+
 function stubs(sql, secrets = {}, ssmParameters = {}) {
+  ssmParameters = { [TEST_ALLOWED_ORIGINS_PARAM]: TEST_ALLOWED_ORIGIN, ...ssmParameters };
   class FakeCommand {
     constructor(input) {
       this.input = input;
@@ -121,14 +127,14 @@ function stubs(sql, secrets = {}, ssmParameters = {}) {
 
 /**
  * Fresh-require `handlers/<name>.js` (and its utils) wired to `sql`.
- * ALLOWED_ORIGIN_PARAM is unset so CORS resolves to "*" without SSM.
+ * ALLOWED_ORIGIN_PARAM points at a fake parameter allowing TEST_ALLOWED_ORIGIN.
  * options.secrets maps a Secrets Manager SecretId to its SecretString (or an
  * Error to throw); other ids return the default DB credentials.
  * options.ssmParameters maps an SSM parameter Name to its Value (or an Error
  * to throw); other names throw.
  */
 function loadHandler(name, sql, options = {}) {
-  delete process.env.ALLOWED_ORIGIN_PARAM;
+  process.env.ALLOWED_ORIGIN_PARAM = TEST_ALLOWED_ORIGINS_PARAM;
   const handlersDir = path.resolve(__dirname, "..");
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(handlersDir) && !key.includes(`${path.sep}tests${path.sep}`)) {
@@ -160,4 +166,6 @@ async function quietly(fn) {
   }
 }
 
-module.exports = { fakeSql, loadHandler, quietly, fakeToken, decodeFakeToken };
+module.exports = {
+  fakeSql, loadHandler, quietly, fakeToken, decodeFakeToken, TEST_ALLOWED_ORIGINS_PARAM, TEST_ALLOWED_ORIGIN,
+};

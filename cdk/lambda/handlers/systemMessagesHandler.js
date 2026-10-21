@@ -43,9 +43,12 @@ const initConnection = async () => {
     }
 };
 
+// HTTP methods this function serves (OpenAPI_Swagger_Definition.yaml).
+const SERVED_METHODS = "GET";
+
 const createResponse = async (event) => ({
     statusCode: 200,
-    headers: await getCorsHeaders(event),
+    headers: await getCorsHeaders(event, SERVED_METHODS),
     body: "",
 });
 

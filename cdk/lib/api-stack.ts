@@ -1850,6 +1850,8 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     lambdaTextGen.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
+    // Methods this function serves (OpenAPI_Swagger_Definition.yaml), for CORS.
+    lambdaTextGen.addEnvironment('CORS_ALLOWED_METHODS', 'POST');
     lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
@@ -1983,6 +1985,8 @@ export class ApiGatewayStack extends cdk.Stack {
     }));
 
     lambdaKnowledgeBase.addEnvironment('ALLOWED_ORIGIN_PARAM', this.allowedOriginsParamName);
+    // Methods this function serves (OpenAPI_Swagger_Definition.yaml), for CORS.
+    lambdaKnowledgeBase.addEnvironment('CORS_ALLOWED_METHODS', 'DELETE,GET,PATCH,POST,PUT');
     lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],

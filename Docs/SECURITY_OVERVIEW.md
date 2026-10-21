@@ -187,6 +187,8 @@ Specialization Explorer is an AI-powered conversational application that helps u
 
 - Dynamic origin validation from configuration
 - Restricted to known application domains
+- Fails closed: a missing `ALLOWED_ORIGIN_PARAM`, an SSM read failure, or a `*` entry in the parameter never yields a wildcard origin (failures are not cached)
+- `Access-Control-Allow-Methods` lists only the methods each function serves
 - Proper headers enforced on all error responses
 
 ---
