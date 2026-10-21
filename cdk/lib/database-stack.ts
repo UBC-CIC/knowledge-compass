@@ -165,13 +165,10 @@ export class DatabaseStack extends Stack {
     const rdsProxyRole = new iam.Role(this, `${id}-DBProxyRole`, {
       assumedBy: new iam.ServicePrincipal("rds.amazonaws.com"),
     });
-
-    rdsProxyRole.addToPolicy(
-      new iam.PolicyStatement({
-        resources: ["*"],
-        actions: ["rds-db:connect"],
-      })
-    );
+    // No wildcard rds-db:connect here: the proxy authenticates to the DB with the
+    // Secrets Manager credentials below (addProxy grants read on them), and the
+    // instance-scoped grantConnect further down covers IAM auth. A "*" grant would
+    // allow connecting as any DB user (incl. app_tc / master) on any instance.
 
     /**
      * Create RDS Proxy for database connections with all secrets
