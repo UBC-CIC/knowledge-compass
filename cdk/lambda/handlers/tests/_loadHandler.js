@@ -82,7 +82,11 @@ function stubs(sql, secrets = {}, ssmParameters = {}) {
     }
   }
   return {
-    postgres: () => sql,
+    // Records the connection config so tests can assert on it (e.g. TLS).
+    postgres: (config) => {
+      sql.connectionConfig = config;
+      return sql;
+    },
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
         async send(command) {
