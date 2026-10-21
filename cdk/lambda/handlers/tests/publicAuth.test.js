@@ -94,6 +94,14 @@ function load(relativePath, extraFakes = {}, jwt = fakeJwt()) {
       PostToConnectionCommand: FakeCommand,
       DeleteConnectionCommand,
     },
+    // websocket/messageLimit.js requires postgres at load time (provided by the
+    // Lambda layer, not installed locally). These cases never configure the
+    // database, so a call here is a test bug.
+    postgres: () => {
+      const sql = () => Promise.reject(new Error("unexpected database call"));
+      sql.end = async () => {};
+      return sql;
+    },
     ...extraFakes,
   };
   delete process.env.ALLOWED_ORIGIN_PARAM;
