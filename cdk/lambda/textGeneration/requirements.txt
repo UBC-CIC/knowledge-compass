@@ -1,2 +1,7 @@
+# Not installed at deploy time: lambdaTextGen is a plain zip asset (see
+# cdk/lib/api-stack.ts). boto3 comes from the Lambda Python 3.12 runtime and
+# psycopg2 from the psycopgLambdaLayer (cdk/layers/psycopg2.zip). These pins
+# record what ships, for local test environments; bump psycopg2-binary only
+# together with a rebuilt layer zip.
 boto3>=1.35.0
-psycopg2-binary
+psycopg2-binary==2.9.11
