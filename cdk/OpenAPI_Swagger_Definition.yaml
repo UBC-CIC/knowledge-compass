@@ -4024,6 +4024,29 @@ paths:
           description: User not found
         "401":
           description: Unauthorized
+        "429":
+          description: >-
+            The user already created 20 chat sessions this UTC day
+            (DAILY_SESSION_LIMIT_EXCEEDED). Deleting a session does not free a
+            slot; existing sessions can still be used.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [DAILY_SESSION_LIMIT_EXCEEDED]
+                  message:
+                    type: string
+                  session_usage:
+                    type: object
+                    properties:
+                      limit:
+                        type: integer
+                      reset_at:
+                        type: string
+                        format: date-time
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
