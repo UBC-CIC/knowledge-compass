@@ -1355,7 +1355,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // it needs the database. See handlers/utils/userCredential.js.
 
     // Staff sign-up email domains (SecureString, comma list). preSignUp
-    // enforces it; userFunction refuses these domains on PUT /user/{user_id}.
+    // enforces it.
     const allowedEmailDomainsParamName = "/KC/AllowedEmailDomains";
 
     const preSignupLambda = new lambda.Function(this, `preSignupLambda`, {
@@ -2101,16 +2101,6 @@ export class ApiGatewayStack extends cdk.Stack {
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
-
-    // PUT /user/{user_id} refuses staff sign-up domains (handlers/utils/staffEmailDomains.js).
-    // SecureString under the AWS-managed aws/ssm key, so no KMS grant is needed.
-    lambdaUserFunction.addEnvironment('ALLOWED_EMAIL_DOMAINS', allowedEmailDomainsParamName);
-    lambdaUserFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ["ssm:GetParameter"],
-      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${allowedEmailDomainsParamName}`],
-    }));
-
 
     lambdaUserFunction.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
