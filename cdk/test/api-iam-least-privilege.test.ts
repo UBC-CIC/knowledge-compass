@@ -27,8 +27,9 @@ const SPLIT_FUNCTIONS = [
   "userFunction",
   "lambdaTextGen",
   "lambdaKnowledgeBase",
+  "chatSessionFunction",
 ];
-const SHARED_FUNCTIONS = ["systemMessagesFunction", "chatSessionFunction", "adminFunction"];
+const SHARED_FUNCTIONS = ["systemMessagesFunction", "adminFunction"];
 const WEBSOCKET_FUNCTION_NAMES = ["KC-Api-ConnectFunction", "KC-Api-DisconnectFunction", "KC-Api-DefaultFunction"];
 const COGNITO_TRIGGER_NAMES = ["KC-Api-addMemberOnSignUp", "KC-Api-preSignupLambda"];
 
@@ -150,7 +151,7 @@ describe("API Lambda IAM least privilege", () => {
     expect(cognitoStatements[0].Resource).toEqual({ "Fn::GetAtt": [poolId, "Arn"] });
   });
 
-  test("authorizers, userFunction, text generation and knowledge base have their own roles", () => {
+  test("authorizers, userFunction, text generation, knowledge base and chat sessions have their own roles", () => {
     const shared = new Set(SHARED_FUNCTIONS.map(roleOf));
     expect(shared.size).toBe(1);
     const sharedRole = [...shared][0];
@@ -164,7 +165,7 @@ describe("API Lambda IAM least privilege", () => {
     expect(onShared).toEqual([...SHARED_FUNCTIONS].sort());
   });
 
-  test("authorizer and public-token roles hold only secret/SSM/X-Ray reads", () => {
+  test("authorizer, public-token and chat session roles hold only secret/SSM/X-Ray reads", () => {
     const allowed = new Set([
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
@@ -179,6 +180,8 @@ describe("API Lambda IAM least privilege", () => {
       adminLambdaAuthorizer: "AWSLambdaVPCAccessExecutionRole",
       userLambdaAuthorizer: "AWSLambdaBasicExecutionRole",
       userFunction: "AWSLambdaVPCAccessExecutionRole",
+      // Also where the eval signing-secret read lands when enableEval is on (f-7277748f).
+      chatSessionFunction: "AWSLambdaVPCAccessExecutionRole",
     };
     for (const [fnId, policyName] of Object.entries(managed)) {
       const roleId = roleOf(fnId);

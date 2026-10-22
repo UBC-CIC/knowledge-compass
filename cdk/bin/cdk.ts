@@ -9,8 +9,11 @@ import { CICDStack } from "../lib/cicd-stack";
 import { IngestionStack } from "../lib/ingestion-stack";
 import { EvalJobsStack, EvalStack, evalSigningSecretName } from "../lib/eval-stack";
 import { CostStack } from "../lib/cost-stack";
+import { ServiceLogRetention } from "../lib/log-retention";
 
 const app = new cdk.App();
+// 90-day retention on every Lambda and CodeBuild log group (lib/log-retention.ts).
+cdk.Aspects.of(app).add(new ServiceLogRetention());
 
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,

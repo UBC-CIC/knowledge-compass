@@ -87,6 +87,11 @@ const markdownComponents = {
       // aren't clickable; the source is listed under "More resources" instead.
       <span className="font-semibold">{children}</span>
     ),
+  // Never load images from a reply: the URL is model/retrieval-controlled, so
+  // fetching it could leak conversation data to a third-party host. Show the
+  // alt text instead.
+  img: ({ alt }: ComponentProps<"img"> & ExtraProps) =>
+    alt ? <span>{alt}</span> : null,
   blockquote: ({ ...props }) => (
     <blockquote
       className="my-3 rounded-[9px] bg-muted px-3.5 py-3 font-serif text-[15.5px] leading-relaxed"

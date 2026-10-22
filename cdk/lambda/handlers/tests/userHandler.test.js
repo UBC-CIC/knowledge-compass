@@ -270,6 +270,12 @@ test("responses are not logged", async () => {
   assert.ok(!logged.some((line) => line.includes("signed:")), "credential must not be logged");
 });
 
+test("database connection verifies the RDS Proxy TLS certificate", async () => {
+  const sql = historySql();
+  await invoke(sql, historyEvent());
+  assert.equal(sql.connectionConfig?.ssl?.rejectUnauthorized, true);
+});
+
 test("removed and unknown routes fail without leaking details", async () => {
   for (const resource of ["/user/exampleEndpoint", "/user/nope"]) {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource });

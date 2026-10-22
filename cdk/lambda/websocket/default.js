@@ -10,6 +10,11 @@
  * frame-supplied user_id is checked against it and never forwarded.
  * generate_text queries are truncated to system_settings.max_characters_per_user_message
  * (messageLimit.js), which falls back to 2000 when that read misses.
+ *
+ * generate_text frames are rate limited per connection (fixed window,
+ * WS_GENERATE_RATE_LIMIT per WS_GENERATE_RATE_WINDOW_SECONDS) before any other
+ * work; over the limit the frame gets a RATE_LIMITED error event and nothing is
+ * invoked. A limiter fault fails closed. Pings are not counted.
  */
 
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
@@ -19,7 +24,7 @@ const {
   DeleteConnectionCommand,
 } = require("@aws-sdk/client-apigatewaymanagementapi");
 const { verifyAccessToken } = require("./accessToken.js");
-const { getConnectionUserId } = require("./connections.js");
+const { getConnectionUserId, consumeGenerateAllowance, rateLimitConfig } = require("./connections.js");
 const messageLimit = require("./messageLimit.js");
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +75,7 @@ async function closeConnection(event) {
 const SESSION_EXPIRED_MESSAGE = "Your session has expired. Please refresh the page and try again.";
 const GENERIC_MESSAGE = "Sorry, something went wrong. Please try again.";
 const RECONNECT_MESSAGE = "Your connection was refreshed. Please send your message again.";
+const RATE_LIMITED_MESSAGE = "You're sending messages a little quickly. Please wait a moment, then try again.";
 
 exports.handler = async (event) => {
   const connectionId = event.requestContext.connectionId;
@@ -114,6 +120,21 @@ exports.handler = async (event) => {
     const { action, query, chat_session_id, user_id, token } = body;
 
     if (action === "generate_text") {
+      // Count every generate_text frame (valid or not) before doing any work.
+      let allowed;
+      try {
+        allowed = await consumeGenerateAllowance(connectionId, rateLimitConfig());
+      } catch (err) {
+        console.error("WebSocket rate limit check failed", { connectionId, error: err?.name });
+        await sendErrorEvent(event, "Internal server error", GENERIC_MESSAGE);
+        return { statusCode: 500, body: JSON.stringify({ error: "Internal server error" }) };
+      }
+      if (!allowed) {
+        console.warn("WebSocket frame rejected: rate limited", { connectionId });
+        await sendErrorEvent(event, "RATE_LIMITED", RATE_LIMITED_MESSAGE);
+        return { statusCode: 429, body: JSON.stringify({ error: "RATE_LIMITED" }) };
+      }
+
       if (typeof query !== "string" || query.trim().length === 0) {
         return { statusCode: 400, body: JSON.stringify({ error: "query is required and must be a non-empty string" }) };
       }

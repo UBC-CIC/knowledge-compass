@@ -1107,6 +1107,10 @@ export class ApiGatewayStack extends cdk.Stack {
     db.secretPathUser.grantRead(userFunctionRole);
     const textGenRole = newExecutionRole("textGenRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(textGenRole);
+    // chatSessionFunction: own role so the eval signing-secret grant (when enabled)
+    // reaches only the handler that verifies eval tags (finding f-7277748f).
+    const chatSessionRole = newExecutionRole("chatSessionRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(chatSessionRole);
     const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(knowledgeBaseRole);
     // Shared token that authenticates lambdaKnowledgeBase self-invocations
@@ -2197,7 +2201,7 @@ export class ApiGatewayStack extends cdk.Stack {
         memorySize: 512,
         reservedConcurrentExecutions: reservedConcurrency(25),
         layers: [postgres],
-        role: lambdaRole,
+        role: chatSessionRole,
         tracing: lambda.Tracing.ACTIVE,
       }
     );
@@ -2218,9 +2222,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Evaluation-harness session tags (handlers/utils/evalTag.js). Read-only
     // access to the one signing secret; "-??????" is the random suffix Secrets
-    // Manager appends to secret ARNs. Note: this function uses the shared
-    // postgres lambdaRole (which reads the DB user secret), so the grant lands
-    // on that role; only chatSessionHandler reads the secret.
+    // Manager appends to secret ARNs. Lands on chatSessionRole only.
     if (props.evalSigningSecretName) {
       lambdaChatSessionFunction.addEnvironment("EVAL_SIGNING_SECRET_NAME", props.evalSigningSecretName);
       lambdaChatSessionFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -2372,6 +2374,10 @@ export class ApiGatewayStack extends cdk.Stack {
         JWT_ISSUER: jwtIssuer,
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+        // Per-connection generate_text limit (fixed window, stored on the
+        // WsConnections item). default.js applies the same defaults.
+        WS_GENERATE_RATE_LIMIT: "10",
+        WS_GENERATE_RATE_WINDOW_SECONDS: "60",
       },
       layers: [jwt, postgres],
       functionName: `${id}-DefaultFunction`,
@@ -2417,14 +2423,17 @@ export class ApiGatewayStack extends cdk.Stack {
     disconnectFunction.addToRolePolicy(wsPolicy);
     // defaultFunction gets a statement scoped to this API's stage below.
 
-    // Connection binding store: each function gets only the one action it uses.
+    // Connection binding store: each function gets only the actions it uses.
     // Each has its own role (no shared `role:`), so these grants stay per function.
+    // defaultFunction reads the binding and updates the rate-limit counter on the
+    // same item; its UpdateItem is conditioned on attribute_exists, so it cannot
+    // create records.
     for (const fn of [connectFunction, disconnectFunction, defaultFunction]) {
       fn.addEnvironment("CONNECTIONS_TABLE_NAME", wsConnectionsTable.tableName);
     }
     wsConnectionsTable.grant(connectFunction, "dynamodb:PutItem");
     wsConnectionsTable.grant(disconnectFunction, "dynamodb:DeleteItem");
-    wsConnectionsTable.grant(defaultFunction, "dynamodb:GetItem");
+    wsConnectionsTable.grant(defaultFunction, "dynamodb:GetItem", "dynamodb:UpdateItem");
 
     // Anonymous surface: the WebSocket functions' auto-created roles carry the same
     // boundary as the request-handling roles above.
@@ -2443,7 +2452,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // enforces that binding and re-verifies the frame token on every message. An
     // authorizer could not echo the subprotocol or write the binding, so it would only
     // add a second copy of the verification.
-    new apigatewayv2.WebSocketRoute(this, `${id}-ConnectRoute`, {
+    const connectRoute = new apigatewayv2.WebSocketRoute(this, `${id}-ConnectRoute`, {
       webSocketApi: this.webSocketApi,
       routeKey: "$connect",
       integration: new WebSocketLambdaIntegration(
@@ -2461,7 +2470,7 @@ export class ApiGatewayStack extends cdk.Stack {
       ),
     });
 
-    new apigatewayv2.WebSocketRoute(this, `${id}-DefaultRoute`, {
+    const defaultRoute = new apigatewayv2.WebSocketRoute(this, `${id}-DefaultRoute`, {
       webSocketApi: this.webSocketApi,
       routeKey: "$default",
       integration: new WebSocketLambdaIntegration(
@@ -2488,20 +2497,35 @@ export class ApiGatewayStack extends cdk.Stack {
       stageName: "prod",
       autoDeploy: true,
       // Stage-wide backstop against anonymous message floods (all routes, all clients).
+      // These throttles are aggregate, not per client. WAFv2 cannot attach to a
+      // WebSocket API, so per-client protection is the per-connection generate_text
+      // limit in lambda/websocket/default.js (WS_GENERATE_RATE_* above).
       defaultRouteSettings: {
         throttlingRateLimit: 20,
         throttlingBurstLimit: 40,
         // Explicit: data trace would log the client frames.
         dataTraceEnabled: false,
       },
+      // routeSettings is untyped on the L1, so keys pass through to CloudFormation
+      // verbatim (PascalCase). $connect: handshakes happen once per page load or
+      // backed-off reconnect, so 5 rps caps handshake floods while ~100 clients can
+      // reconnect within ~20 s. $default: pinned at the stage default because every
+      // idle socket pings it every 30 s (~600 idle sockets at 20 rps); going lower
+      // would throttle heartbeats. $disconnect inherits the stage default.
+      routeSettings: {
+        "$connect": { ThrottlingRateLimit: 5, ThrottlingBurstLimit: 10 },
+        "$default": { ThrottlingRateLimit: 20, ThrottlingBurstLimit: 40 },
+      },
       accessLogSettings: {
         destinationArn: wsAccessLogGroup.logGroupArn,
         // No $context.message: the client frame holds the visitor's question and
         // token, so it is never logged. No $context.authorizer.* either: this API has
         // no API Gateway authorizer (websocket/connect.js verifies the token itself),
-        // so those fields would always be empty.
+        // so those fields would always be empty. `ip` (same key as the REST access
+        // log) lets abuse on the socket be traced to a client and matched to WAF logs.
         format: JSON.stringify({
           requestId: "$context.requestId",
+          ip: "$context.identity.sourceIp",
           requestTime: "$context.requestTime",
           routeKey: "$context.routeKey",
           connectionId: "$context.connectionId",
@@ -2511,6 +2535,8 @@ export class ApiGatewayStack extends cdk.Stack {
     });
 
     this.wsStage.node.addDependency(apiGatewayAccount);
+    // RouteSettings for a route key that does not exist yet fails the deploy.
+    this.wsStage.node.addDependency(connectRoute, defaultRoute);
 
     // $default posts error events and closes sockets that have no connection record
     // (DeleteConnection), on this API's stage only. Same manual ARN template as wsPolicy

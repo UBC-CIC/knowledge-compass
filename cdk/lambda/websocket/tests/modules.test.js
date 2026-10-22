@@ -97,6 +97,7 @@ test("every connection-store call fails closed without CONNECTIONS_TABLE_NAME", 
     () => mod.putConnection("conn-1", USER),
     () => mod.getConnectionUserId("conn-1"),
     () => mod.deleteConnection("conn-1"),
+    () => mod.consumeGenerateAllowance("conn-1", mod.RATE_LIMIT_DEFAULTS),
   ]) {
     await assert.rejects(call(), /CONNECTIONS_TABLE_NAME is not configured/);
   }
