@@ -191,6 +191,17 @@ Specialization Explorer is an AI-powered conversational application that helps u
 - `Access-Control-Allow-Methods` lists only the methods each function serves
 - Proper headers enforced on all error responses
 
+### 4.5 Frontend Security Headers
+
+Amplify Hosting adds these to every file it serves (`spaSecurityHeaders` in `cdk/lib/amplify-stack.ts`):
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy` denying camera, microphone, geolocation, payment and USB
+- A Content Security Policy: same-origin scripts only, no framing (`frame-ancestors 'none'`), and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
+
+The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are logged in the browser console but nothing is blocked. After a dev deploy shows no violations, rename the header to `Content-Security-Policy`. Header changes take effect on the branch's next Amplify deploy.
+
 ---
 
 ## 5. Network Security
