@@ -230,6 +230,26 @@ describe("API Lambda IAM least privilege", () => {
     }
   });
 
+  test("the guest retention job has its own role with only DB secret reads, on a daily schedule", () => {
+    const fnId = fnIdByName("KC-Api-retentionFunction");
+    const roleId = roleOf(fnId);
+    const otherRoles = Object.entries(resources)
+      .filter(([id, r]) => id !== fnId && r.Type === "AWS::Lambda::Function")
+      .map(([, r]) => r.Properties.Role?.["Fn::GetAtt"]?.[0]);
+    expect(otherRoles).not.toContain(roleId);
+    for (const action of allowActionsFor(roleId)) {
+      expect(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]).toContain(action);
+    }
+    expect(JSON.stringify(resources[roleId].Properties.ManagedPolicyArns)).toContain("AWSLambdaVPCAccessExecutionRole");
+
+    const rules = Object.values(resources).filter(
+      (r: any) => r.Type === "AWS::Events::Rule" && r.Properties.Name === "KC-Api-GuestRetentionDaily"
+    );
+    expect(rules).toHaveLength(1);
+    expect((rules[0] as any).Properties.ScheduleExpression).toBe("cron(0 9 * * ? *)");
+    expect(JSON.stringify((rules[0] as any).Properties.Targets)).toContain(fnId);
+  });
+
   test("ingestion and Bedrock actions are confined to the roles that use them", () => {
     const kbRole = roleOf("lambdaKnowledgeBase");
     const textGenRole = roleOf("lambdaTextGen");
