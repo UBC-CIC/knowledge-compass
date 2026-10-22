@@ -16,6 +16,7 @@ import {
 } from "@/lib/demo";
 import { getPublicToken as getUserToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
+import { SessionLimitError, sessionLimitError } from "@/lib/sessionLimit";
 
 const DEFAULT_WELCOME_MESSAGE = "";
 const DEFAULT_DISCLAIMER =
@@ -202,6 +203,8 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
       );
 
       if (!createResponse.ok) {
+        const limitError = await sessionLimitError(createResponse);
+        if (limitError) throw limitError;
         throw new Error("Failed to create chat session");
       }
 
@@ -213,6 +216,8 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
 
       return newSession;
     } catch (err) {
+      // The caller shows the daily session limit to the user.
+      if (err instanceof SessionLimitError) throw err;
       console.error("Error creating chat session:", err);
       return null;
     }

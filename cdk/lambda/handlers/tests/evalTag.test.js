@@ -43,6 +43,7 @@ async function captured(fn) {
 function createSql() {
   return fakeSql((text) => {
     if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
     if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
     return [];
   });

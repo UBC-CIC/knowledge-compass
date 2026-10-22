@@ -63,6 +63,17 @@ const parseBody = (body) => {
   }
 };
 
+// New chat sessions one user may create per UTC day (finding F19, decision
+// D12). Counted at creation in user_daily_usage.sessions_created (migration
+// 047), so deleting a session does not free a slot.
+const DAILY_SESSION_LIMIT = 20;
+const DAILY_SESSION_LIMIT_MESSAGE =
+  "You've started the most new chats allowed for today. You can keep going in one of your existing chats, or start a new one tomorrow.";
+
+// Start of the next UTC day, when the session count resets.
+const nextUtcMidnight = (now) =>
+  new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString();
+
 const FEEDBACK_RATINGS = ["up", "down"];
 const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
 
@@ -184,29 +195,56 @@ exports.handler = async (event) => {
         // anything else creates a normal session (see utils/evalTag.js).
         const evalTag = await resolveEvalTag(body, userId);
 
-        const inserted = evalTag
-          ? await sqlConnection`
-          INSERT INTO chat_sessions (
-            id, user_id, title, created_at, last_active_at, metadata,
-            eval_run_id, prompt_mode_override
-          )
-          VALUES (
-            ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata},
-            ${evalTag.runId}, ${evalTag.mode}
-          )
-          RETURNING id, user_id, title, created_at, last_active_at,
-                    metadata - 'guide_state' AS metadata
-        `
-          : await sqlConnection`
-          INSERT INTO chat_sessions (
-            id, user_id, title, created_at, last_active_at, metadata
-          )
-          VALUES (
-            ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata}
-          )
-          RETURNING id, user_id, title, created_at, last_active_at,
-                    metadata - 'guide_state' AS metadata
-        `;
+        // Claim a daily session slot and create the session in one
+        // transaction: the conditional upsert lets concurrent creates pass
+        // only while the count stays within the limit, and a failed insert
+        // rolls the claim back.
+        const inserted = await sqlConnection.begin(async (tx) => {
+          const [slot] = await tx`
+            INSERT INTO user_daily_usage (user_id, usage_date, sessions_created, updated_at)
+            VALUES (${userId}, (now() AT TIME ZONE 'UTC')::date, 1, now())
+            ON CONFLICT (user_id, usage_date) DO UPDATE
+               SET sessions_created = user_daily_usage.sessions_created + 1,
+                   updated_at = now()
+             WHERE user_daily_usage.sessions_created < ${DAILY_SESSION_LIMIT}
+            RETURNING sessions_created
+          `;
+          if (!slot) return null;
+
+          return evalTag
+            ? await tx`
+            INSERT INTO chat_sessions (
+              id, user_id, title, created_at, last_active_at, metadata,
+              eval_run_id, prompt_mode_override
+            )
+            VALUES (
+              ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata},
+              ${evalTag.runId}, ${evalTag.mode}
+            )
+            RETURNING id, user_id, title, created_at, last_active_at,
+                      metadata - 'guide_state' AS metadata
+          `
+            : await tx`
+            INSERT INTO chat_sessions (
+              id, user_id, title, created_at, last_active_at, metadata
+            )
+            VALUES (
+              ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata}
+            )
+            RETURNING id, user_id, title, created_at, last_active_at,
+                      metadata - 'guide_state' AS metadata
+          `;
+        });
+
+        if (!inserted) {
+          response.statusCode = 429;
+          response.body = JSON.stringify({
+            error: "DAILY_SESSION_LIMIT_EXCEEDED",
+            message: DAILY_SESSION_LIMIT_MESSAGE,
+            session_usage: { limit: DAILY_SESSION_LIMIT, reset_at: nextUtcMidnight(now) },
+          });
+          break;
+        }
 
         response.statusCode = 201;
         data = inserted[0];
