@@ -110,7 +110,7 @@ These endpoints require a valid Cognito token (`userAuthorizer`).
 
 ## Create User
 
-Create a new user record (guest or student).
+Create a new guest user record. Guests never hold an email address.
 
 **Endpoint:** `POST /user`
 
@@ -118,25 +118,24 @@ Create a new user record (guest or student).
 
 ```json
 {
-  "role": "student",
-  "email": "student@example.com",
   "display_name": "Jane Doe"
 }
 ```
 
 **Parameters:**
 
-- `role` (string, optional): `student` or `admin` — defaults to `student`
-- `email` (string, optional): User email
-- `display_name` (string, optional): Display name
+- `display_name` (string, optional): Display name, trimmed and cut to 64 characters
+
+Any other field (`role`, `email`, `metadata`) is ignored. New users are always `student` guests.
 
 **Response:**
 
 ```json
 {
   "userId": "uuid",
+  "credential": "eyJhbGciOi...",
   "role": "student",
-  "email": "student@example.com",
+  "email": null,
   "display_name": "Jane Doe",
   "created_at": "2024-01-15T10:30:00.000Z",
   "last_seen_at": "2024-01-15T10:30:00.000Z"
@@ -149,7 +148,7 @@ Create a new user record (guest or student).
 curl -X POST "https://{api-id}.execute-api.{region}.amazonaws.com/prod/user" \
   -H "Authorization: eyJraWQiOiJ..." \
   -H "Content-Type: application/json" \
-  -d '{"role": "student", "email": "student@example.com"}'
+  -d '{"display_name": "Jane Doe"}'
 ```
 
 ---
@@ -171,35 +170,6 @@ Retrieve a user by ID.
 ```bash
 curl -X GET "https://{api-id}.execute-api.{region}.amazonaws.com/prod/user/uuid" \
   -H "Authorization: eyJraWQiOiJ..."
-```
-
----
-
-## Update User Email
-
-Update a user's email address.
-
-**Endpoint:** `PUT /user/{user_id}`
-
-**Path Parameters:**
-
-- `user_id` (uuid, required): The user's UUID
-
-**Request Body:**
-
-```json
-{ "email": "newemail@example.com" }
-```
-
-**Response:** `200 OK`
-
-**Example (cURL):**
-
-```bash
-curl -X PUT "https://{api-id}.execute-api.{region}.amazonaws.com/prod/user/uuid" \
-  -H "Authorization: eyJraWQiOiJ..." \
-  -H "Content-Type: application/json" \
-  -d '{"email": "newemail@example.com"}'
 ```
 
 ---

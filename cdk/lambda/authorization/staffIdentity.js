@@ -1,8 +1,9 @@
 /**
  * Staff (Cognito) identity in the users table, keyed on the Cognito `sub`.
  *
- * users.email is guest-writable (PUT /user/{user_id}), so it must never decide
- * which row is an administrator (finding f-23c5bf7c). Staff rows have
+ * users.email must never decide which row is an administrator (finding
+ * f-23c5bf7c); guests could once write it through PUT /user/{user_id}, and
+ * migration 046 cleared those values. Staff rows have
  * identity_source = 'cognito' and cognito_sub = the Cognito sub (migration
  * 039). An email match is used only to:
  *   (a) link a legacy 'cognito' row that has no sub yet and owns no chat

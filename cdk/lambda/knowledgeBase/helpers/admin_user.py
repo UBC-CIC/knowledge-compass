@@ -1,8 +1,8 @@
 """
 Acting administrator's users row, keyed on the Cognito sub.
 
-users.email is guest-writable (PUT /user/{user_id}), so it never decides which
-row is an administrator (finding f-23c5bf7c). Staff rows have
+users.email never decides which row is an administrator (finding
+f-23c5bf7c); guests could once write it through PUT /user/{user_id}. Staff rows have
 identity_source = 'cognito' and cognito_sub = the Cognito sub from the admin
 authorizer (requestContext.authorizer.userId); see migration 039.
 
