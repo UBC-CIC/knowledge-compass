@@ -781,74 +781,99 @@ exports.handler = async (event) => {
         // Helper: compute totals (either all-time or between startDate and endDate).
         // Evaluation-harness sessions (cs.eval_run_id set, migration 035) are
         // test traffic and are excluded from every count.
+        // Each total adds analytics_archive (migration 048): per-day counts of
+        // guests deleted by the retention job (handlers/retentionHandler.js).
+        // A guest is either fully live or fully archived, so live and archived
+        // distinct-user counts never overlap. Archive rows are per day, so a
+        // range includes its whole first day.
         const fetchTotals = async (startDateIso /* string | null */, endDateIso /* string | null */) => {
           if (!startDateIso) {
             const totalsRows = await sqlConnection`
               SELECT
-                (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs
-                  WHERE cs.eval_run_id IS NULL) AS users,
-                (SELECT COUNT(cs.id)::int FROM chat_sessions cs
-                  WHERE cs.eval_run_id IS NULL) AS chat_sessions,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                ((SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COUNT(DISTINCT aa.archive_user_id)::int FROM analytics_archive aa
+                  WHERE aa.sessions_created > 0)) AS users,
+                ((SELECT COUNT(cs.id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.sessions_created), 0)::int FROM analytics_archive aa)) AS chat_sessions,
+                ((SELECT COUNT(cm.id)::int FROM chat_messages cm
                   JOIN chat_sessions cs ON cs.id = cm.chat_session_id
-                  WHERE cs.eval_run_id IS NULL) AS messages,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.messages), 0)::int FROM analytics_archive aa)) AS messages,
+                ((SELECT COUNT(cm.id)::int FROM chat_messages cm
                   JOIN chat_sessions cs ON cs.id = cm.chat_session_id
-                  WHERE cm.sender = 'user' AND cs.eval_run_id IS NULL) AS questions,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  WHERE cm.sender = 'user' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.questions), 0)::int FROM analytics_archive aa)) AS questions,
+                ((SELECT COUNT(sf.id)::int FROM session_feedback sf
                   JOIN chat_sessions cs ON cs.id = sf.chat_session_id
-                  WHERE sf.rating = 'up' AND cs.eval_run_id IS NULL) AS thumbs_up,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  WHERE sf.rating = 'up' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.thumbs_up), 0)::int FROM analytics_archive aa)) AS thumbs_up,
+                ((SELECT COUNT(sf.id)::int FROM session_feedback sf
                   JOIN chat_sessions cs ON cs.id = sf.chat_session_id
-                  WHERE sf.rating = 'down' AND cs.eval_run_id IS NULL) AS thumbs_down
+                  WHERE sf.rating = 'down' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.thumbs_down), 0)::int FROM analytics_archive aa)) AS thumbs_down
             `;
             return totalsRows[0];
           }
 
           const totalsRows = await sqlConnection`
+            WITH archived AS (
+              SELECT
+                COUNT(DISTINCT aa.archive_user_id) FILTER (WHERE aa.sessions_created > 0)::int AS users,
+                COALESCE(SUM(aa.sessions_created), 0)::int AS chat_sessions,
+                COALESCE(SUM(aa.messages), 0)::int AS messages,
+                COALESCE(SUM(aa.questions), 0)::int AS questions,
+                COALESCE(SUM(aa.thumbs_up), 0)::int AS thumbs_up,
+                COALESCE(SUM(aa.thumbs_down), 0)::int AS thumbs_down
+              FROM analytics_archive aa
+              WHERE aa.activity_date >= DATE_TRUNC('day', ${startDateIso}::timestamp)
+                AND aa.activity_date < ${endDateIso}::timestamp
+            )
             SELECT
-              (SELECT COUNT(DISTINCT cs.user_id)::int
+              ((SELECT COUNT(DISTINCT cs.user_id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
                 AND cs.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS users,
+                AND cs.eval_run_id IS NULL) + archived.users) AS users,
 
-              (SELECT COUNT(cs.id)::int
+              ((SELECT COUNT(cs.id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
                 AND cs.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS chat_sessions,
+                AND cs.eval_run_id IS NULL) + archived.chat_sessions) AS chat_sessions,
 
-              (SELECT COUNT(cm.id)::int
+              ((SELECT COUNT(cm.id)::int
               FROM chat_messages cm
               JOIN chat_sessions cs ON cs.id = cm.chat_session_id
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS messages,
+                AND cs.eval_run_id IS NULL) + archived.messages) AS messages,
 
-              (SELECT COUNT(cm.id)::int
+              ((SELECT COUNT(cm.id)::int
               FROM chat_messages cm
               JOIN chat_sessions cs ON cs.id = cm.chat_session_id
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
                 AND cm.sender = 'user'
-                AND cs.eval_run_id IS NULL) AS questions,
+                AND cs.eval_run_id IS NULL) + archived.questions) AS questions,
 
-              (SELECT COUNT(sf.id)::int
+              ((SELECT COUNT(sf.id)::int
               FROM session_feedback sf
               JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
                 AND sf.rating = 'up'
-                AND cs.eval_run_id IS NULL) AS thumbs_up,
+                AND cs.eval_run_id IS NULL) + archived.thumbs_up) AS thumbs_up,
 
-              (SELECT COUNT(sf.id)::int
+              ((SELECT COUNT(sf.id)::int
               FROM session_feedback sf
               JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
                 AND sf.rating = 'down'
-                AND cs.eval_run_id IS NULL) AS thumbs_down
+                AND cs.eval_run_id IS NULL) + archived.thumbs_down) AS thumbs_down
+            FROM archived
           `;
           return totalsRows[0];
         };
@@ -935,18 +960,38 @@ exports.handler = async (event) => {
               AND sf.updated_at < ${endDateIso}
               AND cs.eval_run_id IS NULL
             GROUP BY DATE_TRUNC('day', sf.updated_at)::date
+          ),
+          -- Retired guests (analytics_archive, migration 048); disjoint from
+          -- the live users above, so their distinct counts add.
+          daily_archive AS (
+            SELECT
+              aa.activity_date AS date,
+              COALESCE(SUM(aa.sessions_created), 0)::int AS chat_sessions,
+              COUNT(*) FILTER (WHERE aa.sessions_created > 0)::int AS session_users,
+              COALESCE(SUM(aa.questions), 0)::int AS questions,
+              COUNT(*) FILTER (WHERE aa.questions > 0)::int AS question_users,
+              COALESCE(SUM(aa.thumbs_up), 0)::int AS thumbs_up,
+              COALESCE(SUM(aa.thumbs_down), 0)::int AS thumbs_down
+            FROM analytics_archive aa
+            WHERE aa.activity_date >= DATE_TRUNC('day', ${startDateIso}::timestamp)
+              AND aa.activity_date < ${endDateIso}::timestamp
+            GROUP BY aa.activity_date
           )
           SELECT
             TO_CHAR(ds.date, 'Mon DD') AS date,
-            COALESCE(GREATEST(dcs.session_users, dq.question_users), 0)::int AS users,
-            COALESCE(dq.questions, 0)::int AS questions,
-            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions,
-            COALESCE(df.thumbs_up, 0)::int AS thumbs_up,
-            COALESCE(df.thumbs_down, 0)::int AS thumbs_down
+            GREATEST(
+              COALESCE(dcs.session_users, 0) + COALESCE(da.session_users, 0),
+              COALESCE(dq.question_users, 0) + COALESCE(da.question_users, 0)
+            )::int AS users,
+            (COALESCE(dq.questions, 0) + COALESCE(da.questions, 0))::int AS questions,
+            (COALESCE(dcs.chat_sessions, 0) + COALESCE(da.chat_sessions, 0))::int AS chat_sessions,
+            (COALESCE(df.thumbs_up, 0) + COALESCE(da.thumbs_up, 0))::int AS thumbs_up,
+            (COALESCE(df.thumbs_down, 0) + COALESCE(da.thumbs_down, 0))::int AS thumbs_down
           FROM date_series ds
           LEFT JOIN daily_chat_sessions dcs ON ds.date = dcs.date
           LEFT JOIN daily_questions dq ON ds.date = dq.date
           LEFT JOIN daily_feedback df ON ds.date = df.date
+          LEFT JOIN daily_archive da ON ds.date = da.date
           ORDER BY ds.date ASC
         `;
 

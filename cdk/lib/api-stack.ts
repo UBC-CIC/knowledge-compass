@@ -2229,6 +2229,45 @@ export class ApiGatewayStack extends cdk.Stack {
       .defaultChild as lambda.CfnFunction;
     cfnLambda_chatSession.overrideLogicalId("chatSessionFunction");
 
+    // Guest data retention (finding F19, decision D12): daily, deletes guests
+    // idle for 90 days with all their chats, keeping only anonymous per-day
+    // counts in analytics_archive for admin analytics. Not behind API Gateway;
+    // its role reads only the DB user secret (plus VPC networking and logs).
+    const retentionRole = newExecutionRole("retentionRole", { vpc: true, xray: false });
+    db.secretPathUser.grantRead(retentionRole);
+    const retentionFunction = new lambda.Function(this, `${id}-retentionFunction`, {
+      functionName: `${id}-retentionFunction`,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      code: lambda.Code.fromAsset("lambda"),
+      handler: "handlers/retentionHandler.handler",
+      timeout: Duration.minutes(5),
+      memorySize: 256,
+      vpc: vpcStack.vpc,
+      environment: {
+        SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+        RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+      },
+      layers: [postgres],
+      role: retentionRole,
+      // Each run is idempotent; one retry covers a transient DB failure.
+      retryAttempts: 1,
+    });
+    new events.Rule(this, "GuestRetentionDailyRule", {
+      ruleName: `${id}-GuestRetentionDaily`,
+      description: "Daily deletion of guest data idle for 90 days (handlers/retentionHandler.js)",
+      // 09:00 UTC: early morning across North America.
+      schedule: events.Schedule.cron({ minute: "0", hour: "9" }),
+      targets: [new targets.LambdaFunction(retentionFunction)],
+    });
+    new cloudwatch.Alarm(this, "GuestRetentionErrorsAlarm", {
+      metric: retentionFunction.metricErrors({ period: Duration.days(1), statistic: cloudwatch.Stats.SUM }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: "Guest data retention job failed (guest data is no longer being deleted on schedule)",
+    }).addAlarmAction(opsAlarmAction);
+
     const lambdaAdminFunction = new lambda.Function(
       this,
       `${id}-adminFunction`,
