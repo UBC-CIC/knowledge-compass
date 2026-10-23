@@ -191,6 +191,17 @@ Specialization Explorer is an AI-powered conversational application that helps u
 - `Access-Control-Allow-Methods` lists only the methods each function serves
 - Proper headers enforced on all error responses
 
+### 4.5 Frontend Security Headers
+
+Amplify Hosting adds these to every file it serves (`spaSecurityHeaders` in `cdk/lib/amplify-stack.ts`):
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy` denying camera, microphone, geolocation, payment and USB
+- A Content Security Policy: same-origin scripts only, no framing (`frame-ancestors 'none'`), and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
+
+The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are logged in the browser console but nothing is blocked. After a dev deploy shows no violations, rename the header to `Content-Security-Policy`. Header changes take effect on the branch's next Amplify deploy.
+
 ---
 
 ## 5. Network Security
@@ -300,6 +311,16 @@ Specialization Explorer is an AI-powered conversational application that helps u
 | **SSL Required** | All requests must use HTTPS |
 | **Presigned URLs** | Short expiration for uploads |
 | **Content-Type Validation** | Enforced for uploaded files |
+
+### 6.5 Guest Data Retention and Limits
+
+| Control | Detail |
+|---------|--------|
+| **Retention** | A daily job (`cdk/lambda/handlers/retentionHandler.js`, 09:00 UTC) deletes each guest user, with all their chats, messages and feedback, once their most recent activity is more than 90 days old. Staff (Cognito) rows are never touched. |
+| **Analytics rollup** | Before deleting, the job keeps per-day counts only (sessions, messages, questions, thumbs up/down) in `analytics_archive` under a fresh anonymous number that cannot be linked back to the user. Admin analytics adds these to live data, so totals do not drop. Written feedback text is not kept. |
+| **Limit bookkeeping** | The same job prunes `daily_usage_requests` after 2 days and `user_daily_usage` after 7 days. |
+| **Session cap** | Each guest can start 20 new chats per UTC day (`POST /chat_sessions` returns 429 `DAILY_SESSION_LIMIT_EXCEEDED`). Deleting a chat does not free a slot. |
+| **Monitoring** | A CloudWatch alarm notifies the ops topic if the retention job fails. |
 
 ---
 

@@ -1,8 +1,8 @@
 crawlee[playwright]==1.10.4
 # Must match the Playwright base image tag in Dockerfile.
 playwright==1.63.0
-trafilatura
-lxml
-beautifulsoup4
-psycopg2-binary
-boto3
+trafilatura==2.3.1
+lxml==6.1.3
+beautifulsoup4==4.15.0
+psycopg2-binary==2.9.13
+boto3==1.43.117

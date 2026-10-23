@@ -71,6 +71,7 @@ test("every route rejects a client user_id that differs from the token's user", 
 test("the token's user is acted on even when the client omits user_id", async () => {
   const sql = fakeSql((text) => {
     if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
     if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER }];
     return [];
   });
@@ -87,6 +88,7 @@ test("the token's user is acted on even when the client omits user_id", async ()
 const createSql = () =>
   fakeSql((text) => {
     if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
     if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
     return [];
   });
@@ -237,6 +239,46 @@ test("another user's feedback cannot be read or overwritten", async () => {
     assert.equal(res.statusCode, 403, httpMethod);
     assert.ok(!sql.queries().some((q) => q.text.includes("session_feedback")));
   }
+});
+
+test("create claims a daily session slot in the same transaction as the insert", async () => {
+  const sql = createSql();
+  let began = 0;
+  const begin = sql.begin;
+  sql.begin = async (fn) => {
+    began += 1;
+    return begin(fn);
+  };
+  const res = await post(sql, {});
+  assert.equal(res.statusCode, 201);
+  assert.equal(began, 1);
+  const texts = sql.queries().map((q) => q.text);
+  const claim = texts.findIndex((t) => t.startsWith("INSERT INTO user_daily_usage"));
+  const insert = texts.findIndex((t) => t.startsWith("INSERT INTO chat_sessions"));
+  assert.ok(claim >= 0 && claim < insert, "slot is claimed before the session insert");
+  const claimQuery = sql.queries()[claim];
+  assert.match(claimQuery.text, /\(now\(\) AT TIME ZONE 'UTC'\)::date/);
+  assert.match(claimQuery.text, /ON CONFLICT \(user_id, usage_date\) DO UPDATE/);
+  assert.match(claimQuery.text, /WHERE user_daily_usage\.sessions_created < \?/);
+  assert.deepEqual(claimQuery.values, [USER, 20]);
+});
+
+test("create returns 429 at the daily session limit and inserts nothing", async () => {
+  const sql = fakeSql((text) => {
+    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    // The conflict update's WHERE failed: no row comes back.
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [];
+    if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
+    return [];
+  });
+  const res = await post(sql, {});
+  assert.equal(res.statusCode, 429);
+  assert.equal(res.body.error, "DAILY_SESSION_LIMIT_EXCEEDED");
+  assert.match(res.body.message, /tomorrow/);
+  assert.equal(res.body.session_usage.limit, 20);
+  assert.match(res.body.session_usage.reset_at, /T00:00:00\.000Z$/);
+  assert.ok(Date.parse(res.body.session_usage.reset_at) > Date.now());
+  assert.ok(!sql.queries().some((q) => q.text.startsWith("INSERT INTO chat_sessions")));
 });
 
 test("removed chat_history route is no longer served here", async () => {

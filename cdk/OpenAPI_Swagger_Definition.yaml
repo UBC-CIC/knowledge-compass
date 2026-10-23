@@ -3713,10 +3713,8 @@ paths:
                   description: Ignored; new users are always 'student' guests
                 display_name:
                   type: string
-                  description: Optional display name
-                metadata:
-                  type: object
-                  additionalProperties: true
+                  maxLength: 64
+                  description: Optional display name; trimmed and cut to 64 characters
       responses:
         "200":
           description: User created successfully
@@ -3762,7 +3760,7 @@ paths:
         type: aws_proxy
 
   /user/{user_id}:
-    <<: *commonOptionsGETPUT
+    <<: *commonOptionsGET
     get:
       tags:
         - User
@@ -3784,54 +3782,6 @@ paths:
           description: User not found
         "401":
           description: Unauthorized
-        "500":
-          description: Internal Server Error
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${userFunction.Arn}/invocations
-        passthroughBehavior: "when_no_match"
-        httpMethod: POST
-        type: aws_proxy
-    put:
-      tags:
-        - User
-      summary: Update user email
-      operationId: update_user_email
-      security:
-        - userAuthorizer: []
-      parameters:
-        - name: user_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - email
-              properties:
-                email:
-                  type: string
-                  format: email
-                  example: student@example.com
-      responses:
-        "200":
-          description: User updated successfully
-        "400":
-          description: Invalid request, or the address uses a staff sign-up domain
-        "401":
-          description: Unauthorized
-        "403":
-          description: Token is bound to a different user
-        "404":
-          description: User not found (or not a guest user)
-        "409":
-          description: Email already in use
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -4074,6 +4024,29 @@ paths:
           description: User not found
         "401":
           description: Unauthorized
+        "429":
+          description: >-
+            The user already created 20 chat sessions this UTC day
+            (DAILY_SESSION_LIMIT_EXCEEDED). Deleting a session does not free a
+            slot; existing sessions can still be used.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [DAILY_SESSION_LIMIT_EXCEEDED]
+                  message:
+                    type: string
+                  session_usage:
+                    type: object
+                    properties:
+                      limit:
+                        type: integer
+                      reset_at:
+                        type: string
+                        format: date-time
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

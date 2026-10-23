@@ -9,6 +9,63 @@ import { Construct } from "constructs";
 import * as yaml from "yaml";
 import { ApiGatewayStack, GATEWAY_ALLOWED_ORIGIN_VARIABLE, REST_API_STAGE_NAME } from "./api-stack";
 
+/** Origins the SPA's Content-Security-Policy lets it connect to. */
+export interface SpaConnectOrigins {
+  /** e.g. https://abc123.execute-api.ca-central-1.amazonaws.com (no path) */
+  restApiOrigin: string;
+  /** e.g. wss://def456.execute-api.ca-central-1.amazonaws.com (no path) */
+  webSocketOrigin: string;
+  region: string;
+}
+
+/**
+ * Security headers for every file Amplify serves (finding F12 / M6).
+ *
+ * The CSP ships as Content-Security-Policy-Report-Only first (decision D8):
+ * violations show in the browser console without blocking anything. Once a
+ * dev deploy shows none, rename the header to Content-Security-Policy.
+ *
+ * - script-src 'self': Vite emits only same-origin module scripts.
+ * - style-src 'unsafe-inline': Radix Dialog/Select inject <style> tags
+ *   (react-remove-scroll); static hosting cannot issue nonces.
+ * - Google Fonts: stylesheet from fonts.googleapis.com (index.html), font
+ *   files from fonts.gstatic.com.
+ * - connect-src: the REST API and WebSocket API, Cognito user pool sign-in
+ *   (the identity pool is not used by the SPA), and S3 presigned uploads,
+ *   which are virtual-hosted (helpers/generate_presigned_url*.py).
+ * - img-src data:/blob:: inline icons and admin-side object URLs. Markdown
+ *   images in chat replies are not loaded at all (F11).
+ */
+export function spaSecurityHeaders(origins: SpaConnectOrigins): Record<string, string> {
+  const { restApiOrigin, webSocketOrigin, region } = origins;
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    [
+      "connect-src 'self'",
+      restApiOrigin,
+      webSocketOrigin,
+      `https://cognito-idp.${region}.amazonaws.com`,
+      `https://*.s3.${region}.amazonaws.com`,
+    ].filter(Boolean).join(" "),
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+  return {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "Content-Security-Policy-Report-Only": csp,
+  };
+}
+
 interface AmplifyStackProps extends cdk.StackProps {
   githubRepo: string;
   githubBranch?: string;
@@ -83,6 +140,20 @@ export class AmplifyStack extends cdk.Stack {
           }`,
       },
       buildSpec: BuildSpec.fromObjectToYaml(amplifyYaml),
+      // appRoot must match the build spec's monorepo appRoot or Amplify
+      // ignores the headers. Header changes take effect on the next deploy
+      // of the branch.
+      customResponseHeaders: [
+        {
+          appRoot: "frontend",
+          pattern: "**",
+          headers: spaSecurityHeaders({
+            restApiOrigin: `https://${apiStack.getRestApiId()}.execute-api.${this.region}.${this.urlSuffix}`,
+            webSocketOrigin: apiStack.getWebSocketUrl(),
+            region: this.region,
+          }),
+        },
+      ],
     });
 
     amplifyApp.addCustomRule({

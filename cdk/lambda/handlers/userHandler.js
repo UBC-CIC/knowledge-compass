@@ -5,10 +5,9 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
-const { validateUUID } = require("./utils/validation.js");
+const { sanitizeString, validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
-const { isStaffEmailDomain } = require("./utils/staffEmailDomains.js");
 const {
   exchangeCredential,
   issueAccessTokenWithId,
@@ -87,7 +86,7 @@ const initConnection = async () => {
 };
 
 // HTTP methods this function serves (OpenAPI_Swagger_Definition.yaml).
-const SERVED_METHODS = "GET,POST,PUT";
+const SERVED_METHODS = "GET,POST";
 
 const createResponse = async (event) => ({
     statusCode: 200,
@@ -155,24 +154,22 @@ exports.handler = async (event) => {
         // Default role is student
         const role = "student";
         const userId = crypto.randomUUID();
-        const displayName = body.display_name || body.displayName || null;
-        const metadata = body.metadata || {};
+        const displayName = sanitizeString(body.display_name ?? body.displayName, 64);
 
         const now = new Date();
 
-        // Create a guest row. body.email is never read: a guest must not
-        // pre-claim an address (staff identity is keyed on the Cognito sub,
-        // see authorization/staffIdentity.js).
+        // Create a guest row. body.email and body.metadata are never read: a
+        // guest holds no address and no client-chosen metadata (finding F16;
+        // staff identity is keyed on the Cognito sub, see
+        // authorization/staffIdentity.js). Migration 046 enforces the email part.
         const result = await sqlConnection`
           INSERT INTO users (
             id, display_name, role, identity_source,
-            created_at, last_seen_at,
-            metadata
+            created_at, last_seen_at
           )
           VALUES (
             ${userId}, ${displayName}, ${role}, 'guest',
-            ${now}, ${now},
-            ${metadata}
+            ${now}, ${now}
           )
           RETURNING
             id, email, display_name, role,
@@ -231,106 +228,6 @@ exports.handler = async (event) => {
         `;
 
         response.body = JSON.stringify(user[0]);
-        break;
-      }
-
-      // Update's user with email so they no longer will be anonymous
-      case "PUT /user/{user_id}": {
-        const userId = event.pathParameters?.user_id;
-        const userIdValidation = validateUUID(userId, "user_id");
-        if (!userIdValidation.valid) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: userIdValidation.error });
-          break;
-        }
-        const caller = resolveCaller(event, userId);
-        if (caller.error) {
-          rejectCaller(response, caller);
-          break;
-        }
-
-        let parsedBody = {};
-
-        try {
-          parsedBody = event.body ? JSON.parse(event.body) : {};
-        } catch (err) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "Request body must be valid JSON" });
-          break;
-        }
-
-        const rawEmail = parsedBody.email;
-
-        if (typeof rawEmail !== "string") {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "email is required and must be a string" });
-          break;
-        }
-
-        const normalizedEmail = rawEmail.trim().toLowerCase();
-
-        if (!normalizedEmail) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "email cannot be empty" });
-          break;
-        }
-
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(normalizedEmail)) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "Invalid email format" });
-          break;
-        }
-
-        // Staff sign-up domains are reserved for Cognito accounts.
-        if (await isStaffEmailDomain(normalizedEmail)) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "This email address cannot be used" });
-          break;
-        }
-
-        const existingUser = await sqlConnection`
-          SELECT id
-          FROM users
-          WHERE id = ${userId} AND identity_source = 'guest'
-        `;
-
-        if (existingUser.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "User not found" });
-          break;
-        }
-
-        try {
-          const updatedUser = await sqlConnection`
-            UPDATE users
-            SET
-              email = ${normalizedEmail},
-              last_seen_at = NOW()
-            WHERE id = ${userId} AND identity_source = 'guest'
-            RETURNING
-              id,
-              email,
-              display_name,
-              role,
-              created_at,
-              last_seen_at,
-              messages_sent,
-              messages_window_started_at,
-              metadata
-          `;
-
-          response.statusCode = 200;
-          response.body = JSON.stringify(updatedUser[0]);
-        } catch (err) {
-          // Postgres unique violation
-          if (err.code === "23505") {
-            response.statusCode = 409;
-            response.body = JSON.stringify({ error: "Email is already in use" });
-            break;
-          }
-          throw err;
-        }
         break;
       }
 

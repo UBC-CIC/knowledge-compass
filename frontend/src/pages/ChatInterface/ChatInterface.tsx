@@ -23,6 +23,7 @@ import {
 } from "@/lib/demo";
 import { getPublicToken, invalidatePublicToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
+import { SessionLimitError } from "@/lib/sessionLimit";
 import ServiceStatusBanner from "@/components/ChatInterface/ServiceStatusBanner";
 import {
   NORMAL_SERVICE_STATE,
@@ -583,7 +584,25 @@ export default function AIChatPage({
     let sessionId = activeChatSessionId;
     if (!sessionId) {
       skipNextHistoryLoadRef.current = true;
-      const session = await createNewChatSession();
+      let session;
+      try {
+        session = await createNewChatSession();
+      } catch (err) {
+        skipNextHistoryLoadRef.current = false;
+        if (!(err instanceof SessionLimitError)) throw err;
+        // Daily session limit: say so, keep the typed text, and leave the
+        // composer usable for existing chats.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            sender: "bot",
+            text: err.message,
+            time: Date.now(),
+          },
+        ]);
+        return;
+      }
       if (!session) {
         skipNextHistoryLoadRef.current = false;
         return;
