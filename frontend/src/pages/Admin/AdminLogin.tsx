@@ -7,8 +7,11 @@ import { isDemoMode } from "@/lib/demo";
 import { API_ENDPOINT } from "@/lib/api";
 import {
   type AdminSignInStep,
+  NOT_ADMIN_MESSAGE,
   TOTP_ISSUER,
+  adminSetupErrorMessage,
   adminStepFor,
+  isAdminTokenPayload,
   cleanTotpCode,
   formatTotpSecret,
   totpCodeError,
@@ -61,8 +64,14 @@ export default function AdminLogin() {
     const checkAuthStatus = async () => {
       try {
         const session = await AuthService.getAuthSession(true);
-        if (session?.tokens?.accessToken) {
+        if (!session?.tokens?.accessToken) return;
+        // A kept session outside the admin group would reach the dashboard
+        // only to have every admin API call refused, so end it here.
+        if (isAdminTokenPayload(session.tokens.idToken?.payload)) {
           navigate(from, { replace: true });
+        } else {
+          await AuthService.signOut();
+          setError(NOT_ADMIN_MESSAGE);
         }
       } catch {
         console.log("Not authenticated");
@@ -72,32 +81,47 @@ export default function AdminLogin() {
     checkAuthStatus();
   }, [navigate, from]);
 
-  const updateAdminUser = async (adminEmail: string) => {
-    const token = await AuthService.getAdminIdToken(false);
-
+  // Records the signed-in admin in the users table. Returns the HTTP status
+  // of a failed call, or null on success.
+  const updateAdminUser = async (token: string): Promise<number | null> => {
     const res = await fetch(`${API_ENDPOINT}/admin/promote_user`, {
       method: "POST",
       headers: {
         Authorization: token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        email: adminEmail,
-        role: "admin",
-      }),
+      body: JSON.stringify({}),
     });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Failed to update admin user: ${res.status} ${text}`);
-    }
-
-    return res.json();
+    return res.ok ? null : res.status;
   };
 
+  // Cognito accepted the credentials; the account still has to be an admin.
+  // On any failure the Cognito session is ended, so a later visit to this
+  // page starts a clean sign-in instead of skipping straight to a dashboard
+  // that cannot load.
   const finishSignIn = async () => {
     AuthService.clearAuthCache();
-    await updateAdminUser(email);
+    let failure: string | null = null;
+    try {
+      const session = await AuthService.getAuthSession(false);
+      const token = AuthService.getTokenString(session?.tokens?.idToken);
+      if (!token || !isAdminTokenPayload(session?.tokens?.idToken?.payload)) {
+        failure = NOT_ADMIN_MESSAGE;
+      } else {
+        const status = await updateAdminUser(token);
+        if (status !== null) failure = adminSetupErrorMessage(status);
+      }
+    } catch {
+      failure = adminSetupErrorMessage(undefined);
+    }
+
+    if (failure) {
+      await AuthService.signOut();
+      startOver();
+      setError(failure);
+      return;
+    }
+
     setSignedIn(true);
     navigate(from, { replace: true });
   };

@@ -47,3 +47,26 @@ export function totpCodeError(code: string): string | null {
 export function formatTotpSecret(secret: string): string {
   return secret.replace(/(.{4})(?=.)/g, "$1 ");
 }
+
+// Shown when Cognito accepted the sign-in but the account is not in the
+// "admin" group, so the admin API authorizer refuses its token.
+export const NOT_ADMIN_MESSAGE =
+  "This account isn't an administrator. Ask an existing admin to add you, then sign in again.";
+
+/**
+ * True when an ID token's claims put the user in the Cognito "admin" group,
+ * the only check the admin API authorizer makes (adminAuthorizerFunction.js).
+ */
+export function isAdminTokenPayload(payload: Record<string, unknown> | null | undefined): boolean {
+  const groups = payload?.["cognito:groups"];
+  return Array.isArray(groups) && groups.includes("admin");
+}
+
+/**
+ * Message for a failed POST /admin/promote_user at the end of sign-in:
+ * 401/403 mean the authorizer refused the account (not in the admin group).
+ */
+export function adminSetupErrorMessage(status: number | undefined): string {
+  if (status === 401 || status === 403) return NOT_ADMIN_MESSAGE;
+  return "We couldn't finish signing you in. Please try again.";
+}
