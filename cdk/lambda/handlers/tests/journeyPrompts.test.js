@@ -160,6 +160,7 @@ test("missing authorizer userId is 401", async () => {
 });
 
 test("resolveAdmin looks up the Cognito sub, never the email", async () => {
+  // The elevation UPDATE returns nothing here, so the row stays non-admin.
   const sql = fakeSql((text) => (text.includes("FROM users") ? [{ id: UUID, role: "student" }] : []));
   const res = await call(sql, "POST /admin/journeys", adminEvent({ body: JSON.stringify({ key: "J3", name: "x" }) }));
   assert.equal(res.statusCode, 403);
@@ -167,7 +168,22 @@ test("resolveAdmin looks up the Cognito sub, never the email", async () => {
   const lookup = sql.calls.find((c) => c.text.includes("FROM users"));
   assert.match(lookup.text, /WHERE cognito_sub = \?/);
   assert.deepEqual(lookup.values, ["11111111-2222-3333-4444-555555555555"]);
-  assert.ok(!sql.calls.some((c) => /WHERE (lower\()?email/.test(c.text)));
+  // Elevation may detach the verified address from other rows (UPDATE), but
+  // never selects the admin row by email.
+  assert.ok(!sql.calls.some((c) => /^\s*SELECT/.test(c.text) && /WHERE (lower\()?email/.test(c.text)));
+});
+
+test("resolveAdmin elevates a non-admin row of an admin-group caller", async () => {
+  const sql = fakeSql((text, values) => {
+    if (text.includes("FROM users")) return [{ id: UUID, email: "admin@example.com", role: "student" }];
+    if (/^\s*UPDATE users/.test(text)) return [{ id: UUID, email: values[1], role: values[0] }];
+    if (/^\s*INSERT INTO journeys/.test(text)) return [{ id: UUID, key: "J3", name: "x" }];
+    return [];
+  });
+  const res = await call(sql, "POST /admin/journeys", adminEvent({ body: JSON.stringify({ key: "J3", name: "x" }) }));
+  assert.notEqual(res.statusCode, 403, JSON.stringify(res.body));
+  assert.ok(sql.calls.some((c) => /^\s*UPDATE users/.test(c.text) && c.values[0] === "admin"));
+  assert.ok(sql.calls.some((c) => /^\s*INSERT INTO admin_audit/.test(c.text)));
 });
 
 test("duplicate journey key is 409", async () => {

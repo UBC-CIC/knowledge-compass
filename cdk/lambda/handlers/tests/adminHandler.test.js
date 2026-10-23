@@ -170,7 +170,27 @@ test("admin re-check on a sub miss creates the cognito row instead of matching b
   assert.equal(insert.values[3], "admin");
 });
 
-test("admin re-check: a row whose role is not admin is 403, a missing sub is 401", async () => {
+test("admin re-check elevates a non-admin row of an admin-group caller, with an audit row", async () => {
+  const sql = fakeSql((text, values) => {
+    if (text.includes("FROM users")) return [{ id: "a1", email: "admin@example.com", role: "student" }];
+    if (text.startsWith("UPDATE users")) return [{ id: "a1", email: values[1], role: values[0] }];
+    if (text.includes("UPDATE system_settings")) return [{ id: "s1" }];
+    return [];
+  });
+  const res = await settingsPut(sql);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const elevate = sql.queries().find((q) => q.text.startsWith("UPDATE users"));
+  assert.equal(elevate.values[0], "admin");
+  assert.ok(elevate.values.includes("a1"));
+  const audit = sql.queries().find((q) => q.text.startsWith("INSERT INTO admin_audit"));
+  assert.ok(audit, "elevation is audited");
+  assert.ok(audit.values.includes("admin.promote_user"));
+  assert.ok(audit.values.includes(ADMIN_SUB));
+  assert.ok(!sql.queries().some((q) => /WHERE (lower\()?email/.test(q.text)), "no email-keyed lookup");
+  assert.ok(updateQuery(sql).values.includes("a1"));
+});
+
+test("admin re-check: a row that cannot be elevated is 403, a missing sub is 401", async () => {
   const student = fakeSql((text) => (text.includes("FROM users") ? [{ id: "a1", role: "student" }] : []));
   const res = await settingsPut(student);
   assert.equal(res.statusCode, 403);
