@@ -18,6 +18,26 @@ const rdsConnectStatements = (): any[] =>
     .flatMap((r) => r.Properties.PolicyDocument.Statement)
     .filter((s: any) => asArray(s.Action).includes("rds-db:connect"));
 
+describe("DatabaseStack secret rotation", () => {
+  const schedules = Object.values(resources).filter((r) => r.Type === "AWS::SecretsManager::RotationSchedule");
+
+  test("the admin (master) secret rotates every 30 days with a single-user hosted rotation", () => {
+    const [instanceSecretId] = Object.entries(resources).find(
+      ([, r]) => r.Type === "AWS::SecretsManager::SecretTargetAttachment",
+    )!;
+    const admin = schedules.filter((s) => s.Properties.SecretId?.Ref === instanceSecretId);
+    expect(admin).toHaveLength(1);
+    expect(admin[0].Properties.HostedRotationLambda.RotationType).toBe("PostgreSQLSingleUser");
+    expect(admin[0].Properties.HostedRotationLambda.RotationLambdaName).toBe("KC-Database-AdminRotation");
+    expect(admin[0].Properties.RotationRules.ScheduleExpression).toBe("rate(30 days)");
+  });
+
+  test("app user and table creator secrets keep their multi-user rotations", () => {
+    const multi = schedules.filter((s) => s.Properties.HostedRotationLambda?.RotationType === "PostgreSQLMultiUser");
+    expect(multi).toHaveLength(2);
+  });
+});
+
 describe("DatabaseStack IAM", () => {
   test("rds-db:connect is never granted on a wildcard resource", () => {
     const statements = rdsConnectStatements();

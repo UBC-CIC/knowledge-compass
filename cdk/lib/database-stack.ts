@@ -211,12 +211,22 @@ export class DatabaseStack extends Stack {
 
     /**
      * Enable automatic secret rotation for database credentials
-     * Note: Admin secret rotation already exists in the stack, so we only manage
-     * rotation for application user and table creator credentials.
      */
-    
-    // 1. Admin credentials rotation is already configured - do not create duplicate
-    // The existing rotation schedule for secretPathAdmin will remain active.
+
+    // 1. Rotation for the admin (master) credentials (single-user strategy).
+    // Earlier code assumed this already existed; the deployed secret had never
+    // rotated (finding F17). Attached to the instance's own generated secret
+    // (the SecretTargetAttachment), so the rotation Lambda gets the host and
+    // the full secret ARN. RDS Proxy rereads the secret, so new connections
+    // pick up the new password; a migration running during the rotation may
+    // need a re-run.
+    this.dbInstance.secret!.addRotationSchedule("AdminRot", {
+      automaticallyAfter: Duration.days(30),
+      hostedRotation: secretsmanager.HostedRotation.postgreSqlSingleUser({
+        vpc: vpcStack.vpc,
+        functionName: `${id}-AdminRotation`,
+      }),
+    });
 
     // 2. Rotation for application user credentials (multi-user strategy)
     this.secretPathUser.addRotationSchedule("AppUserRot", {
