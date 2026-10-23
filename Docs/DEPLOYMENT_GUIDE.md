@@ -621,6 +621,8 @@ To create an admin user for accessing the admin dashboard:
 9. Select the "admin" group
 10. On first login, you'll be prompted to change your password
 
+Once one admin exists, further admins can be added through the API instead of the console: `POST /admin/users` with `{ "display_name": "...", "email": "..." }` (admin ID token in `Authorization`). It creates the Cognito user, adds it to the `admin` group and records the admin in the database. Cognito emails the new admin a temporary password, and they set up an authenticator app at first sign-in. The email must be in an allowed sign-up domain (`ALLOWED_EMAIL_DOMAINS`). If the email already has a Cognito account, it is added to the `admin` group instead (response `200` rather than `201`).
+
 ### Step 3: Visit Web App
 
 You can now navigate to the web app URL (found in the Amplify console) to see your application in action.

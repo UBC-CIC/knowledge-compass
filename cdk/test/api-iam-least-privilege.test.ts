@@ -117,12 +117,51 @@ const cognitoTriggerRole = () => {
 };
 
 describe("API Lambda IAM least privilege", () => {
-  test("no role other than the Cognito trigger role holds a cognito-idp action", () => {
-    const trigger = cognitoTriggerRole();
+  test("no role other than the Cognito trigger and admin-provisioning roles holds a cognito-idp action", () => {
+    const allowed = new Set([cognitoTriggerRole(), roleOf("adminProvisioningFunction")]);
     for (const roleId of allRoleIds()) {
-      if (roleId === trigger) continue;
+      if (allowed.has(roleId)) continue;
       expect(allowActionsFor(roleId).filter((a) => a.startsWith("cognito-idp:"))).toEqual([]);
     }
+  });
+
+  test("admin provisioning has its own role, may only create, read and group users on this pool, and is capped by its own boundary", () => {
+    const roleId = roleOf("adminProvisioningFunction");
+    const onRole = Object.entries(resources)
+      .filter(([, r]) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === roleId)
+      .map(([id]) => id);
+    expect(onRole).toEqual(["adminProvisioningFunction"]);
+
+    const poolId = Object.entries(resources).find(([, r]) => r.Type === "AWS::Cognito::UserPool")![0];
+    const cognitoStatements = statementsFor(roleId).filter((s) =>
+      [s.Action].flat().some((a: string) => a.startsWith("cognito-idp:"))
+    );
+    expect(cognitoStatements).toHaveLength(1);
+    expect([cognitoStatements[0].Action].flat().sort()).toEqual([
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminGetUser",
+    ]);
+    expect(cognitoStatements[0].Resource).toEqual({ "Fn::GetAtt": [poolId, "Arn"] });
+
+    const boundaries = Object.entries(resources).filter(
+      ([, r]) =>
+        r.Type === "AWS::IAM::ManagedPolicy" && r.Properties.ManagedPolicyName === "KC-Api-AdminProvisioningBoundary"
+    );
+    expect(boundaries).toHaveLength(1);
+    const [boundaryId, boundary] = boundaries[0];
+    expect(resources[roleId].Properties.PermissionsBoundary).toEqual({ Ref: boundaryId });
+    const stmts: any[] = boundary.Properties.PolicyDocument.Statement;
+    const allowAll = stmts.find((s) => s.NotAction);
+    expect([allowAll.NotAction].flat().sort()).toEqual(["cognito-idp:*", "iam:*"]);
+    const cognitoAllowed = stmts
+      .filter((s) => s.Effect === "Allow" && s.Action)
+      .flatMap((s) => [s.Action].flat());
+    expect(cognitoAllowed.sort()).toEqual([
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminGetUser",
+    ]);
   });
 
   test("Cognito triggers use the readwrite DB credential, never the tablecreator one", () => {

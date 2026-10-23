@@ -130,7 +130,6 @@ exports.handler = async (event) => {
   // Ensure database connection is ready
   await initConnection();
 
-  let data; // Variable to store response data
   try {
     // Route requests based on HTTP method and URL path
     // event.httpMethod: GET, POST, PUT, DELETE
@@ -716,60 +715,6 @@ exports.handler = async (event) => {
           break;
         }
       }
-
-      // POST /admin/users - Create new admin user in the system
-      case "POST /admin/users":
-        // Parse JSON request body containing new user data
-        let userData;
-        try {
-          userData = parseBody(event.body);
-        } catch (error) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: error.message });
-          break;
-        }
-
-        // Extract user fields from request body. Email is stored in the same
-        // canonical form as every other writer (trim + lowercase) so a
-        // mixed-case address cannot sit beside its lowercase twin
-        // (users_email_lower_key, migration 041).
-        const { display_name, email, institution_id } = userData;
-        const normalizedEmail = normalizeEmail(email);
-
-        // Validate required fields
-        if (!display_name || !normalizedEmail) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({
-            error: "display_name and email are required",
-          });
-          break;
-        }
-
-        // The audit actor is the Cognito sub from the admin authorizer.
-        if (!adminSubFromEvent(event)) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
-          break;
-        }
-
-        // Insert new admin user and its audit row in one transaction
-        let createAudit;
-        const result = await sqlConnection.begin(async (tx) => {
-          const inserted = await tx`
-            INSERT INTO users (display_name, email, institution_id, role)
-            VALUES (${display_name}, ${normalizedEmail}, ${institution_id || null}, 'admin')
-            RETURNING id, display_name, email, role, institution_id, created_at
-          `;
-          createAudit = auditEntry(event, "admin_user.create", { user_id: inserted[0].id });
-          await insertAdminAudit(tx, createAudit);
-          return inserted;
-        });
-        logAdminAudit(createAudit);
-
-        response.statusCode = 201; // Created
-        data = result[0];
-        response.body = JSON.stringify(data);
-        break;
 
       // Get analytics data
       case "GET /admin/analytics": {

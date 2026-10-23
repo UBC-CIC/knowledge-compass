@@ -2286,6 +2286,97 @@ export class ApiGatewayStack extends cdk.Stack {
       .defaultChild as lambda.CfnFunction;
     cfnLambda_admin.overrideLogicalId("adminFunction");
 
+    // POST /admin/users (handlers/adminProvisioningHandler.js): the only request
+    // handler that may call Cognito admin APIs, so it has its own role and its own
+    // boundary instead of RequestHandlerBoundary (which denies cognito-idp:Admin*,
+    // finding f-4597100e). The boundary caps it at the three calls it makes; the
+    // identity policy pins them to this user pool and the admin group.
+    const adminProvisioningBoundary = new iam.ManagedPolicy(this, `${id}-AdminProvisioningBoundary`, {
+      managedPolicyName: `${id}-AdminProvisioningBoundary`,
+      description: "Permissions boundary for the admin-provisioning Lambda role",
+      statements: [
+        new iam.PolicyStatement({
+          sid: "AllowAllExceptIamAndCognito",
+          effect: iam.Effect.ALLOW,
+          notActions: ["iam:*", "cognito-idp:*"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          sid: "AllowAdminProvisioningOnly",
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "cognito-idp:AdminCreateUser",
+            "cognito-idp:AdminGetUser",
+            "cognito-idp:AdminAddUserToGroup",
+          ],
+          resources: ["*"],
+        }),
+      ],
+    });
+    const adminProvisioningRole = new iam.Role(this, `${id}-adminProvisioningRole`, {
+      roleName: `${id}-adminProvisioningRole`,
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaVPCAccessExecutionRole"),
+      ],
+      permissionsBoundary: adminProvisioningBoundary,
+    });
+    adminProvisioningRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets",
+        ],
+        resources: ["*"],
+      })
+    );
+    db.secretPathUser.grantRead(adminProvisioningRole);
+    adminProvisioningRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser", "cognito-idp:AdminAddUserToGroup"],
+        resources: [this.userPool.userPoolArn],
+      })
+    );
+
+    const lambdaAdminProvisioningFunction = new lambda.Function(
+      this,
+      `${id}-adminProvisioningFunction`,
+      {
+        runtime: lambda.Runtime.NODEJS_22_X,
+        code: lambda.Code.fromAsset("lambda"),
+        handler: "handlers/adminProvisioningHandler.handler",
+        timeout: Duration.seconds(30),
+        vpc: vpcStack.vpc,
+        environment: {
+          SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+          RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+          USER_POOL_ID: this.userPool.userPoolId,
+          ALLOWED_ORIGIN_PARAM: this.allowedOriginsParamName,
+        },
+        functionName: `${id}-adminProvisioningFunction`,
+        memorySize: 256,
+        layers: [postgres],
+        role: adminProvisioningRole,
+        tracing: lambda.Tracing.ACTIVE,
+      }
+    );
+    lambdaAdminProvisioningFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter", "ssm:GetParameters"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+    lambdaAdminProvisioningFunction.addPermission("AllowApiGatewayInvoke", {
+      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+      action: "lambda:InvokeFunction",
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/POST/admin/users`,
+    });
+    (lambdaAdminProvisioningFunction.node.defaultChild as lambda.CfnFunction)
+      .overrideLogicalId("adminProvisioningFunction");
+
     // Define WebSocket API and related resources directly in ApiGatewayStack
     this.webSocketApi = new apigatewayv2.WebSocketApi(
       this,
