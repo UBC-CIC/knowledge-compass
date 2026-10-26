@@ -15,6 +15,7 @@ from helpers.journeys import apply_document_coverage
 from helpers.logic import get_current_prompt
 from helpers.routing import DETECTIVE, RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
+from helpers.prompt_data import data_block_note
 from helpers.embedding_space import EmbeddingSpaceError
 from helpers.retrieval import (
     DEFAULT_MIN_SCORE, effective_min_score, public_http_url, retrieve_from_pgvector, to_public_source,
@@ -237,6 +238,7 @@ def _prepare_conversation(
 <retrieved_context>
 {context_block}
 </retrieved_context>
+{data_block_note("retrieved_context")}
 """
     else:
         context_block = format_context_for_prompt(sources)
@@ -245,6 +247,7 @@ def _prepare_conversation(
 <retrieved_context>
 {context_block}
 </retrieved_context>
+{data_block_note("retrieved_context")}
 """
 
     # 10. Build Messages
