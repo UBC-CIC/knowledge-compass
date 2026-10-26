@@ -95,5 +95,78 @@ class InvokeGuardrailTests(unittest.TestCase):
         self.assertEqual(kwargs["content"], [{"text": {"text": COARSE}}])
 
 
+ANSWER = "Call the Family Support Line at 1-800-555-0100 or email help@example.org."
+BLOCKED_OUTPUT = "Sorry, I can't share that answer."
+
+
+def _filter_assessment(filter_type):
+    return {"contentPolicy": {"filters": [
+        {"type": filter_type, "confidence": "MEDIUM", "action": "BLOCKED"},
+    ]}}
+
+
+class InvokeOutputGuardrailTests(unittest.TestCase):
+    def _invoke(self, response, text=ANSWER):
+        client = mock.Mock()
+        client.apply_guardrail.return_value = response
+        with mock.patch.object(guardrail.boto3, "client", return_value=client):
+            result = guardrail.invoke_output_guardrail(text, "ca-central-1")
+        return result, client
+
+    def test_applies_guardrail_to_output(self):
+        result, client = self._invoke({"action": "NONE"})
+        kwargs = client.apply_guardrail.call_args.kwargs
+        self.assertEqual(kwargs["source"], "OUTPUT")
+        self.assertEqual(kwargs["content"], [{"text": {"text": ANSWER}}])
+        self.assertEqual(result, {"action": guardrail.ACTION_NONE, "text": ANSWER})
+
+    def test_content_filter_blocks_with_the_guardrail_message(self):
+        for filter_type in ["HATE", "INSULTS", "SEXUAL", "VIOLENCE", "MISCONDUCT"]:
+            with self.subTest(filter_type):
+                result, _ = self._invoke(_intervened(BLOCKED_OUTPUT, [_filter_assessment(filter_type)]))
+                self.assertEqual(result, {"action": guardrail.ACTION_BLOCKED, "text": BLOCKED_OUTPUT})
+
+    def test_high_risk_id_is_anonymized(self):
+        masked = "Your SIN {CA_SOCIAL_INSURANCE_NUMBER} is not needed for an IEP."
+        response = _intervened(masked, [{"sensitiveInformationPolicy": {"piiEntities": [
+            {"type": "CA_SOCIAL_INSURANCE_NUMBER", "match": "046 454 286", "action": "ANONYMIZED"},
+        ]}}])
+        result, _ = self._invoke(response, "Your SIN 046 454 286 is not needed for an IEP.")
+        self.assertEqual(result, {"action": guardrail.ACTION_ANONYMIZED, "text": masked})
+
+    def test_content_filter_wins_over_pii(self):
+        response = _intervened(BLOCKED_OUTPUT, [
+            _filter_assessment("HATE"),
+            {"sensitiveInformationPolicy": {"piiEntities": [{"type": "PIN", "match": "1234", "action": "ANONYMIZED"}]}},
+        ])
+        result, _ = self._invoke(response)
+        self.assertEqual(result["action"], guardrail.ACTION_BLOCKED)
+
+    def test_unknown_intervention_never_returns_the_answer(self):
+        result, _ = self._invoke(_intervened(ANSWER, []))
+        self.assertEqual(result, {"action": guardrail.ACTION_BLOCKED, "text": guardrail.OUTPUT_BLOCKED_FALLBACK})
+
+    def test_blocked_without_message_uses_fallback(self):
+        result, _ = self._invoke({"action": "GUARDRAIL_INTERVENED", "outputs": [],
+                                  "assessments": [_filter_assessment("VIOLENCE")]})
+        self.assertEqual(result, {"action": guardrail.ACTION_BLOCKED, "text": guardrail.OUTPUT_BLOCKED_FALLBACK})
+
+    def test_errors_are_raised(self):
+        client = mock.Mock()
+        client.apply_guardrail.side_effect = RuntimeError("throttled")
+        with mock.patch.object(guardrail.boto3, "client", return_value=client):
+            with self.assertRaises(RuntimeError):
+                guardrail.invoke_output_guardrail(ANSWER, "ca-central-1")
+
+    def test_logs_never_contain_the_answer_or_match(self):
+        response = _intervened("SIN {CA_SOCIAL_INSURANCE_NUMBER}", [{"sensitiveInformationPolicy": {"piiEntities": [
+            {"type": "CA_SOCIAL_INSURANCE_NUMBER", "match": "046 454 286", "action": "ANONYMIZED"},
+        ]}}])
+        with self.assertLogs("helpers.guardrail", level="INFO") as logs:
+            self._invoke(response, "SIN 046 454 286")
+        for line in logs.output:
+            self.assertNotIn("046 454 286", line)
+
+
 if __name__ == "__main__":
     unittest.main()
