@@ -500,3 +500,43 @@ describe("API Lambda IAM least privilege", () => {
     expect(cycles).toEqual([]);
   });
 });
+
+// Finding A-01: the guardrail also screens the final answer. Asserted on the
+// synthesized template so the deployed policy, not just the constants, is covered.
+describe("Bedrock guardrail policy", () => {
+  const guardrail = () => {
+    const found = Object.values(resources).filter((r: any) => r.Type === "AWS::Bedrock::Guardrail");
+    expect(found).toHaveLength(1);
+    return (found[0] as any).Properties;
+  };
+
+  test("content filters screen output only; prompt attacks screen input only", () => {
+    const filters = guardrail().ContentPolicyConfig.FiltersConfig;
+    const byType = Object.fromEntries(filters.map((f: any) => [f.Type, f]));
+    expect(byType.PROMPT_ATTACK).toMatchObject({ InputStrength: "HIGH", OutputStrength: "NONE" });
+    for (const type of ["HATE", "INSULTS", "SEXUAL", "VIOLENCE", "MISCONDUCT"]) {
+      expect(byType[type].InputStrength).toBe("NONE");
+      expect(byType[type].OutputStrength).not.toBe("NONE");
+    }
+  });
+
+  test("output masks only high-risk identifiers; every entry states its output setting", () => {
+    const pii = guardrail().SensitiveInformationPolicyConfig.PiiEntitiesConfig;
+    for (const e of pii) expect(typeof e.OutputEnabled).toBe("boolean");
+    expect(pii.find((e: any) => e.Type === "NAME").OutputEnabled).toBe(false);
+    expect(pii.find((e: any) => e.Type === "URL").OutputEnabled).toBe(false);
+    expect(pii.find((e: any) => e.Type === "CA_SOCIAL_INSURANCE_NUMBER")).toMatchObject({
+      OutputEnabled: true,
+      OutputAction: "ANONYMIZE",
+    });
+    for (const r of guardrail().SensitiveInformationPolicyConfig.RegexesConfig) {
+      expect(r.OutputEnabled).toBe(false);
+    }
+  });
+
+  test("a new guardrail version is published for this policy", () => {
+    const versions = Object.entries(resources).filter(([, r]: [string, any]) => r.Type === "AWS::Bedrock::GuardrailVersion");
+    expect(versions).toHaveLength(1);
+    expect(versions[0][0]).toMatch(/^InputGuardrailVersion/);
+  });
+});

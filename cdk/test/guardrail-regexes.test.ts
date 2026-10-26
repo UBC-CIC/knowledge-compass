@@ -25,6 +25,8 @@ describe("GUARDRAIL_REGEXES_CONFIG", () => {
       expect(r.action).toBe("ANONYMIZE");
       expect(r.inputAction).toBe("ANONYMIZE");
       expect(r.inputEnabled).toBe(true);
+      // Answers name the addresses of schools and organizations.
+      expect(r.outputEnabled).toBe(false);
       for (const lookaround of ["(?=", "(?!", "(?<=", "(?<!"]) {
         expect(r.pattern).not.toContain(lookaround);
       }

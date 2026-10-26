@@ -52,6 +52,8 @@ export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[
     action: 'ANONYMIZE',
     inputAction: 'ANONYMIZE',
     inputEnabled: true,
+    outputAction: 'NONE',
+    outputEnabled: false,
   },
   {
     name: 'STREET_ADDRESS',
@@ -60,8 +62,69 @@ export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[
     action: 'ANONYMIZE',
     inputAction: 'ANONYMIZE',
     inputEnabled: true,
+    outputAction: 'NONE',
+    outputEnabled: false,
   },
 ];
+
+// High-risk identifiers, masked in model output as well as input. Every other
+// PII type is input-only: in an answer, names, emails, phone numbers, URLs and
+// street addresses are mostly the organizations, helplines and links families
+// need, so masking them would break the answer.
+export const GUARDRAIL_OUTPUT_MASKED_PII = [
+  'PASSWORD', 'PIN',
+  'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
+  'INTERNATIONAL_BANK_ACCOUNT_NUMBER',
+  'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
+];
+
+const GUARDRAIL_PII_TYPES = [
+  // General
+  'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
+  'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
+  // Finance
+  'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
+  'PIN', 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', 'SWIFT_CODE',
+  // IT
+  'IP_ADDRESS', 'MAC_ADDRESS', 'URL',
+  // Canada
+  'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
+];
+
+// Output settings are explicit on every entry: an omitted outputEnabled
+// defaults to on.
+export const GUARDRAIL_PII_ENTITIES_CONFIG: bedrock.CfnGuardrail.PiiEntityConfigProperty[] =
+  GUARDRAIL_PII_TYPES.map((type) => {
+    const masked = GUARDRAIL_OUTPUT_MASKED_PII.includes(type);
+    return {
+      type,
+      action: 'ANONYMIZE',
+      inputAction: 'ANONYMIZE',
+      inputEnabled: true,
+      outputAction: masked ? 'ANONYMIZE' : 'NONE',
+      outputEnabled: masked,
+    };
+  });
+
+// PROMPT_ATTACK is input-only (AWS applies it to user input only). The
+// harmful-content filters are output-only: on input they would refuse parents
+// describing hitting, restraint, bullying or abuse at school. Strengths are
+// MEDIUM, and LOW for VIOLENCE and MISCONDUCT, because answers legitimately
+// cover restraint, seclusion, police at school and reporting abuse. Tune with
+// the eval harness before raising them.
+export const GUARDRAIL_CONTENT_FILTERS_CONFIG: bedrock.CfnGuardrail.ContentFilterConfigProperty[] = [
+  { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
+  { type: 'HATE',          inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'INSULTS',       inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'SEXUAL',        inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'VIOLENCE',      inputStrength: 'NONE', outputStrength: 'LOW' },
+  { type: 'MISCONDUCT',    inputStrength: 'NONE', outputStrength: 'LOW' },
+];
+
+export const GUARDRAIL_BLOCKED_INPUT_MESSAGE =
+  "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.";
+export const GUARDRAIL_BLOCKED_OUTPUT_MESSAGE =
+  "Sorry, I can't share that answer. I'm Knowledge Compass, here to help families navigate inclusive education in Canada. Please try asking in a different way.";
 
 /**
  * Per-IP WAF rate rules (finding f-9bda4252).
@@ -1499,69 +1562,29 @@ export class ApiGatewayStack extends cdk.Stack {
       })
     );
 
-    // --- Bedrock Input Guardrail ---
-    const guardrailConfig = {
-      piiEntities: [
-        // General
-        'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
-        'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
-        // Finance
-        'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
-        'PIN', 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', 'SWIFT_CODE',
-        // IT
-        'IP_ADDRESS', 'MAC_ADDRESS', 'URL',
-        // Canada
-        'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
-      ],
-      regexes: GUARDRAIL_REGEXES_CONFIG,
-      piiInputAction: 'ANONYMIZE',
-      piiInputEnabled: true,
-      promptAttackStrength: 'HIGH',
-      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
+    // --- Bedrock Guardrail (input and output) ---
+    // Applied by text generation to the user's message (source='INPUT') and to
+    // the final answer (source='OUTPUT'). Construct id and name keep "input"
+    // so the existing guardrail is updated in place, not replaced.
+    const guardrailPolicy = {
+      blockedInputMessaging: GUARDRAIL_BLOCKED_INPUT_MESSAGE,
+      blockedOutputsMessaging: GUARDRAIL_BLOCKED_OUTPUT_MESSAGE,
+      sensitiveInformationPolicyConfig: {
+        piiEntitiesConfig: GUARDRAIL_PII_ENTITIES_CONFIG,
+        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
+      },
+      contentPolicyConfig: {
+        filtersConfig: GUARDRAIL_CONTENT_FILTERS_CONFIG,
+      },
     };
 
     const inputGuardrail = new bedrock.CfnGuardrail(this, 'InputGuardrail', {
       name: `${id}-input-guardrail`,
-      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
-      blockedOutputsMessaging: 'Response blocked.',
-      sensitiveInformationPolicyConfig: {
-        piiEntitiesConfig: [
-          // General
-          { type: 'AGE',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'NAME',                       action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'EMAIL',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PHONE',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'USERNAME',                   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PASSWORD',                   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'DRIVER_ID',                  action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'LICENSE_PLATE',              action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'VEHICLE_IDENTIFICATION_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // Finance
-          { type: 'CREDIT_DEBIT_CARD_CVV',      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CREDIT_DEBIT_CARD_EXPIRY',   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CREDIT_DEBIT_CARD_NUMBER',   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PIN',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'SWIFT_CODE',                 action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // IT
-          { type: 'IP_ADDRESS',                 action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'MAC_ADDRESS',                action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'URL',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // Canada
-          { type: 'CA_HEALTH_NUMBER',           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CA_SOCIAL_INSURANCE_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-        ],
-        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
-      },
-      contentPolicyConfig: {
-        filtersConfig: [
-          // outputStrength must be NONE: AWS applies PROMPT_ATTACK to user input only, and this guardrail is applied with source='INPUT' only.
-          { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
-        ],
-      },
+      ...guardrailPolicy,
     });
 
-    const configHash = computeConfigHash(guardrailConfig);
+    // Hash of the deployed policy itself, so any change publishes a new version.
+    const configHash = computeConfigHash(guardrailPolicy);
     cdk.Tags.of(inputGuardrail).add('ConfigHash', configHash);
 
     const inputGuardrailVersion = new bedrock.CfnGuardrailVersion(this, `InputGuardrailVersion-${configHash.substring(0, 8)}`, {
