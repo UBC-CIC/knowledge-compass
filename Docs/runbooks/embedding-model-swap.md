@@ -18,6 +18,7 @@ Everything below is done from the admin console page **Search index**. No deploy
 
 Use this runbook when:
 
+- the deployment still runs on Cohere Embed English v3 (end of life). New installs start on Titan Text Embeddings V2 (`titan-v2-1024`, migration 049); a deployment that already had content when 049 ran keeps `cohere-v3-1024` until it is moved with this runbook;
 - the lifecycle check (see [Lifecycle alerts](#9-lifecycle-alerts)) says the model in use is not `ACTIVE`, is missing, or ends within 90 days;
 - you want a better or cheaper model, or a smaller vector size;
 - the current model is failing or has been retired by AWS (see [When to use the banner or read-only mode](#8-when-to-use-the-banner-or-read-only-mode)).

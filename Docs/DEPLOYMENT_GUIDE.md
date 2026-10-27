@@ -46,7 +46,7 @@ To request quota increases:
 2. Search for "Bedrock" in the service quotas
 3. Select the relevant LLM models you plan to use:
    - Anthropic Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`)
-   - Cohere Embed V3
+   - Amazon Titan Text Embeddings V2 (the embedding model of a new install; deployments created before migration 049 use Cohere Embed V3 until they switch)
 4. Request quota increases for "Requests per minute" based on your expected usage
 5. Submit the quota increase request and wait for AWS approval (this can take 24-48 hours)
 

@@ -160,8 +160,8 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 
 - **AWS Lambda** (Python 3.12 and Node.js 22) for serverless compute
 - **Amazon Bedrock** for LLM inference — Claude Haiku 5.5 (Anthropic)
-- **Amazon Bedrock Knowledge Base** with **Cohere Embed English v3** for vector embeddings
-- **Amazon OpenSearch Serverless** for vector storage and similarity search
+- **Amazon Bedrock** embedding models for vector embeddings — **Amazon Titan Text Embeddings V2** on new installs (deployments created before migration 049 keep Cohere Embed English v3 until they switch); the active model is chosen from the admin console (see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md))
+- **pgvector** on PostgreSQL for vector storage and similarity search
 - **PostgreSQL** (RDS) for relational data storage
 - **Amazon S3** for knowledge base document storage
 - **API Gateway** (REST and WebSocket) for APIs
@@ -212,7 +212,7 @@ Licenses of third-party libraries and services used by this system:
 For PostgreSQL — a liberal open source license, similar to BSD or MIT.
 
 **[Cohere Terms of Use](https://cohere.com/terms-of-use)**
-For Cohere Embed English v3, accessed via Amazon Bedrock for vector embeddings.
+For Cohere Embed English v3, accessed via Amazon Bedrock for vector embeddings on deployments that still use it.
 
 **[Anthropic Usage Policy](https://www.anthropic.com/legal/aup)**
 For Claude Haiku 5.5, accessed via Amazon Bedrock for text generation.
