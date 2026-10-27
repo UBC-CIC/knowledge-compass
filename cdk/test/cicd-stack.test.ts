@@ -54,6 +54,7 @@ describe("CICDStack", () => {
       "npm run test:lambda",
       "lambda/textGeneration && PYTHONDONTWRITEBYTECODE=1 python -m unittest",
       "lambda/knowledgeBase && PYTHONDONTWRITEBYTECODE=1 python -m unittest",
+      "cdk && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s containers/tests",
     ]) {
       expect(buildSpec).toContain(step);
     }

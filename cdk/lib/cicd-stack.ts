@@ -337,6 +337,9 @@ export class CICDStack extends cdk.Stack {
               "cd $CODEBUILD_SRC_DIR/cdk && npm run test:lambda",
               "cd $CODEBUILD_SRC_DIR/cdk/lambda/textGeneration && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests",
               "cd $CODEBUILD_SRC_DIR/cdk/lambda/knowledgeBase && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests",
+              // Crawler/transcriber code and its parity with the Lambda copy of
+              // url_safety.py; heavy dependencies are stubbed, so no extra installs.
+              "cd $CODEBUILD_SRC_DIR/cdk && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s containers/tests",
             ],
           },
         },
