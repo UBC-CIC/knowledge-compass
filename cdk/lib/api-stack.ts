@@ -1086,65 +1086,11 @@ export class ApiGatewayStack extends cdk.Stack {
       ],
     });
 
-    // Shared by systemMessagesFunction, chatSessionFunction and adminFunction only.
-    const lambdaRole = new iam.Role(this, `${id}-postgresLambdaRole`, {
-      roleName: `${id}-postgresLambdaRole`,
-      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-      permissionsBoundary: requestHandlerBoundary,
-    });
-
-
-    // Grant access to specific secrets instead of '*'
-    db.secretPathUser.grantRead(lambdaRole);
-
-    // Grant access to EC2
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface",
-          "ec2:AssignPrivateIpAddresses",
-          "ec2:UnassignPrivateIpAddresses",
-        ],
-        resources: ["*"], // must be *
-      })
-    );
-
-    // Grant access to log
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          //Logs
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-        ],
-        resources: ["arn:aws:logs:*:*:*"],
-      })
-    );
-
-    // Grant X-Ray tracing permissions
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "xray:PutTraceSegments",
-          "xray:PutTelemetryRecords",
-          "xray:GetSamplingRules",
-          "xray:GetSamplingTargets",
-        ],
-        resources: ["*"],
-      })
-    );
-
-    // Dedicated roles for the functions split off lambdaRole. VPC functions get
-    // AWSLambdaVPCAccessExecutionRole (ENIs + logs), the out-of-VPC user authorizer
-    // AWSLambdaBasicExecutionRole (logs). Traced functions get the same X-Ray statement
-    // as lambdaRole. Remaining grants are added per function below (addToRolePolicy /
-    // grantRead on the function follow its role).
+    // One execution role per request-handling function; none is shared. VPC functions
+    // get AWSLambdaVPCAccessExecutionRole (ENIs + logs), the out-of-VPC user authorizer
+    // AWSLambdaBasicExecutionRole (logs). Traced functions also get the X-Ray statement.
+    // Remaining grants are added per function below (addToRolePolicy / grantRead on the
+    // function follow its role).
     const newExecutionRole = (name: string, opts: { vpc: boolean; xray: boolean }) => {
       const role = new iam.Role(this, `${id}-${name}`, {
         roleName: `${id}-${name}`,
@@ -1188,6 +1134,12 @@ export class ApiGatewayStack extends cdk.Stack {
     // reaches only the handler that verifies eval tags (finding f-7277748f).
     const chatSessionRole = newExecutionRole("chatSessionRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(chatSessionRole);
+    // systemMessagesFunction (public member routes) and adminFunction no longer share
+    // one role, so a bug in either does not carry the other's grants (finding A-07).
+    const systemMessagesRole = newExecutionRole("systemMessagesRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(systemMessagesRole);
+    const adminFunctionRole = newExecutionRole("adminFunctionRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(adminFunctionRole);
     const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(knowledgeBaseRole);
     // Shared token that authenticates lambdaKnowledgeBase self-invocations
@@ -1794,7 +1746,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // within 90 days. The same topic is the action of the two embedding alarms above.
     //
     // Circular-dependency note: everything here is NEW and self-contained. The function has its
-    // OWN role (not the shared lambdaRole), and the alarms reference the topic only; nothing
+    // OWN role, and the alarms reference the topic only; nothing
     // takes a token from lambdaKnowledgeBase or lambdaTextGen. No stack output is exported.
     const lifecycleTopic = new sns.Topic(this, 'ModelLifecycleAlerts', {
       topicName: `${id}-ModelLifecycleAlerts`,
@@ -2181,7 +2133,7 @@ export class ApiGatewayStack extends cdk.Stack {
       functionName: `${id}-systemMessagesFunction`,
       memorySize: 512,
       layers: [postgres],
-      role: lambdaRole,
+      role: systemMessagesRole,
       tracing: lambda.Tracing.ACTIVE,
     });
 
@@ -2327,7 +2279,7 @@ export class ApiGatewayStack extends cdk.Stack {
         functionName: `${id}-adminFunction`,
         memorySize: 512,
         layers: [postgres],
-        role: lambdaRole,
+        role: adminFunctionRole,
         tracing: lambda.Tracing.ACTIVE,
       }
     );

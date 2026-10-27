@@ -28,8 +28,9 @@ const SPLIT_FUNCTIONS = [
   "lambdaTextGen",
   "lambdaKnowledgeBase",
   "chatSessionFunction",
+  "systemMessagesFunction",
+  "adminFunction",
 ];
-const SHARED_FUNCTIONS = ["systemMessagesFunction", "adminFunction"];
 const WEBSOCKET_FUNCTION_NAMES = ["KC-Api-ConnectFunction", "KC-Api-DisconnectFunction", "KC-Api-DefaultFunction"];
 const COGNITO_TRIGGER_NAMES = ["KC-Api-addMemberOnSignUp", "KC-Api-preSignupLambda"];
 
@@ -190,21 +191,21 @@ describe("API Lambda IAM least privilege", () => {
     expect(cognitoStatements[0].Resource).toEqual({ "Fn::GetAtt": [poolId, "Arn"] });
   });
 
-  test("authorizers, userFunction, text generation, knowledge base and chat sessions have their own roles", () => {
-    const shared = new Set(SHARED_FUNCTIONS.map(roleOf));
-    expect(shared.size).toBe(1);
-    const sharedRole = [...shared][0];
+  test("every request-handling function has its own role (no shared role, A-07)", () => {
     const splitRoles = SPLIT_FUNCTIONS.map(roleOf);
     expect(new Set(splitRoles).size).toBe(SPLIT_FUNCTIONS.length);
-    expect(splitRoles).not.toContain(sharedRole);
-    const onShared = Object.entries(resources)
-      .filter(([, r]) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === sharedRole)
-      .map(([id]) => id)
-      .sort();
-    expect(onShared).toEqual([...SHARED_FUNCTIONS].sort());
+    for (const roleId of splitRoles) {
+      const users = Object.values(resources).filter(
+        (r) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === roleId
+      );
+      expect(users).toHaveLength(1);
+    }
+    expect(Object.values(resources).some(
+      (r) => r.Type === "AWS::IAM::Role" && r.Properties.RoleName === "KC-Api-postgresLambdaRole"
+    )).toBe(false);
   });
 
-  test("authorizer, public-token and chat session roles hold only secret/SSM/X-Ray reads", () => {
+  test("authorizer, public-token, chat session, system messages and admin roles hold only secret/SSM/X-Ray reads", () => {
     const allowed = new Set([
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
@@ -221,6 +222,8 @@ describe("API Lambda IAM least privilege", () => {
       userFunction: "AWSLambdaVPCAccessExecutionRole",
       // Also where the eval signing-secret read lands when enableEval is on (f-7277748f).
       chatSessionFunction: "AWSLambdaVPCAccessExecutionRole",
+      systemMessagesFunction: "AWSLambdaVPCAccessExecutionRole",
+      adminFunction: "AWSLambdaVPCAccessExecutionRole",
     };
     for (const [fnId, policyName] of Object.entries(managed)) {
       const roleId = roleOf(fnId);
@@ -280,7 +283,7 @@ describe("API Lambda IAM least privilege", () => {
     );
     expect(boundaries).toHaveLength(1);
     const [boundaryId, boundary] = boundaries[0];
-    const fnIds = [...SPLIT_FUNCTIONS, ...SHARED_FUNCTIONS, ...WEBSOCKET_FUNCTION_NAMES.map(fnIdByName)];
+    const fnIds = [...SPLIT_FUNCTIONS, ...WEBSOCKET_FUNCTION_NAMES.map(fnIdByName)];
     for (const fnId of fnIds) {
       expect(resources[roleOf(fnId)].Properties.PermissionsBoundary).toEqual({ Ref: boundaryId });
     }
