@@ -2049,6 +2049,22 @@ export class ApiGatewayStack extends cdk.Stack {
     const cfnLambdaKnowledgeBase = lambdaKnowledgeBase.node.defaultChild as lambda.CfnFunction;
     cfnLambdaKnowledgeBase.overrideLogicalId("lambdaKnowledgeBase");
 
+    // Worker self-invocations that Lambda gives up on (retries exhausted or event
+    // too old) are lost, so alarm on them (A-15). No DLQ or onFailure destination:
+    // both store the whole request payload, which carries the worker invoke token
+    // (helpers/worker_envelope.py), so a queue would hold copies of that secret.
+    new cloudwatch.Alarm(this, 'KnowledgeBaseAsyncEventsDroppedAlarm', {
+      metric: lambdaKnowledgeBase.metric('AsyncEventsDropped', {
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Knowledge base worker dropped an async invocation; an ingestion or embedding batch did not finish. Check lambdaKnowledgeBase logs',
+    }).addAlarmAction(opsAlarmAction);
+
     lambdaKnowledgeBase.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",

@@ -653,3 +653,30 @@ describe("Ingestion task DB access", () => {
     }
   });
 });
+
+// Finding A-15: lost knowledge base worker invocations raise an alarm. The worker
+// payload carries the invoke token, so no queue or destination stores it.
+describe("Knowledge base async failures", () => {
+  test("dropped async invocations alarm to the ops topic", () => {
+    const alarms = Object.values(resources).filter(
+      (r) => r.Type === "AWS::CloudWatch::Alarm" && r.Properties.MetricName === "AsyncEventsDropped"
+    );
+    expect(alarms).toHaveLength(1);
+    const p = alarms[0].Properties;
+    expect(p.Namespace).toBe("AWS/Lambda");
+    expect(JSON.stringify(p.Dimensions)).toContain("lambdaKnowledgeBase");
+    expect(p.Statistic).toBe("Sum");
+    expect(p.Threshold).toBe(0);
+    expect(p.ComparisonOperator).toBe("GreaterThanThreshold");
+    expect(p.AlarmActions).toHaveLength(1);
+  });
+
+  test("no async invoke config sends payloads (and the invoke token) to a destination", () => {
+    const configs = Object.values(resources).filter((r) => r.Type === "AWS::Lambda::EventInvokeConfig");
+    for (const c of configs) {
+      expect(c.Properties.DestinationConfig).toBeUndefined();
+    }
+    const kb = resources["lambdaKnowledgeBase"].Properties;
+    expect(kb.DeadLetterConfig).toBeUndefined();
+  });
+});
