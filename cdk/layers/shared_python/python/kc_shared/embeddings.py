@@ -15,13 +15,13 @@ verified availability in a region.
 
 Packaging
 ---------
-The canonical copy lives in cdk/containers/common/embeddings.py. Byte-identical
-mirrors are kept in cdk/lambda/textGeneration/helpers/ and
-cdk/lambda/knowledgeBase/helpers/ because the three deployables are packaged
-separately. textGeneration/tests/test_shared_module_parity.py fails if the
-copies drift. Edit the canonical file, then copy it over the mirrors. This file
-imports only the standard library and boto3/botocore so it works in all three
-packagings.
+The canonical copy lives in the kc_shared Lambda layer
+(cdk/layers/shared_python/python/kc_shared/embeddings.py), which both Lambdas
+import. The crawler/transcriber images cannot use a Lambda layer, so a
+byte-identical copy is kept in cdk/containers/common/embeddings.py;
+textGeneration/tests/test_shared_module_parity.py fails if the two drift. Edit
+the layer copy, then copy it over the container copy. This file imports only
+the standard library and boto3/botocore so it works in both packagings.
 
 Privacy: never log or print input text. Errors carry counts and sizes only.
 """

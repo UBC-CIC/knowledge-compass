@@ -1,7 +1,7 @@
 
 import boto3.exceptions
 import json
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 import logging
 import os
 import uuid

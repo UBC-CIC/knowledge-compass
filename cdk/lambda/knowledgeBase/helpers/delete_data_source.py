@@ -2,7 +2,7 @@ import json
 import logging
 
 from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.data_source_cleanup import plan_removal, remove_data_sources
 from helpers.upload_identity import delete_s3_objects
 from helpers.web_sources import delete_website_pages

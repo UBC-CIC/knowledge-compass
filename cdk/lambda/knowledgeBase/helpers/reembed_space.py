@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, List, Optional
 
-from helpers import embeddings
+from kc_shared import embeddings
 from helpers.admin_audit import actor_from_event
 from helpers.embedding_jobs import (
     TERMINAL_STATUSES,

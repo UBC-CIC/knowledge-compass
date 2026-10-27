@@ -1,7 +1,7 @@
 """
-Guards the knowledgeBase copy of helpers/embeddings.py (packaged separately from
-textGeneration) and the document-batch wiring that depends on it. Byte parity
-with the canonical file is enforced in textGeneration/tests/test_shared_module_parity.py.
+Guards the knowledgeBase document-batch wiring that depends on the shared
+layer's kc_shared.embeddings. The container copy's byte parity with the layer
+is enforced in textGeneration/tests/test_shared_module_parity.py.
 """
 
 import json
@@ -22,7 +22,7 @@ except Exception:  # noqa: BLE001
     _docx.Document = object
     sys.modules["docx"] = _docx
 
-from helpers import embeddings  # noqa: E402
+from kc_shared import embeddings  # noqa: E402
 from helpers import process_document_batch as batch  # noqa: E402
 
 

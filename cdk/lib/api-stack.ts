@@ -391,6 +391,16 @@ export class ApiGatewayStack extends cdk.Stack {
       description: "Lambda layer containing the psycopg2 Python library",
     });
 
+    // Python code shared by lambdaTextGen and lambdaKnowledgeBase (CORS, embeddings,
+    // retrieval SQL, eval scoring and the golden set), imported as kc_shared.* from
+    // /opt/python. One copy instead of one per package (A-13); see
+    // layers/shared_python/python/kc_shared/__init__.py.
+    const sharedPythonLayer = new lambda.LayerVersion(this, "sharedPythonLayer", {
+      code: lambda.Code.fromAsset("./layers/shared_python", { exclude: ["**/__pycache__"] }),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
+      description: "kc_shared: Python modules shared by the text generation and knowledge base Lambdas",
+    });
+
     // Create Allowed Origin Parameters
       this.allowedOriginsParamName = `/${id}/API/AllowedOrigins`;
       const crParams = {
@@ -1480,7 +1490,7 @@ export class ApiGatewayStack extends cdk.Stack {
         timeout: cdk.Duration.seconds(60),
         role: textGenRole,
         reservedConcurrentExecutions: reservedConcurrency(50),
-        layers: [psycopgLayer, powertoolsLayer],
+        layers: [psycopgLayer, powertoolsLayer, sharedPythonLayer],
         vpc: vpcStack.vpc,
         tracing: lambda.Tracing.ACTIVE,
         memorySize: 512,
@@ -1946,7 +1956,7 @@ export class ApiGatewayStack extends cdk.Stack {
       // work that doesn't fit continues in a fresh self-invocation.
       timeout: Duration.seconds(600),
       role: knowledgeBaseRole,
-      layers: [psycopgLayer],
+      layers: [psycopgLayer, sharedPythonLayer],
       memorySize: 512,
       vpc: vpcStack.vpc,
       tracing: lambda.Tracing.ACTIVE,

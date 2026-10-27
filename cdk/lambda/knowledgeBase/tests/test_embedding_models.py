@@ -160,7 +160,7 @@ class MatchModelsTest(unittest.TestCase):
         self.assertTrue(all(not entry["available"] for entry in entries))
 
     def test_catalog_providers_match_the_adapters(self):
-        from helpers import embeddings
+        from kc_shared import embeddings
         self.assertEqual(set(em.CATALOG), set(embeddings.ADAPTERS))
 
 

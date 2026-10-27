@@ -1,6 +1,6 @@
 import os
 import json
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 import boto3
 import logging
 import psycopg2

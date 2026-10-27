@@ -1,5 +1,5 @@
 """
-Unit tests for helpers/cors.py (byte-identical in knowledgeBase): every
+Unit tests for kc_shared/cors.py (shared layer, used by both Lambdas): every
 misconfiguration or SSM failure must fail closed, never to a wildcard.
 Run from textGeneration:  python -m unittest discover -s tests -p "test_cors.py"
 """
@@ -10,9 +10,10 @@ import unittest
 from unittest import mock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
-from helpers import cors  # noqa: E402
+from kc_shared import cors  # noqa: E402
 
 PARAM = "/test/API/AllowedOrigins"
 APP = "https://app.example.test"

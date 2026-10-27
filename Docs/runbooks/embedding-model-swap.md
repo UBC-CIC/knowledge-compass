@@ -29,7 +29,7 @@ How it works, in one paragraph. A new index (a "space": one model, one vector si
 - [ ] Database migrations 032, 033 and 034 are applied (`cdk/lambda/db_setup/migrations/`). 034 adds the banner and read-only switch.
 - [ ] Access to the candidate model is enabled in Amazon Bedrock for the region you will call.
 - [ ] The IAM grants for the candidate models are deployed (`cdk/lib/ingestion-stack.ts` and `cdk/lib/api-stack.ts` list Titan Text Embeddings V2 and Cohere Embed v4 next to the current Cohere v3). Registering an index reads the model id and inference-profile ARN from Amazon Bedrock; these grants enable the candidates and do not assert availability in any region.
-- [ ] The golden question set is present: `cdk/lambda/textGeneration/tests/eval/golden_queries.json` (71 synthetic questions) and its copy in `cdk/lambda/knowledgeBase/helpers/golden_queries.json`. Never replace them with real chat messages.
+- [ ] The golden question set is present: `cdk/layers/shared_python/python/kc_shared/golden_queries.json` (71 synthetic questions, in the shared layer both Lambdas load). Never replace it with real chat messages.
 - [ ] A recent database snapshot exists.
 - [ ] You have read [Where inference runs](#3-where-inference-runs-and-data-residency).
 
@@ -45,7 +45,7 @@ Owners are placeholders. Durations are expectations, not measurements.
 
 | # | Step | Where | What to do | Expected duration | Owner |
 |---|---|---|---|---|---|
-| 1 | Compare candidates offline | A terminal with a database and Bedrock access | `py -3 cdk\lambda\textGeneration\tests\eval\run_eval.py cdk\lambda\textGeneration\tests\eval\golden_queries.json --candidate` (set `EVAL_DATABASE_URL`; use `--candidates`, `--invoke-target name=ID_OR_ARN` and `--price name=USD_PER_1M` as needed). It reads a read-only snapshot and prints ids, ranks and metrics only, never chunk text. | Minutes to an hour, depending on corpus size | `TODO(owner)` |
+| 1 | Compare candidates offline | A terminal with a database and Bedrock access | `py -3 cdk\lambda\textGeneration\tests\eval\run_eval.py cdk\layers\shared_python\python\kc_shared\golden_queries.json --candidate` (set `EVAL_DATABASE_URL`; use `--candidates`, `--invoke-target name=ID_OR_ARN` and `--price name=USD_PER_1M` as needed). It reads a read-only snapshot and prints ids, ranks and metrics only, never chunk text. | Minutes to an hour, depending on corpus size | `TODO(owner)` |
 | 2 | Register the index | **Search index** > **Register a new index** | Name, the model (its id and the Bedrock call target are filled from Amazon Bedrock), dimensions, and optionally price, end-of-life date and score thresholds. It starts as **Building** and changes nothing for families. | Under a minute | `TODO(owner)` |
 | 3 | Dry run | **Manage** > **Dry run (estimate only)** | Counts what needs embedding and estimates tokens, cost and time. Writes nothing. The cost line reads `price not configured` unless you entered a price. **Start rebuild** stays disabled until a dry run has finished. | A few minutes | `TODO(owner)` |
 | 4 | Rebuild | **Start rebuild** | Embeds every chunk that lacks a current vector. Ingestion keeps running and chat is unaffected. Throttling is retried; a failed rebuild keeps its place and can be started again. | The dry-run estimate | `TODO(owner)` |

@@ -1,6 +1,6 @@
 import json
 import logging
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
 from helpers.admin_user import (
     admin_email_from_request,

@@ -70,7 +70,7 @@ import time
 import boto3
 from docx import Document as DocxDocument
 
-from helpers import embeddings
+from kc_shared import embeddings
 from helpers.admin_audit import actor_from_event, with_actor
 from helpers.csv_links import start_link_phase
 from helpers.embedding_space import resolve_active_space

@@ -6,7 +6,7 @@ from helpers.admin_user import (
     admin_sub_from_request,
     get_or_create_admin_user_id,
 )
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
 from helpers.video_transcription import start_transcription_job
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url

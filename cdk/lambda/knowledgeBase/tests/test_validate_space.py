@@ -14,7 +14,8 @@ import unittest
 from unittest import mock
 
 import _embedding_fakes as fakes
-from helpers import eval_scoring, retrieval_core, validate_space as vs
+from helpers import validate_space as vs
+from kc_shared import eval_scoring, retrieval_core
 from helpers.embedding_space import ActiveSpace
 
 TARGET_ID = "22222222-2222-4222-8222-222222222222"
@@ -204,7 +205,7 @@ class GoldenFileTest(unittest.TestCase):
         self.assertEqual((kinds.count("positive"), kinds.count("near_miss"), kinds.count("off_topic")), (64, 4, 3))
 
     def test_scoring_matches_the_textgeneration_numbers(self):
-        # The KB mirror is byte-identical (see the parity test); same fake data, same numbers.
+        # Same shared kc_shared module as textGeneration; same fake data, same numbers.
         ranks = [1, None, 3, 20]
         self.assertEqual(eval_scoring.recall_at_k(ranks, 5), 0.5)
         self.assertAlmostEqual(eval_scoring.mrr(ranks), (1 + 1 / 3 + 1 / 20) / 4)

@@ -23,7 +23,7 @@ from botocore.config import Config
 
 from helpers.admin_audit import with_actor
 from helpers.admin_user import normalize_email
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
 from helpers.guideline_extract import file_kind
 from helpers.ingestion_lock import reject_if_locked

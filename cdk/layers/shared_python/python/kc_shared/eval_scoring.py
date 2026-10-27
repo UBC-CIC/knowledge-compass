@@ -1,10 +1,8 @@
 """
 Pure scoring helpers for retrieval evaluation (no AWS, no database).
 
-Used by tests/eval/run_eval.py (offline golden-set comparison) and, mirrored
-byte-for-byte into cdk/lambda/knowledgeBase/helpers/, by the space validation
-task. Edit the textGeneration copy, then copy it over the mirror; the parity
-test fails if they drift.
+Used by textGeneration's tests/eval/run_eval.py (offline golden-set comparison)
+and by knowledgeBase's space validation task, both through the kc_shared layer.
 
 A golden entry is a dict with `question`, optional `kind` ("near_miss" or
 "off_topic"; absent means a positive entry that should find an answer), and

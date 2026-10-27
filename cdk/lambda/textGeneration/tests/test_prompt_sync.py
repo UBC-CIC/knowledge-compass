@@ -21,6 +21,7 @@ import unittest
 
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 import helpers.config as config  # noqa: E402
 from helpers.journeys import DEFAULT_CATALOG, clean_steps  # noqa: E402

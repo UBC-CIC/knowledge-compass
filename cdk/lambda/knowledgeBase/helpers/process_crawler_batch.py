@@ -31,7 +31,7 @@ import os
 
 import boto3
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 
 logger = logging.getLogger()

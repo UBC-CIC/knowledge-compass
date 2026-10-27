@@ -16,6 +16,7 @@ from unittest import mock
 
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import routing  # noqa: E402
 from helpers.routing import (  # noqa: E402

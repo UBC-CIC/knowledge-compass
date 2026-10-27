@@ -37,7 +37,7 @@ and the grounding verifier.
 import logging
 from typing import Any, Dict, List, Optional
 
-from helpers import embeddings, retrieval_core
+from kc_shared import embeddings, retrieval_core
 from helpers.embedding_space import EmbeddingSpaceError, get_active_space  # noqa: F401 - re-exported
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ DEFAULT_MIN_RESULTS = 2
 EMBED_MODEL_ID = "cohere.embed-english-v3"
 
 # The SQL, paging constants, de-duplication and selection live in
-# helpers/retrieval_core.py (shared with the validation task). Names that other
+# kc_shared/retrieval_core.py (shared with the validation task). Names that other
 # modules and tests import from here are kept as aliases.
 CANDIDATE_MULTIPLIER = retrieval_core.CANDIDATE_MULTIPLIER
 MAX_CANDIDATE_PAGES = retrieval_core.MAX_CANDIDATE_PAGES
@@ -76,7 +76,7 @@ def embed_query(
     Embed a query string for similarity search. With `spec` (an embedding
     space's model spec) that model is used. Without it, `embed_model_id`
     selects a Cohere v3 invoke target, as before embedding spaces existed. The
-    request itself is built by helpers/embeddings.py.
+    request itself is built by kc_shared/embeddings.py.
     """
     if spec is None:
         spec = (
@@ -185,7 +185,7 @@ def retrieve_from_pgvector(
       1. Embed the query (search_query space) with the active embedding space's
          model. `space_id` searches another space instead (validation only).
       2. Cosine search over that space's vectors joined to chunks and sources,
-         ordered by distance (see helpers/retrieval_core.py for the SQL).
+         ordered by distance (see kc_shared/retrieval_core.py for the SQL).
       3. Filter by min_score, de-duplicate by source, cap at num_results.
       4. If fewer than min_results survive the score filter, backfill with the
          nearest results regardless of score (so the model always has some context).

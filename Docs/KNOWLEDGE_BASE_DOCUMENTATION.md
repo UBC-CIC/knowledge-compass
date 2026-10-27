@@ -110,7 +110,7 @@ The Knowledge Base ingestion workflow is split across several helper modules.
 | File                                                               | Responsibility                                                                                   |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
 | `cdk/lambda/lambdaKnowledgeBase/main.py`                           | Main Lambda entry point. Routes API Gateway requests and scheduler events.                       |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/cors.py`                   | Builds CORS response headers from the configured allowed origins.                                |
+| `cdk/layers/shared_python/python/kc_shared/cors.py`                | Builds CORS response headers from the configured allowed origins (shared layer, also used by text generation). |
 | `cdk/lambda/lambdaKnowledgeBase/helpers/generate_presigned_url.py` | Creates short-lived S3 PUT URLs for admin uploads.                                               |
 | `cdk/lambda/lambdaKnowledgeBase/helpers/stage_data_sources.py`     | Validates and stages websites, CSV/JSON pairs, and Markdown/JSON pairs.                          |
 | `cdk/lambda/lambdaKnowledgeBase/helpers/start_ingestion_job.py`    | Starts a sync session by promoting pending runs to queued and starting the first eligible phase. |
@@ -1044,7 +1044,7 @@ Retries create new `ingestion_runs` rows instead of mutating failed rows back to
 ## References
 
 * Main Lambda router: `cdk/lambda/lambdaKnowledgeBase/main.py`
-* CORS helper: `cdk/lambda/lambdaKnowledgeBase/helpers/cors.py`
+* CORS helper: `cdk/layers/shared_python/python/kc_shared/cors.py` (shared layer)
 * Presigned upload helper: `cdk/lambda/lambdaKnowledgeBase/helpers/generate_presigned_url.py`
 * Staging helper: `cdk/lambda/lambdaKnowledgeBase/helpers/stage_data_sources.py`
 * Sync session helper: `cdk/lambda/lambdaKnowledgeBase/helpers/start_ingestion_job.py`

@@ -9,10 +9,8 @@ management: callers pass a cursor.
 
 Packaging
 ---------
-The canonical copy lives in cdk/lambda/textGeneration/helpers/. A byte-identical
-mirror is kept in cdk/lambda/knowledgeBase/helpers/ (the two Lambdas are packaged
-separately); tests/test_shared_module_parity.py fails if they drift. Edit the
-textGeneration copy, then copy it over the mirror. Standard library only.
+Shipped once in the kc_shared Lambda layer (cdk/layers/shared_python) and
+imported by both textGeneration and knowledgeBase. Standard library only.
 
 Vectors live in `chunk_embeddings` (migration 032), one row per (chunk, space).
 A space's vectors are searched through its partial HNSW index

@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers.journey_guides import document_ids_for_turn, outlines_for, situation_name  # noqa: E402
 

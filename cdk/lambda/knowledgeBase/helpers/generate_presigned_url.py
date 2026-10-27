@@ -2,7 +2,7 @@ import os
 import json
 import secrets
 from helpers.admin_user import admin_sub_from_request
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.upload_identity import sanitize_file_name
 from helpers.upload_issuance import record_issued_uploads
 import time

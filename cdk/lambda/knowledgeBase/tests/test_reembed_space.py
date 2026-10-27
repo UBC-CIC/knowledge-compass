@@ -15,7 +15,8 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 import _embedding_fakes as fakes
-from helpers import embeddings, reembed_space as rs
+from helpers import reembed_space as rs
+from kc_shared import embeddings
 from helpers.embedding_space import ActiveSpace
 
 SPACE_ID = "22222222-2222-4222-8222-222222222222"

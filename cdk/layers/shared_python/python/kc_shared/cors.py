@@ -1,8 +1,7 @@
 import os
 import boto3
 
-# Kept byte-identical with knowledgeBase/helpers/cors.py
-# (tests/test_shared_module_parity.py).
+# Shared by textGeneration and knowledgeBase through the kc_shared layer.
 
 ALLOW_HEADERS = "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
 

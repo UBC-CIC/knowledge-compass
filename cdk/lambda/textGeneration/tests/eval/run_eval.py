@@ -13,7 +13,7 @@ it is deliberately not named test_*.py so `unittest discover` skips it.
 Usage (from cdk/lambda/textGeneration):
 
     set EVAL_DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
-    python tests/eval/run_eval.py tests/eval/golden_queries.json --label baseline
+    python tests/eval/run_eval.py ../../layers/shared_python/python/kc_shared/golden_queries.json --label baseline
 
 Compare standard and guideline mode on the same questions:
 
@@ -51,7 +51,7 @@ means a positive entry scored pass/fail (recall@k, MRR); "near_miss" and
 "off_topic" entries are report-only and never counted in recall/MRR, only in
 the top-1 score distribution. Write questions in your own words; do not copy
 real chat messages or personal details into the question set. The checked-in
-tests/eval/golden_queries.json is synthetic and must stay that way.
+kc_shared/golden_queries.json (shared layer) is synthetic and must stay that way.
 
 Candidate comparison (`--candidate`)
 ------------------------------------
@@ -63,8 +63,8 @@ candidate: recall@5/@15, MRR, query-embedding p50/p95 ms, storage estimate
 cost, and the top-1 score distribution for positive / near_miss / off_topic
 entries with a SUGGESTED min_score. Nothing is written to the database.
 
-    python tests/eval/run_eval.py tests/eval/golden_queries.json --candidate
-    python tests/eval/run_eval.py tests/eval/golden_queries.json --candidate \\
+    python tests/eval/run_eval.py ../../layers/shared_python/python/kc_shared/golden_queries.json --candidate
+    python tests/eval/run_eval.py ../../layers/shared_python/python/kc_shared/golden_queries.json --candidate \\
         --candidates v3-baseline titan-v2-1024 titan-v2-512 \\
         --invoke-target titan-v2-1024=amazon.titan-embed-text-v2:0 \\
         --price titan-v2-1024=0.02
@@ -92,8 +92,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# And the shared layer source (kc_shared), mounted at /opt/python in Lambda.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "layers", "shared_python", "python")))
 
-from helpers import embeddings, eval_scoring, guideline_retrieval, retrieval  # noqa: E402
+from helpers import guideline_retrieval, retrieval  # noqa: E402
+from kc_shared import embeddings, eval_scoring  # noqa: E402
 
 DEFAULT_K_VALUES = (5, 15)
 KNOWN_KINDS = eval_scoring.REPORT_ONLY_KINDS
@@ -216,7 +219,7 @@ def evaluate(
 
 # ── Candidate comparison ──────────────────────────────────────────────────────
 
-# Same visibility rules as helpers/retrieval_core.py's production query: hidden
+# Same visibility rules as kc_shared/retrieval_core.py's production query: hidden
 # sources are excluded and csv_row sources only count when a link indexed them.
 _SNAPSHOT_SQL = """
     SELECT c.id, c.embed_text, s.name, s.url, s.source_type, s.id,

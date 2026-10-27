@@ -1,7 +1,7 @@
 """
 Shared test setup; import it before any `helpers` module.
 
-- Makes `helpers` importable. Appended, not prepended: the knowledgeBase dir
+- Makes `helpers` and the shared layer's `kc_shared` importable. Appended, not prepended: the knowledgeBase dir
   vendors linux-only wheels (lxml) for the Lambda, which must not shadow the
   local interpreter's own installs.
 - Module-level boto3 clients need a region, and dummy credentials keep them
@@ -18,6 +18,9 @@ import os
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# The shared layer source (kc_shared), mounted at /opt/python in Lambda.
+sys.path.append(os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "layers", "shared_python", "python")))
 
 os.environ.setdefault("REGION", "us-east-1")
 os.environ["AWS_ACCESS_KEY_ID"] = "testing"

@@ -7,8 +7,9 @@ import unittest
 
 _TG = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _TG)
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
-from helpers import embeddings  # noqa: E402
+from kc_shared import embeddings  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "run_eval_candidate_under_test", os.path.join(_TG, "tests", "eval", "run_eval.py")

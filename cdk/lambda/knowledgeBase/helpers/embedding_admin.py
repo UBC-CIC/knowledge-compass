@@ -44,8 +44,9 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
-from helpers import embedding_models, embeddings
-from helpers.cors import get_cors_headers
+from helpers import embedding_models
+from kc_shared import embeddings
+from kc_shared.cors import get_cors_headers
 from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_job
 from helpers.embedding_space import index_name
 from helpers.ingestion_lock import LOCK_CODE, LOCK_MESSAGE, LOCK_TTL_SECONDS, lock_state

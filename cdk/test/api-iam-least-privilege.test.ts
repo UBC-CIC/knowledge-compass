@@ -680,3 +680,26 @@ describe("Knowledge base async failures", () => {
     expect(kb.DeadLetterConfig).toBeUndefined();
   });
 });
+
+// Finding A-13: the two Python Lambdas import shared code from one layer, not copies.
+describe("Shared Python layer", () => {
+  const sharedLayerId = () => {
+    const ids = Object.entries(resources)
+      .filter(([id, r]) => r.Type === "AWS::Lambda::LayerVersion" && id.startsWith("sharedPythonLayer"))
+      .map(([id]) => id);
+    expect(ids).toHaveLength(1);
+    return ids[0];
+  };
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s loads the kc_shared layer", (fnId) => {
+    expect(resources[fnId].Properties.Layers).toContainEqual({ Ref: sharedLayerId() });
+  });
+
+  test("the layer targets the Python runtime the functions use", () => {
+    const layer = resources[sharedLayerId()].Properties;
+    expect(layer.CompatibleRuntimes).toEqual(["python3.12"]);
+    for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
+      expect(resources[fnId].Properties.Runtime).toBe("python3.12");
+    }
+  });
+});
