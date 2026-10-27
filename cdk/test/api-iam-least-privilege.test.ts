@@ -20,6 +20,7 @@ type Resources = Record<string, any>;
 const env = { account: "111111111111", region: "ca-central-1" };
 
 let resources: Resources;
+let ingestionResources: Resources;
 
 const SPLIT_FUNCTIONS = [
   "adminLambdaAuthorizer",
@@ -84,6 +85,7 @@ beforeAll(() => {
     enableReservedConcurrency: false,
   });
   resources = Template.fromStack(apiStack).toJSON().Resources;
+  ingestionResources = Template.fromStack(ingestionStack).toJSON().Resources;
 });
 
 const roleOf = (fnId: string): string => resources[fnId].Properties.Role["Fn::GetAtt"][0];
@@ -619,6 +621,35 @@ describe("WebSocket ManageConnections scope", () => {
     for (const r of res) {
       expect(r).toContain("ChatWebSocketApi");
       expect(r).toMatch(/\/prod\/(POST|DELETE)\/@connections\/\*/);
+    }
+  });
+});
+
+// Finding A-08: the ingestion tasks authenticate to the DB with the Secrets Manager
+// credential (RDS Proxy takes no IAM tokens), so their roles get no rds-db:connect.
+describe("Ingestion task DB access", () => {
+  const taskRoleIds = () =>
+    Object.entries(ingestionResources)
+      .filter(([id, r]) => r.Type === "AWS::IAM::Role" && /TaskRole/.test(id) && !/Execution/.test(id))
+      .map(([id]) => id);
+
+  test("no ingestion role is granted rds-db:connect", () => {
+    const actions = Object.values(ingestionResources)
+      .filter((r) => r.Type === "AWS::IAM::Policy")
+      .flatMap((r) => r.Properties.PolicyDocument.Statement)
+      .flatMap((s: any) => [s.Action].flat());
+    expect(actions).not.toContain("rds-db:connect");
+  });
+
+  test("the crawler and transcriber task roles can still read the DB secret", () => {
+    const ids = taskRoleIds();
+    expect(ids).toHaveLength(2);
+    for (const id of ids) {
+      const actions = Object.values(ingestionResources)
+        .filter((p) => p.Type === "AWS::IAM::Policy" && (p.Properties.Roles || []).some((x: any) => x.Ref === id))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .flatMap((s: any) => [s.Action].flat());
+      expect(actions).toContain("secretsmanager:GetSecretValue");
     }
   });
 });
