@@ -540,3 +540,37 @@ describe("Bedrock guardrail policy", () => {
     expect(versions[0][0]).toMatch(/^InputGuardrailVersion/);
   });
 });
+
+// Finding A-02: the Bedrock invoke grant names this account and the regions
+// the calls actually use, not any region or account.
+describe("Bedrock invoke scope", () => {
+  const invokeResources = (fnId: string): string[] =>
+    statementsFor(roleOf(fnId))
+      .filter((s) => s.Effect === "Allow" && [s.Action].flat().includes("bedrock:Converse"))
+      .flatMap((s) => [s.Resource].flat());
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s: inference profiles are pinned to this region and account", (fnId) => {
+    const profiles = invokeResources(fnId).filter((r) => r.includes(":inference-profile/"));
+    expect(profiles.length).toBeGreaterThan(0);
+    for (const arn of profiles) {
+      expect(arn.startsWith(`arn:aws:bedrock:${env.region}:${env.account}:inference-profile/`)).toBe(true);
+    }
+  });
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s: Haiku 5.5 is granted only via this account's us. profile and its destination regions", (fnId) => {
+    const haiku = invokeResources(fnId).filter((r) => r.includes("claude-haiku-5-5")).sort();
+    expect(haiku).toEqual([
+      `arn:aws:bedrock:${env.region}:${env.account}:inference-profile/us.anthropic.claude-haiku-5-5`,
+      ...["ca-central-1", "us-east-1", "us-east-2", "us-west-2"].map(
+        (r) => `arn:aws:bedrock:${r}::foundation-model/anthropic.claude-haiku-5-5`,
+      ),
+    ].sort());
+  });
+
+  test("no Claude model other than Haiku 5.5 is invokable", () => {
+    for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
+      const claude = invokeResources(fnId).filter((r) => r.includes("anthropic.claude"));
+      expect(claude.every((r) => r.includes("claude-haiku-5-5"))).toBe(true);
+    }
+  });
+});

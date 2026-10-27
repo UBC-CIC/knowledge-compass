@@ -121,6 +121,20 @@ export const GUARDRAIL_CONTENT_FILTERS_CONFIG: bedrock.CfnGuardrail.ContentFilte
   { type: 'MISCONDUCT',    inputStrength: 'NONE', outputStrength: 'LOW' },
 ];
 
+// Generation model (finding A-02). Every chat, router, grounding, title and
+// guideline-labelling call uses this US cross-region inference profile.
+export const GENERATION_INFERENCE_PROFILE = 'us.anthropic.claude-haiku-5-5';
+export const GENERATION_FOUNDATION_MODEL = 'anthropic.claude-haiku-5-5';
+// Destination regions of the us. profile, from `aws bedrock
+// get-inference-profile` in ca-central-1 (2026-10-27). Re-check when the
+// profile or the deployment region changes: a missing region fails the call.
+export const GENERATION_PROFILE_DESTINATION_REGIONS = ['us-east-1', 'us-east-2', 'us-west-2', 'ca-central-1'];
+
+/** Regions whose foundation-model ARN the generation grant names: the profile's destinations plus the calling region. */
+export function generationModelRegions(callingRegion: string): string[] {
+  return [...new Set([...GENERATION_PROFILE_DESTINATION_REGIONS, callingRegion])];
+}
+
 export const GUARDRAIL_BLOCKED_INPUT_MESSAGE =
   "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.";
 export const GUARDRAIL_BLOCKED_OUTPUT_MESSAGE =
@@ -1499,7 +1513,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // Main chat (answer) model: a US cross-region inference profile id. Same value as the
     // documented /KC/LLM/SonnetArn parameter (Haiku 5.5, same as /KC/LLM/HaikuArn); also
     // the ModelId dimension of the Bedrock token alarms below.
-    const generationModelId = 'us.anthropic.claude-haiku-5-5';
+    const generationModelId = GENERATION_INFERENCE_PROFILE;
 
     const lambdaTextGen = new lambda.Function(
       this,
@@ -1927,19 +1941,27 @@ export class ApiGatewayStack extends cdk.Stack {
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
         // Candidate embedding models. Model ids / inference-profile ARNs are
         // configuration on the embedding_spaces row; these grants enable
-        // candidates and do not assert availability in this region. Wildcard
-        // region on the foundation-model ARNs covers the destination regions of
-        // cross-region profiles. Manual ARNs on purpose (no CDK token
-        // references; see the documented circular-dependency notes).
+        // candidates and do not assert availability in this region. Embedding
+        // calls are made from this region (REGION), so profile ARNs are pinned
+        // to it and this account. The foundation-model ARNs keep a wildcard
+        // region on purpose: Cohere Embed v4 is offered only through the
+        // global.cohere.embed-v4:0 profile, which may run in any region (AWS
+        // authorizes it against a region-less foundation-model ARN). Manual
+        // ARNs on purpose (no CDK token references; see the documented
+        // circular-dependency notes).
         `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`,
-        `arn:aws:bedrock:*:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
         // Cohere Embed v4 (model id suffix not verified: grant both forms)
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
-        `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
-        // Claude Haiku 5.5: every generation call (both /KC/LLM params point here)
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5`,
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-5-5`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*cohere.embed-v4*`,
+        // Claude Haiku 5.5: every generation call (both /KC/LLM params point
+        // here). Called from LLM_REGION (this region) through this account's
+        // us. profile, which runs the model in one of its destination regions.
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${GENERATION_INFERENCE_PROFILE}`,
+        ...generationModelRegions(this.region).map(
+          (r) => `arn:aws:bedrock:${r}::foundation-model/${GENERATION_FOUNDATION_MODEL}`,
+        ),
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
