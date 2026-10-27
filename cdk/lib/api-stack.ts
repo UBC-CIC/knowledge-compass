@@ -1957,7 +1957,10 @@ export class ApiGatewayStack extends cdk.Stack {
       timeout: Duration.seconds(600),
       role: knowledgeBaseRole,
       layers: [psycopgLayer, sharedPythonLayer],
-      memorySize: 512,
+      // The document worker reads each upload whole from S3, and the pypdf fallback
+      // and DOCX/CSV parsing hold the parsed copy too. Check "Max Memory Used" in the
+      // REPORT log lines before changing this.
+      memorySize: 1024,
       vpc: vpcStack.vpc,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
