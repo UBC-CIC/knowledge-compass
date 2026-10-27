@@ -792,8 +792,10 @@ scaffold that is SYNTH-PENDING (not `cdk synth`/deploy-validated).
    transcriber Dockerfiles expect context = `Project Refactoring/` (for the shared
    `common/` package). The buildspec in `cicd-stack.ts` must be adjusted for these
    two images (or the images vendored differently).
-3. `rds-db:connect` is scoped with a wildcard dbuser resource id; tighten to the
-   real `dbi-resource-id` once known post-deploy.
+3. ~~`rds-db:connect` is scoped with a wildcard dbuser resource id; tighten to the
+   real `dbi-resource-id` once known post-deploy.~~ Resolved (A-08, October 2026):
+   the grant was removed. The tasks reach the DB through RDS Proxy, which takes no
+   IAM tokens, and RunTask forces `DB_AUTH=secret`.
 4. The video/document ingest flow that writes `transcript_s3_uri`/`video_url` onto
    `data_sources.metadata` is assumed by `process_crawler_batch._run_transcriber_task`
    but not yet produced by an upload flow — build that with the frontend rebuild.

@@ -33,12 +33,19 @@ You do NOT need to read this document to perform a standard deployment — the C
 
 ## Overview
 
-The guardrail in this project is an **input-only** guardrail applied before any LLM call. It handles two distinct cases:
+One guardrail runs in both directions.
 
+**Input** (every user message, before any LLM call):
 - **PII anonymization** (see full list below): the message is NOT blocked — PII is masked and the anonymized text is passed to the LLM
 - **Prompt injection blocking** (PROMPT_ATTACK): the request IS blocked — the LLM is never called and a denial message is returned to the user
 
-No output guardrail is applied. The guardrail only runs on user input.
+**Output** (every final answer, before it is saved or sent in the `complete` event):
+- **Content filters** (hate, insults, sexual, violence, misconduct): a flagged answer is replaced by `GUARDRAIL_BLOCKED_OUTPUT_MESSAGE` and loses its citations
+- **High-risk identifiers** (passwords, PINs, card and bank numbers, health and SIN numbers): masked in the answer; other PII types are not masked in output, because names, phone numbers and links in an answer are usually the organizations and helplines families need
+
+Tokens stream to the client while the answer is generated; the screened answer in `complete` replaces the streamed text.
+
+Retrieved documents are wrapped in `<retrieved_context>` with an instruction to treat them as data, and tag-like text inside them is escaped (`helpers/prompt_data.py`), so instructions planted in a crawled page are not followed as instructions.
 
 This document reflects the implementation in the repository as of the current code:
 - CDK stack creation of the guardrail: `cdk/lib/api-stack.ts`
@@ -55,85 +62,24 @@ Definitions:
 - **L1 construct:** Low-level CloudFormation resource constructs in AWS CDK that map directly to CloudFormation resources; `CfnGuardrail` is the L1 construct used for Bedrock guardrails.
 - **CfnGuardrailVersion:** A pinned, immutable version of the guardrail. The CDK creates a new version whenever the config hash changes, ensuring Lambda always uses a stable version.
 
-Key snippet from `cdk/lib/api-stack.ts`:
+The policy is defined by exported constants in `cdk/lib/api-stack.ts`, so tests can check it (`cdk/test/guardrail-policy.test.ts`):
 
-```typescript
-// --- Bedrock Input Guardrail ---
-const guardrailConfig = {
-  piiEntities: [
-    // General
-    'ADDRESS', 'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
-    'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
-    // Finance
-    'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
-    'PIN', 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', 'SWIFT_CODE',
-    // IT
-    'IP_ADDRESS', 'MAC_ADDRESS', 'URL',
-    // Canada
-    'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
-  ],
-  piiInputAction: 'ANONYMIZE',
-  piiInputEnabled: true,
-  promptAttackStrength: 'HIGH',
-  blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
-};
+| Constant | What it sets |
+|----------|--------------|
+| `GUARDRAIL_PII_ENTITIES_CONFIG` | 20 PII types, all `ANONYMIZE` on input; on output only `GUARDRAIL_OUTPUT_MASKED_PII`, every other type `outputEnabled: false` |
+| `GUARDRAIL_OUTPUT_MASKED_PII` | The high-risk identifiers also masked in answers |
+| `GUARDRAIL_REGEXES_CONFIG` | Custom regexes (`CA_POSTAL_CODE`, `STREET_ADDRESS`), input only |
+| `GUARDRAIL_CONTENT_FILTERS_CONFIG` | `PROMPT_ATTACK` HIGH on input; HATE, INSULTS, SEXUAL MEDIUM and VIOLENCE, MISCONDUCT LOW on output |
+| `GUARDRAIL_BLOCKED_INPUT_MESSAGE` / `GUARDRAIL_BLOCKED_OUTPUT_MESSAGE` | The texts returned when input or output is blocked |
 
-const inputGuardrail = new bedrock.CfnGuardrail(this, 'InputGuardrail', {
-  name: `${id}-input-guardrail`,
-  blockedInputMessaging: "Sorry, I can't help with that. I'm the UBC Science Specialization Explorer — I'm here to help you find the right specialization for your academic journey.",
-  blockedOutputsMessaging: 'Response blocked.',
-  sensitiveInformationPolicyConfig: {
-    piiEntitiesConfig: [
-      // General
-      { type: 'ADDRESS',                       action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'AGE',                           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'NAME',                          action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'EMAIL',                         action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'PHONE',                         action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'USERNAME',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'PASSWORD',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'DRIVER_ID',                     action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'LICENSE_PLATE',                 action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'VEHICLE_IDENTIFICATION_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      // Finance
-      { type: 'CREDIT_DEBIT_CARD_CVV',         action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'CREDIT_DEBIT_CARD_EXPIRY',      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'CREDIT_DEBIT_CARD_NUMBER',      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'PIN',                           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'SWIFT_CODE',                    action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      // IT
-      { type: 'IP_ADDRESS',                    action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'MAC_ADDRESS',                   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'URL',                           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      // Canada
-      { type: 'CA_HEALTH_NUMBER',              action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-      { type: 'CA_SOCIAL_INSURANCE_NUMBER',    action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-    ],
-  },
-  contentPolicyConfig: {
-    filtersConfig: [
-      { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
-    ],
-  },
-});
+These are combined into one `guardrailPolicy` object, spread into the `InputGuardrail` `CfnGuardrail` resource and hashed by `computeConfigHash(guardrailPolicy)`. A `CfnGuardrailVersion` named after the hash is published, so any policy change creates a new pinned version.
 
-// Pin a versioned guardrail — new version created when config hash changes
-const configHash = computeConfigHash(guardrailConfig);
-const inputGuardrailVersion = new bedrock.CfnGuardrailVersion(this, `InputGuardrailVersion-${configHash.substring(0, 8)}`, {
-  guardrailIdentifier: inputGuardrail.attrGuardrailId,
-  description: `Config hash: ${configHash.substring(0, 8)}`,
-});
-
-// Inject directly as Lambda environment variables — no SSM involved
-lambdaTextGen.addEnvironment('GUARDRAIL_ID', inputGuardrail.attrGuardrailId);
-lambdaTextGen.addEnvironment('GUARDRAIL_VERSION', inputGuardrailVersion.attrVersion);
-```
+Violence and misconduct are LOW on output because answers legitimately describe hitting, restraint, bullying or abuse at school; prompt attack stays input-only because AWS applies that filter to user input only.
 
 Notes:
 - The guardrail ID and version are passed **directly as Lambda environment variables** (`GUARDRAIL_ID`, `GUARDRAIL_VERSION`). There is no SSM Parameter Store involved for guardrail config.
 - A `configHash` tag is applied to the guardrail resource so config drift is detectable.
-- `blockedOutputsMessaging` is set but not actively used since no output guardrail is applied at runtime.
+- `blockedOutputsMessaging` (`GUARDRAIL_BLOCKED_OUTPUT_MESSAGE`) is what `invoke_output_guardrail` returns when a content filter blocks an answer.
 
 ### Lambda Integration
 
@@ -191,6 +137,12 @@ if guardrail_result['action'] == ACTION_ANONYMIZED:
 
 The guardrail runs for every message. No request field can skip it; any client-sent `is_intro_message` is ignored.
 
+After generation, `get_response()` passes the final answer to `invoke_output_guardrail()` (`source='OUTPUT'`):
+
+- `ACTION_BLOCKED` (a content filter fired, or an unrecognized intervention): the answer is replaced by the blocked-output message, citations are dropped, and the answer is not used for grounding checks, routing state or the session title.
+- `ACTION_ANONYMIZED` (only high-risk PII found): the masked answer is used.
+- An `apply_guardrail` error fails closed: the user gets the generic generation error, not the unscreened answer.
+
 ### IAM and Permissions
 
 The CDK stack adds a policy statement to the text generation Lambda role to allow applying the guardrail:
@@ -209,7 +161,7 @@ The Lambda also requires `bedrock:InvokeModel` and `bedrock:InvokeModelWithRespo
 
 The guardrail is configured in `api-stack.ts` with:
 
-- **PII detection (ANONYMIZE):** All detected PII is masked in the user message before it reaches the LLM. The full set of covered entities:
+- **PII detection (ANONYMIZE):** All detected PII is masked in the user message before it reaches the LLM. Only `GUARDRAIL_OUTPUT_MASKED_PII` is also masked in answers. The full set of covered entities:
 
   | Category | Entities |
   |----------|----------|
@@ -221,10 +173,12 @@ The guardrail is configured in `api-stack.ts` with:
 
   Regex matches (`sensitiveInformationPolicy.regexes`) are classified as ANONYMIZED in `helpers/guardrail.py`, the same as built-in PII entities.
 
-- **Prompt attack filter:** `PROMPT_ATTACK` with `inputStrength: HIGH`, `outputStrength: NONE` — prompt injection attempts are blocked before reaching the LLM. The output strength must stay `NONE`: AWS applies the prompt-attack filter to user input only, and the app calls ApplyGuardrail with `source='INPUT'` only.
+- **Prompt attack filter:** `PROMPT_ATTACK` with `inputStrength: HIGH`, `outputStrength: NONE` — prompt injection attempts are blocked before reaching the LLM. The output strength must stay `NONE`: AWS applies the prompt-attack filter to user input only.
+- **Output content filters:** HATE, INSULTS and SEXUAL at MEDIUM, VIOLENCE and MISCONDUCT at LOW, output only. User messages are not filtered for these, so a family can describe what happened to their child.
 - **`blockedInputMessaging`:** Friendly redirect message shown to the user when a prompt injection is detected.
+- **`blockedOutputsMessaging`:** Shown in place of an answer that an output content filter blocked.
 
-To change PII entities or attack sensitivity, edit the `guardrailConfig` object and `inputGuardrail` resource in `cdk/lib/api-stack.ts`, then redeploy. The config hash system will automatically create a new pinned guardrail version.
+To change PII entities, filters or messages, edit the `GUARDRAIL_*` constants in `cdk/lib/api-stack.ts`, then redeploy. The config hash system will automatically create a new pinned guardrail version.
 
 ## Runtime Behavior
 
@@ -233,7 +187,7 @@ To change PII entities or attack sensitivity, edit the `guardrailConfig` object 
    - If `ACTION_ANONYMIZED` (PII detected): the query is replaced with the redacted version and processing continues normally to the LLM.
    - If `ACTION_NONE`: the original query is passed through unchanged.
 
-2. **No output guardrail:** Guardrails are not applied to LLM responses. Output safety is handled by the system prompt guardrails and the intervention/assessment layer (`helpers/intervention.py`).
+2. **Output guardrail (every final answer):** `invoke_output_guardrail(answer, region)` screens the answer before it is saved or sent in `complete`. A blocked answer is replaced by the blocked-output message without citations; high-risk PII is masked; a guardrail error returns the generic error instead of the unscreened answer. The streamed tokens are not screened one by one; `complete` replaces them.
 
 3. **Intro messages:** The guardrail runs for every message, including the first turn of a session. No request field can skip it; any client-sent `is_intro_message` is ignored. The welcome message is shown client-side and never goes through text generation.
 
@@ -245,7 +199,7 @@ Guardrails are applied automatically to all user queries handled by the text gen
 
 ## Testing
 
-There is no dedicated test script in the repository. To test guardrails locally or against a deployed Lambda, consider the following approaches:
+Unit tests cover the policy and the runtime handling: `cdk/test/guardrail-policy.test.ts` and `guardrail-regexes.test.ts` check the CDK policy, and `cdk/lambda/textGeneration/tests/test_guardrail.py` and `test_chat_guideline_mode.py` check `invoke_guardrail`, `invoke_output_guardrail` and how `get_response()` acts on them. To test against a deployed guardrail:
 
 1. **Manual test script** (example): create `cdk/lambda/textGeneration/test_guardrails.py` with the following example code (edit `guardrail_id` and `guardrail_version` as needed):
 
@@ -276,7 +230,7 @@ for label, content in [('PII', pii_content), ('Injection', injection_content)]:
 
 2. **Live test:** Use the running API or WebSocket endpoint and submit an input that should trigger each case. For PII, the LLM response should proceed normally (with names/emails masked). For prompt injection, you should receive the `blockedInputMessaging` text back immediately.
 
-3. **Unit test:** Add a pytest-based test that mocks the `boto3` `bedrock-runtime` client to return example guardrail responses and verify `invoke_guardrail()` returns the correct action.
+For the output side, call `apply_guardrail` with `source='OUTPUT'` on a sample answer that contains a card number (masked) or abusive text (blocked).
 
 ## Monitoring
 
@@ -286,6 +240,10 @@ Guardrail actions are logged to CloudWatch from the Lambda code. Look for the fo
 - `Guardrail: PII anonymized, continuing to LLM` — PII was found and masked, processing continued
 - `Guardrail intervened for unknown reason, blocking` — guardrail fired for an unrecognized reason (treated as blocked)
 - `Guardrail invocation failed: ...` — the `apply_guardrail` API call itself failed
+- `Output guardrail: answer blocked by content filter` — an answer was replaced by the blocked-output message
+- `Output guardrail: PII anonymized in answer` — high-risk PII was masked in an answer
+- `Output guardrail intervened for unknown reason, blocking` — treated as blocked
+- `Output guardrail invocation failed: ...` — the output check failed; the user got the generic error
 
 Additionally, validate that:
 - Lambda environment variables `GUARDRAIL_ID` and `GUARDRAIL_VERSION` are set (check Lambda configuration in the AWS console)
@@ -297,9 +255,9 @@ Additionally, validate that:
 
 To modify guardrail settings:
 
-1. Edit the `guardrailConfig` object and `inputGuardrail` resource in `cdk/lib/api-stack.ts`.
-2. Update `blockedInputMessaging` to change the message shown to users when a prompt injection is blocked.
-3. Add or remove PII entity types from `piiEntitiesConfig` (all use `ANONYMIZE` — changing to `BLOCK` would block the request instead of masking).
+1. Edit the `GUARDRAIL_*` constants in `cdk/lib/api-stack.ts` (see the table under Infrastructure).
+2. Update `GUARDRAIL_BLOCKED_INPUT_MESSAGE` / `GUARDRAIL_BLOCKED_OUTPUT_MESSAGE` to change what users see when input or an answer is blocked.
+3. Add or remove PII types in `GUARDRAIL_PII_TYPES`, and add a type to `GUARDRAIL_OUTPUT_MASKED_PII` to mask it in answers too (all use `ANONYMIZE` — changing to `BLOCK` would block the request instead of masking).
 4. Redeploy the CDK stack. The config hash system will detect the change and create a new pinned guardrail version automatically.
 
 Note: `guardrailVersion` in the Lambda environment is set to the pinned version number created by `CfnGuardrailVersion`. If you manually publish a version in the Bedrock console, you would need to update the CDK config and redeploy to pick it up.

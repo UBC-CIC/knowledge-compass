@@ -2,7 +2,7 @@
 
 **Project:** Specialization Explorer
 **Document Type:** Public Security Architecture Overview
-**Last Updated:** May 2026
+**Last Updated:** October 2026
 
 ---
 
@@ -16,6 +16,8 @@
 6. [Data Protection](#6-data-protection)
 7. [GenAI Security](#7-genai-security)
 8. [Monitoring & Compliance](#8-monitoring--compliance)
+9. [Accepted Risks and Operator Actions](#9-accepted-risks-and-operator-actions)
+10. [Security Contact](#10-security-contact)
 
 ---
 
@@ -174,6 +176,8 @@ Specialization Explorer is an AI-powered conversational application that helps u
 | **Managed Rules** | SQL injection, XSS, path traversal, and common attacks |
 | **Rate Limiting** | Per-IP ceilings scoped by URI path (token minting, chat) plus a global per-IP ceiling. Request headers do not select a bucket. |
 | **Endpoint Protection** | Stricter limits for expensive AI operations |
+
+The web ACL covers the REST API only. The chat WebSocket API and the Amplify-hosted SPA are not behind WAF; see [section 9](#9-accepted-risks-and-operator-actions).
 
 ### 4.3 Request Validation
 
@@ -351,6 +355,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
   │  3 · RAG RETRIEVAL                                          │
   │      · Knowledge Base query                                 │
   │      · Source document retrieval                            │
+  │      · Retrieved text marked as data, tags escaped          │
   └───────────────────────────┬─────────────────────────────────┘
                               │
                               ▼
@@ -362,7 +367,15 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
                               │
                               ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  5 · OUTPUT VALIDATION                                      │
+  │  5 · OUTPUT GUARDRAIL                                       │
+  │      · Content filters (hate, insults, sexual, violence)    │
+  │      · High-risk identifiers masked                         │
+  │     ✗  Blocked → safe message, no citations                 │
+  └───────────────────────────┬─────────────────────────────────┘
+                              │
+                              ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  6 · OUTPUT VALIDATION                                      │
   │      · Hallucination detection                              │
   │      · Source grounding verification                        │
   │      · Warning injected if response is ungrounded           │
@@ -389,6 +402,7 @@ Coarse location (province/territory, city, school board) is intentionally not ma
 | Control | Description |
 |---------|-------------|
 | **Prompt Attack Detection** | Identifies and blocks injection attempts |
+| **Untrusted Context** | Retrieved documents are wrapped as data with an instruction not to follow anything inside them; tag-like text is escaped so a crawled page cannot close the block |
 | **Scope Enforcement** | System prompts restrict topic to academic advising |
 | **Guardrails** | Strict boundaries on acceptable responses |
 
@@ -398,6 +412,7 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 | Control | Description |
 |---------|-------------|
+| **Output Guardrail** | Every final answer is screened before it is saved or sent: content filters replace a flagged answer with a safe message, and passwords, PINs, card, bank, health and SIN numbers are masked. A guardrail error fails closed. Streamed tokens are replaced by the screened answer when generation completes. |
 | **Grounding Verification** | Responses checked against source documents |
 | **Hallucination Detection** | LLM-based verification of claims |
 | **Warning System** | Users notified when responses may be ungrounded |
@@ -449,6 +464,7 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 | **Concurrency Alarm** | Lambda approaching reserved limit | Prevent service degradation |
 | **Error Rate Alarm** | Elevated 5XX responses | Detect service issues |
 | **WAF Block Alarm** | High block rate | Detect attack patterns |
+| **Dropped Worker Event Alarm** | A knowledge base ingestion or embedding self-invocation is dropped by Lambda | Surface a lost batch (no dead-letter queue: the payload carries the worker invoke token) |
 
 ### 8.4 Compliance Summary
 
@@ -465,7 +481,36 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 ---
 
-## 9. Security Contact
+## 9. Accepted Risks and Operator Actions
+
+Known gaps that are accepted by design, and settings an operator must change outside the code. Each comes from the October 2026 architecture review (finding ids in brackets).
+
+### 9.1 Accepted by design
+
+| Area | What remains | Why it is accepted | Mitigation in place |
+|------|--------------|--------------------|---------------------|
+| **WebSocket API not behind WAF** [A-03] | The chat WebSocket API has no WAF web ACL | AWS WAF cannot attach to API Gateway WebSocket (or HTTP) APIs; only REST API stages are supported | Token verified on `$connect`; stage-wide throttles; a per-connection limit on `generate_text` messages; the input guardrail. Putting CloudFront (with WAF) in front would only inspect the initial upgrade request. |
+| **Wildcard API id in Lambda invoke permissions** [A-11] | API Gateway invoke permissions name `*` for the REST API id, and text generation's `ManageConnections` grant names `*` for the WebSocket API id | Naming the API id would create a CloudFormation dependency cycle (the OpenAPI body references the functions) | Every grant is pinned to this account and region and to its route, stage or `POST /@connections`; the authorizers still gate every request. Only an API Gateway in the same account could use the wildcard. |
+| **Single-AZ database** [A-16] | RDS runs in one Availability Zone with 7-day automated backups | Cost, for the current scale | Encrypted storage, TLS only, isolated subnets, deletion protection, rotated credentials. For production consider `multiAz: true` and backups aligned with the data-retention policy (`cdk/lib/database-stack.ts`). |
+| **Shared code in the ingestion images** [A-13] | The crawler and transcriber images keep their own copy of `embeddings.py` and `url_safety.py` | A container image cannot use a Lambda layer | The Lambdas share one copy through the `kc_shared` layer. The pipeline's test stage fails if the container `embeddings.py` drifts from the layer; `url_safety.py` parity is checked by `cdk/containers/tests`, which the pipeline does not run yet. |
+
+### 9.2 Operator actions
+
+| Action | Where | When |
+|--------|-------|------|
+| **Add WAF to the SPA** [A-03] | Amplify Hosting supports a WAF web ACL directly (Amplify console → Hosting → Firewall, or CDK). The web ACL must be CLOUDFRONT-scoped, created in us-east-1, in the same account as the app. AWS and Amplify bill separately for it. | Optional: the SPA serves static files only, and the APIs it calls already have their own controls |
+| **Reserve Lambda concurrency** [A-14] | Request an account Lambda concurrency quota of at least 350, then deploy with `-c enableReservedConcurrency=true` | Before public launch. Until then the public Lambdas run unreserved, so a traffic spike can starve admin functions; WAF rate rules and WebSocket throttles are the backstop |
+| **Enable Cognito threat protection** [A-17] | Cognito Plus feature plan with threat protection (compromised-credential and adaptive authentication) in ENFORCED mode, on the admin user pool | Optional. Admin sign-in already requires TOTP MFA, a strong password policy and SRP; only users in the `admin` group reach the admin role |
+| **Accept or fix ECR scan findings** | `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts` (each entry needs a reason), or a newer base image | Whenever the image scan gate blocks a build on a CRITICAL or HIGH finding |
+| **Enforce the Content Security Policy** | Rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in `cdk/lib/amplify-stack.ts` | After a dev deploy shows no CSP violations in the browser console ([section 4.5](#45-frontend-security-headers)) |
+
+### 9.3 Authorization model (reviewed, no change needed) [A-17]
+
+The identity pool issues no unauthenticated identities and maps roles from the token, denying ambiguous ones, so the admin role is reachable only through the `admin` group claim; the default authenticated role holds no permissions. The admin authorizer verifies the Cognito ID token and requires `admin` group membership from the token itself.
+
+---
+
+## 10. Security Contact
 
 For security concerns or to report vulnerabilities, please contact the project maintainers through the repository's security policy.
 

@@ -473,7 +473,7 @@ Each PDF document run records `ingestion_runs.metadata.pdf_extraction`: `engine`
 
 Textract bills per page analyzed (see [Amazon Textract pricing](https://aws.amazon.com/textract/pricing/)). The cache avoids repeat charges for unchanged PDFs, and `auto` limits OCR to the PDFs that need it. Default request quotas are low outside the largest regions (for example 2 `StartDocumentAnalysis` and 1 `AnalyzeDocument` request per second), so the client retries throttled calls adaptively and large CSV link crawls slow down rather than fail.
 
-The shared `lambdaRole` is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
+The knowledge base Lambda's own role (`knowledgeBaseRole`) is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
 
 ## Sync Sessions
 

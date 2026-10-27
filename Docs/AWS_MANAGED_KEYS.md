@@ -240,8 +240,8 @@ this.secret = new secretsmanager.Secret(this, secretsName, {
    Repeat for `jwtSecret`, `this.secretPathUser`, and `this.secretPathTableCreator`.
 3. Any IAM role that calls `secretsmanager:GetSecretValue` on these secrets will also need `kms:Decrypt` on the key. The CDK `grantRead` helper on a secret automatically adds the required KMS permissions when an `encryptionKey` is set, so existing `grantRead` calls do not need to change. For roles that use inline `PolicyStatement` instead of `grantRead`, add:
    ```ts
-   secretsKey.grantDecrypt(lambdaRole);
-   secretsKey.grantDecrypt(coglambdaRole);
+   // once per role that reads a secret through an inline statement
+   secretsKey.grantDecrypt(role);
    ```
 
 ---
