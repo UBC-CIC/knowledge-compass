@@ -459,6 +459,12 @@ describe("API Lambda IAM least privilege", () => {
     }
   });
 
+  // Finding A-10: the console test-invoke stage bypasses the authorizers.
+  test("no Lambda may be invoked from the API Gateway test-invoke stage", () => {
+    const perms = Object.values(resources).filter((r: any) => r.Type === "AWS::Lambda::Permission");
+    expect(JSON.stringify(perms)).not.toContain("test-invoke-stage");
+  });
+
   test("no intra-stack dependency cycle", () => {
     const ids = new Set(Object.keys(resources));
     const refs = (node: any, out: Set<string>): Set<string> => {

@@ -2102,13 +2102,6 @@ export class ApiGatewayStack extends cdk.Stack {
       sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
     });
 
-    //Allows Invoking Functions Easily for Testing Purposes
-    lambdaUserFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
-    });
-
     const cfnLambda_user = lambdaUserFunction.node
       .defaultChild as lambda.CfnFunction;
     cfnLambda_user.overrideLogicalId("userFunction");
@@ -2149,12 +2142,6 @@ export class ApiGatewayStack extends cdk.Stack {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
       sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
-    });
-
-    lambdaSystemMessagesFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
     });
 
     const cfnLambda_systemMessages = lambdaSystemMessagesFunction.node
@@ -2297,13 +2284,6 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
-
-    //allows invoking admin Lambda from API Gateway test stage for easier testing
-    lambdaAdminFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
-    });
 
     const cfnLambda_admin = lambdaAdminFunction.node
       .defaultChild as lambda.CfnFunction;
