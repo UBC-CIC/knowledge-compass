@@ -583,3 +583,42 @@ describe("Bedrock invoke scope", () => {
     }
   });
 });
+
+// Finding A-12: only the functions that call the WebSocket management API may, and
+// only on the WebSocket stage.
+describe("WebSocket ManageConnections scope", () => {
+  const manageConnectionsResources = (roleId: string): string[] =>
+    statementsFor(roleId)
+      .filter((s) => s.Effect === "Allow" && [s.Action].flat().includes("execute-api:ManageConnections"))
+      .flatMap((s) => [s.Resource].flat())
+      .map((r) => JSON.stringify(r));
+
+  test("only text gen and $default hold ManageConnections", () => {
+    const holders = allRoleIds().filter((id) => manageConnectionsResources(id).length > 0);
+    expect(holders.sort()).toEqual(
+      [roleOf("lambdaTextGen"), roleOf(fnIdByName("KC-Api-DefaultFunction"))].sort()
+    );
+  });
+
+  test("connect and disconnect hold no ManageConnections", () => {
+    for (const name of ["KC-Api-ConnectFunction", "KC-Api-DisconnectFunction"]) {
+      expect(allowActionsFor(roleOf(fnIdByName(name)))).not.toContain("execute-api:ManageConnections");
+    }
+  });
+
+  test("text gen may only POST to connections on the WebSocket stage in this account", () => {
+    const res = manageConnectionsResources(roleOf("lambdaTextGen"));
+    expect(res).toHaveLength(1);
+    expect(res[0]).toContain(`:${env.account}:*/prod/POST/@connections/*`);
+    expect(res[0]).toContain(env.region);
+  });
+
+  test("$default is pinned to this WebSocket API's id and stage", () => {
+    const res = manageConnectionsResources(roleOf(fnIdByName("KC-Api-DefaultFunction")));
+    expect(res).toHaveLength(2);
+    for (const r of res) {
+      expect(r).toContain("ChatWebSocketApi");
+      expect(r).toMatch(/\/prod\/(POST|DELETE)\/@connections\/\*/);
+    }
+  });
+});

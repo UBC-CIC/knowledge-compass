@@ -32,6 +32,9 @@ import * as path from "path";
 
 // REST stage name. The WAF association and execute-api ARNs also use "prod".
 export const REST_API_STAGE_NAME = "prod";
+// WebSocket stage name. Text gen's ManageConnections grant names it without
+// referencing the WebSocket API (see the cycle note at the end of the stack).
+export const WEBSOCKET_STAGE_NAME = "prod";
 // OpenAPI gateway responses and OPTIONS mocks read this stage variable.
 // gatewayCorsOrigin copies the deployed SPA origin into it; never "*".
 export const GATEWAY_ALLOWED_ORIGIN_VARIABLE = "allowedOrigin";
@@ -2504,18 +2507,20 @@ export class ApiGatewayStack extends cdk.Stack {
     }));
 
 
-    // Grant permissions to post to connections
-    const wsPolicy = new iam.PolicyStatement({
+    // Text gen streams answers back with PostToConnection only. The API id stays a
+    // wildcard because a reference from lambdaTextGen to the WebSocket API closes
+    // the KC-Api dependency cycle (see the note at the end of this stack), so the
+    // grant is pinned to this account, the WebSocket stage name and POST instead.
+    // connect.js and disconnect.js never call the management API, so they get no
+    // ManageConnections grant (A-12). defaultFunction gets a statement scoped to
+    // this API's stage below.
+    lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
       actions: ["execute-api:ManageConnections"],
       resources: [
-        `arn:aws:execute-api:${this.region}:${this.account}:*/*/@connections/*`,
+        `arn:aws:execute-api:${this.region}:${this.account}:*/${WEBSOCKET_STAGE_NAME}/POST/@connections/*`,
       ],
-    });
-
-    lambdaTextGen.addToRolePolicy(wsPolicy);
-    connectFunction.addToRolePolicy(wsPolicy);
-    disconnectFunction.addToRolePolicy(wsPolicy);
-    // defaultFunction gets a statement scoped to this API's stage below.
+    }));
 
     // Connection binding store: each function gets only the actions it uses.
     // Each has its own role (no shared `role:`), so these grants stay per function.
@@ -2588,7 +2593,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // Stage (using CfnStage to enable access log settings for WebSocket API)
     this.wsStage = new apigatewayv2.CfnStage(this, `${id}-ProdCfnStage`, {
       apiId: this.webSocketApi?.apiId,
-      stageName: "prod",
+      stageName: WEBSOCKET_STAGE_NAME,
       autoDeploy: true,
       // Stage-wide backstop against anonymous message floods (all routes, all clients).
       // These throttles are aggregate, not per client. WAFv2 cannot attach to a
@@ -2633,8 +2638,8 @@ export class ApiGatewayStack extends cdk.Stack {
     this.wsStage.node.addDependency(connectRoute, defaultRoute);
 
     // $default posts error events and closes sockets that have no connection record
-    // (DeleteConnection), on this API's stage only. Same manual ARN template as wsPolicy
-    // above; the only token is this WebSocket API's own id. The Api resource references
+    // (DeleteConnection), on this API's stage only. Same manual ARN template as text
+    // gen's grant above; the only token is this WebSocket API's own id. The Api resource references
     // nothing, so this adds no cycle (lambdaTextGen gets no new reference; see note below).
     defaultFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
