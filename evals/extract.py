@@ -702,7 +702,7 @@ def extract(
                     draft = converse_tool(
                         bedrock_client, model_id, DRAFT_SYSTEM, build_draft_prompt(old, journey or None),
                         DRAFT_TOOL, "Draft the synthetic parts of a test scenario.", DRAFT_SCHEMA,
-                        max_tokens=3000, temperature=0.4,
+                        max_tokens=3000, disable_thinking=True,
                     )
                 except Exception as e:  # noqa: BLE001 - one failed draft must not stop extraction
                     result.problems.append(f"{old.story_id}: LLM draft failed ({type(e).__name__})")
@@ -737,7 +737,7 @@ def extract(
                     draft = converse_tool(
                         bedrock_client, model_id, DRAFT_SYSTEM, build_draft_prompt(scenario, journey or None),
                         DRAFT_TOOL, "Draft the synthetic parts of a test scenario.", DRAFT_SCHEMA,
-                        max_tokens=3000, temperature=0.4,
+                        max_tokens=3000, disable_thinking=True,
                     )
                     suggested = apply_draft(scenario, draft, cluster_keys)
                 except Exception as e:  # noqa: BLE001 - one failed draft must not stop extraction

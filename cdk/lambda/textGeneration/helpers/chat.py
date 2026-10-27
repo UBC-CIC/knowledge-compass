@@ -56,7 +56,7 @@ def _generate_session_title(
     query: str,
     answer_text: str,
     llm_region: str,
-    haiku_model_arn: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    haiku_model_arn: str = "us.anthropic.claude-haiku-5-5"
 ) -> Optional[str]:
     """
     Uses a fast, low-cost LLM call to generate a short, descriptive title for a
@@ -88,12 +88,13 @@ Output ONLY the title text.
             modelId=haiku_model_arn,
             messages=[{"role": "user", "content": [{"text": user_message}]}],
             system=[{"text": title_system_prompt}],
-            inferenceConfig={
-                "maxTokens": 20,
-                "temperature": 0.0
-            }
+            # Haiku 5.5 rejects non-default temperature and thinks by default;
+            # a title needs neither.
+            inferenceConfig={"maxTokens": 30},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
-        title = response["output"]["message"]["content"][0]["text"].strip()
+        parts = response["output"]["message"]["content"]
+        title = "".join(p.get("text", "") for p in parts).strip()
         title = title.strip("\"' ").strip()
         return title[:80] if title else None
     except Exception as e:
@@ -496,15 +497,15 @@ def get_response(
                 },
                 {"text": dynamic_prompt}
             ],
+            # Haiku 5.5 rejects non-default temperature/top_p, so the admin
+            # sampling settings are not sent. Thinking is on by default there;
+            # keep it off so the streamed reply starts with the answer.
             "inferenceConfig": {
                 "maxTokens": config.MAX_TOKENS,
-                "temperature": config.TEMPERATURE
-            }
-        }
-
-    if model_arn == config.SONNET_ARN:
-        request_payload["additionalModelRequestFields"] = {
-            "thinking" : {"type": "disabled"},
+            },
+            "additionalModelRequestFields": {
+                "thinking": {"type": "disabled"},
+            },
         }
 
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)

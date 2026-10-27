@@ -32,13 +32,26 @@ def _with_retries(call: Callable[[], Dict[str, Any]], attempts: int = 5, sleep=t
     raise RuntimeError("unreachable")
 
 
+def _request_options(max_tokens: int, temperature: Optional[float], disable_thinking: bool) -> Dict[str, Any]:
+    """inferenceConfig plus model fields. Haiku 5.5 rejects any non-default
+    temperature (pass None) and thinks unless told not to."""
+    inference: Dict[str, Any] = {"maxTokens": max_tokens}
+    if temperature is not None:
+        inference["temperature"] = temperature
+    options: Dict[str, Any] = {"inferenceConfig": inference}
+    if disable_thinking:
+        options["additionalModelRequestFields"] = {"thinking": {"type": "disabled"}}
+    return options
+
+
 def converse_text(
     client,
     model_id: str,
     system: str,
     messages: List[Dict[str, Any]],
     max_tokens: int = 800,
-    temperature: float = 0.7,
+    temperature: Optional[float] = None,
+    disable_thinking: bool = False,
     sleep=time.sleep,
 ) -> str:
     response = _with_retries(
@@ -46,7 +59,7 @@ def converse_text(
             modelId=model_id,
             system=[{"text": system}],
             messages=messages,
-            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+            **_request_options(max_tokens, temperature, disable_thinking),
         ),
         sleep=sleep,
     )
@@ -63,7 +76,8 @@ def converse_tool(
     description: str,
     schema: Dict[str, Any],
     max_tokens: int = 2000,
-    temperature: float = 0.0,
+    temperature: Optional[float] = None,
+    disable_thinking: bool = False,
     sleep=time.sleep,
 ) -> Optional[Dict[str, Any]]:
     """Force a single tool call and return its input (None if the model did not call it)."""
@@ -76,7 +90,7 @@ def converse_tool(
                 "tools": [{"toolSpec": {"name": tool_name, "description": description, "inputSchema": {"json": schema}}}],
                 "toolChoice": {"tool": {"name": tool_name}},
             },
-            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+            **_request_options(max_tokens, temperature, disable_thinking),
         ),
         sleep=sleep,
     )

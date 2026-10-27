@@ -45,8 +45,7 @@ To request quota increases:
 1. Navigate to the **AWS Service Quotas** console in your AWS account
 2. Search for "Bedrock" in the service quotas
 3. Select the relevant LLM models you plan to use:
-   - Anthropic Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`)
-   - Anthropic Claude Sonnet 4.6 (`us.anthropic.claude-sonnet-4-6`)
+   - Anthropic Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`)
    - Cohere Embed V3
 4. Request quota increases for "Requests per minute" based on your expected usage
 5. Submit the quota increase request and wait for AWS approval (this can take 24-48 hours)
@@ -300,9 +299,9 @@ aws ssm put-parameter \
     --profile <YOUR-PROFILE-NAME>
 ```
 
-The application uses two Claude models for text generation, referenced via SSM parameters. You must create both parameters before deploying.
+The application uses Claude Haiku 5.5 for all text generation. It reads the model from two SSM parameters (one per role); set both to the same Haiku 5.5 ID. You must create both parameters before deploying.
 
-**Haiku model** (used for lightweight/fast responses):
+**HaikuArn** (router, detective replies, grounding check, titles, guideline labelling):
 
 <details>
 <summary>macOS/Linux</summary>
@@ -310,7 +309,7 @@ The application uses two Claude models for text generation, referenced via SSM p
 ```bash
 aws ssm put-parameter \
     --name "/KC/LLM/HaikuArn" \
-    --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" \
+    --value "us.anthropic.claude-haiku-5-5" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
 ```
@@ -323,7 +322,7 @@ aws ssm put-parameter \
 ```cmd
 aws ssm put-parameter ^
     --name "/KC/LLM/HaikuArn" ^
-    --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" ^
+    --value "us.anthropic.claude-haiku-5-5" ^
     --type String ^
     --profile <YOUR-PROFILE-NAME>
 ```
@@ -336,7 +335,7 @@ aws ssm put-parameter ^
 ```powershell
 aws ssm put-parameter `
     --name "/KC/LLM/HaikuArn" `
-    --value "us.anthropic.claude-haiku-4-5-20251001-v1:0" `
+    --value "us.anthropic.claude-haiku-5-5" `
     --type String `
     --profile <YOUR-PROFILE-NAME>
 ```
@@ -345,7 +344,7 @@ aws ssm put-parameter `
 
 &nbsp;
 
-**Sonnet model** (used for higher-quality responses):
+**SonnetArn** (partial and suggestion replies; the name is historical):
 
 <details>
 <summary>macOS/Linux</summary>
@@ -353,7 +352,7 @@ aws ssm put-parameter `
 ```bash
 aws ssm put-parameter \
     --name "/KC/LLM/SonnetArn" \
-    --value "us.anthropic.claude-sonnet-4-6" \
+    --value "us.anthropic.claude-haiku-5-5" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
 ```
@@ -366,7 +365,7 @@ aws ssm put-parameter \
 ```cmd
 aws ssm put-parameter ^
     --name "/KC/LLM/SonnetArn" ^
-    --value "us.anthropic.claude-sonnet-4-6" ^
+    --value "us.anthropic.claude-haiku-5-5" ^
     --type String ^
     --profile <YOUR-PROFILE-NAME>
 ```
@@ -379,7 +378,7 @@ aws ssm put-parameter ^
 ```powershell
 aws ssm put-parameter `
     --name "/KC/LLM/SonnetArn" `
-    --value "us.anthropic.claude-sonnet-4-6" `
+    --value "us.anthropic.claude-haiku-5-5" `
     --type String `
     --profile <YOUR-PROFILE-NAME>
 ```

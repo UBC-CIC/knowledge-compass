@@ -1497,9 +1497,9 @@ export class ApiGatewayStack extends cdk.Stack {
 
 
     // Main chat (answer) model: a US cross-region inference profile id. Same value as the
-    // documented /KC/LLM/SonnetArn parameter; also the ModelId dimension of the Bedrock
-    // token alarms below.
-    const generationModelId = 'us.anthropic.claude-sonnet-4-6';
+    // documented /KC/LLM/SonnetArn parameter (Haiku 5.5, same as /KC/LLM/HaikuArn); also
+    // the ModelId dimension of the Bedrock token alarms below.
+    const generationModelId = 'us.anthropic.claude-haiku-5-5';
 
     const lambdaTextGen = new lambda.Function(
       this,
@@ -1937,12 +1937,9 @@ export class ApiGatewayStack extends cdk.Stack {
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
         `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
-        // Claude Sonnet 4.6 (Converse currently resolves this model in us-west-2)
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6`,
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6`,
-        // Claude Haiku 4.5 (Converse currently resolves this model in us-west-2)
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
+        // Claude Haiku 5.5: every generation call (both /KC/LLM params point here)
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5`,
+        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-5-5`,
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);

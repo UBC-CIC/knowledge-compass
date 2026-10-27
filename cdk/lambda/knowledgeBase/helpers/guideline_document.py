@@ -290,7 +290,8 @@ def label_section(section: dict) -> dict:
                 "role": "user",
                 "content": [{"text": f"<heading>{heading}</heading>\n<section>\n{content}\n</section>"}],
             }],
-            inferenceConfig={"maxTokens": 200, "temperature": 0},
+            inferenceConfig={"maxTokens": 200},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
         parts = response["output"]["message"]["content"]
         text = "".join(p.get("text", "") for p in parts)

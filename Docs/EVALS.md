@@ -317,9 +317,9 @@ Custom metrics: one per product rule (`kc-no-legal-advice`, and the rest) plus `
 
 | Caller | Default model | Default region |
 |---|---|---|
-| Parent simulator | Claude Haiku 4.5 | `us-west-2` (`KC_BEDROCK_REGION`) |
+| Parent simulator | Claude Haiku 5.5 | `us-west-2` (`KC_BEDROCK_REGION`) |
 | Direct judge and Bedrock evaluator | Claude Opus 4.6 | same |
-| Scenario extraction | Claude Sonnet 4.6 | same |
+| Scenario extraction | Claude Haiku 5.5 | same |
 
 The chat API itself uses whatever models the deployed stack is configured with. The harness uses the caller’s own AWS credentials. It does not assume the application’s IAM roles.
 

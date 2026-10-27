@@ -167,13 +167,12 @@ def _call_llm_verifier(
                     "content": [{"text": prompt}]
                 }
             ],
-            inferenceConfig={
-                "maxTokens": max_tokens,
-                "temperature": 0,
-            }
+            inferenceConfig={"maxTokens": max_tokens},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
 
-        raw_text = response["output"]["message"]["content"][0]["text"].strip()
+        parts = response["output"]["message"]["content"]
+        raw_text = "".join(p.get("text", "") for p in parts).strip()
 
         # Strip accidental code fences if the model adds them
         raw_text = re.sub(r"^```json\s*", "", raw_text, flags=re.IGNORECASE)
@@ -272,7 +271,7 @@ def assess_response(
     answer_text: str,
     sources: List[Dict[str, Any]],
     llm_region: str,
-    verifier_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    verifier_model_id: str = "us.anthropic.claude-haiku-5-5",
 ) -> Dict[str, Any]:
     """
     LLM-only intervention scorer.
