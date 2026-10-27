@@ -1279,7 +1279,7 @@ export class ApiGatewayStack extends cdk.Stack {
           SM_COGNITO_CREDENTIALS: this.secret.secretName,
         },
         functionName: `${id}-adminLambdaAuthorizer`,
-        memorySize: 512,
+        memorySize: 256,
         layers: [jwt],
         role: adminAuthorizerRole,
       }
