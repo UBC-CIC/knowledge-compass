@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from helpers import config
 from helpers.bedrock import format_context_for_prompt
-from helpers.prompt_data import MAX_GUIDE_LABEL_CHARS, as_prompt_data
+from helpers.prompt_data import MAX_GUIDE_LABEL_CHARS, as_prompt_data, data_block_note
 
 GUIDELINE_INSTRUCTIONS = """
 You are a compassionate guide helping families navigate inclusive education in Canada, built for Inclusion Canada. You serve parents, support persons and family members.
@@ -194,6 +194,7 @@ def build_guideline_prompt(
 <resources>
 {resources_text}
 </resources>
+{data_block_note("resources")}
 
 {previous_block}<output_format>
 {GUIDELINE_OUTPUT_FORMAT}

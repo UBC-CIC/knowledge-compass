@@ -51,9 +51,9 @@ and `.env` files are already gitignored.
 | `KC_AWS_REGION` | signing secret | `ca-central-1` |
 | `KC_EVAL_SECRET_NAME` | signing secret | `KC/eval/signing-secret` |
 | `KC_BEDROCK_REGION` | simulator, judge, extract | `us-west-2` |
-| `KC_SIMULATOR_MODEL` | journeys | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `KC_SIMULATOR_MODEL` | journeys | `us.anthropic.claude-haiku-5-5` |
 | `KC_JUDGE_MODEL` | judge, Bedrock eval | `us.anthropic.claude-opus-4-6-v1` |
-| `KC_EXTRACT_MODEL` | extract | `us.anthropic.claude-sonnet-4-6` |
+| `KC_EXTRACT_MODEL` | extract | `us.anthropic.claude-haiku-5-5` |
 | `KC_EVAL_BUCKET`, `KC_EVAL_ROLE_ARN`, `KC_EVAL_JOB_REGION` | Bedrock eval | EvalStack outputs |
 | `KC_ADMIN_ID_TOKEN` | optional checks | – (Cognito admin ID token; enables the analytics/global-mode checks and `--catalog admin`) |
 | `KC_TURN_DELAY_SECONDS`, `KC_USER_DELAY_SECONDS` | pacing | `2`, `5` |
@@ -224,7 +224,7 @@ after the run.
 Each turn in the app makes:
 
 - a Haiku router call
-- a Haiku or Sonnet answer
+- a Haiku answer
 - a Haiku grounding check on guidance turns
 - a title call on the first turn
 - a Cohere embedding and a guardrail check

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  NOT_ADMIN_MESSAGE,
+  adminSetupErrorMessage,
   adminStepFor,
+  isAdminTokenPayload,
   cleanTotpCode,
   formatTotpSecret,
   totpCodeError,
@@ -38,5 +41,23 @@ describe("TOTP codes", () => {
   it("groups the secret in blocks of four", () => {
     expect(formatTotpSecret("ABCDEFGHIJ")).toBe("ABCD EFGH IJ");
     expect(formatTotpSecret("ABCDEFGH")).toBe("ABCD EFGH");
+  });
+});
+
+describe("admin group", () => {
+  it("accepts only ID tokens in the admin group", () => {
+    expect(isAdminTokenPayload({ "cognito:groups": ["admin"] })).toBe(true);
+    expect(isAdminTokenPayload({ "cognito:groups": ["staff", "admin"] })).toBe(true);
+    for (const payload of [undefined, null, {}, { "cognito:groups": [] }, { "cognito:groups": ["Admin"] }, { "cognito:groups": "admin" }]) {
+      expect(isAdminTokenPayload(payload)).toBe(false);
+    }
+  });
+
+  it("explains a refused account and keeps other failures generic", () => {
+    expect(adminSetupErrorMessage(401)).toBe(NOT_ADMIN_MESSAGE);
+    expect(adminSetupErrorMessage(403)).toBe(NOT_ADMIN_MESSAGE);
+    for (const status of [undefined, 500, 502]) {
+      expect(adminSetupErrorMessage(status)).not.toBe(NOT_ADMIN_MESSAGE);
+    }
   });
 });

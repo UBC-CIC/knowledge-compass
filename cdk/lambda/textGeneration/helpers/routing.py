@@ -67,7 +67,7 @@ MAX_INFO_NEEDED_CHARS = 200
 HISTORY_MESSAGES_FOR_ROUTER = 10
 MAX_PREVIOUS_STATE_CHARS = 1500
 
-DEFAULT_ROUTER_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_ROUTER_MODEL_ID = "us.anthropic.claude-haiku-5-5"
 ROUTER_TOOL_NAME = "route_turn"
 
 
@@ -516,7 +516,8 @@ def route_turn(
                 "tools": [build_router_tool_spec(catalog)],
                 "toolChoice": {"tool": {"name": ROUTER_TOOL_NAME}},
             },
-            inferenceConfig={"maxTokens": 400, "temperature": 0.0},
+            inferenceConfig={"maxTokens": 400},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
         content = response.get("output", {}).get("message", {}).get("content", []) or []
         tool_input = None

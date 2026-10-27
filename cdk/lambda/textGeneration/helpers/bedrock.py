@@ -2,6 +2,8 @@
 import logging
 from typing import List, Dict, Any
 
+from helpers.prompt_data import neutralize_tags
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -42,5 +44,8 @@ def format_context_for_prompt(sources: List[Dict[str, Any]], start: int = 1) -> 
                 )
                 if described:
                     header += f"\n    Linked from CSV row(s): {described[:500]}"
-        parts.append(f"<source_{i}>\n{header}\n    Content: {content}\n</source_{i}>")
+        # Title, URL, CSV cells and content are all third-party text; only the
+        # <source_N> wrapper is ours.
+        body = neutralize_tags(f"{header}\n    Content: {content}")
+        parts.append(f"<source_{i}>\n{body}\n</source_{i}>")
     return "\n\n".join(parts)

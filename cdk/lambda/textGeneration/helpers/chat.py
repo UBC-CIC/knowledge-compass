@@ -15,6 +15,7 @@ from helpers.journeys import apply_document_coverage
 from helpers.logic import get_current_prompt
 from helpers.routing import DETECTIVE, RoutingState, decide_phase, route_turn, touched_keys
 from helpers.bedrock import format_context_for_prompt
+from helpers.prompt_data import data_block_note
 from helpers.embedding_space import EmbeddingSpaceError
 from helpers.retrieval import (
     DEFAULT_MIN_SCORE, effective_min_score, public_http_url, retrieve_from_pgvector, to_public_source,
@@ -28,7 +29,7 @@ from helpers.citations import (
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import reserve_daily_message
-from helpers.guardrail import invoke_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED
+from helpers.guardrail import invoke_guardrail, invoke_output_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -55,7 +56,7 @@ def _generate_session_title(
     query: str,
     answer_text: str,
     llm_region: str,
-    haiku_model_arn: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    haiku_model_arn: str = "us.anthropic.claude-haiku-5-5"
 ) -> Optional[str]:
     """
     Uses a fast, low-cost LLM call to generate a short, descriptive title for a
@@ -87,12 +88,13 @@ Output ONLY the title text.
             modelId=haiku_model_arn,
             messages=[{"role": "user", "content": [{"text": user_message}]}],
             system=[{"text": title_system_prompt}],
-            inferenceConfig={
-                "maxTokens": 20,
-                "temperature": 0.0
-            }
+            # Haiku 5.5 rejects non-default temperature and thinks by default;
+            # a title needs neither.
+            inferenceConfig={"maxTokens": 30},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
-        title = response["output"]["message"]["content"][0]["text"].strip()
+        parts = response["output"]["message"]["content"]
+        title = "".join(p.get("text", "") for p in parts).strip()
         title = title.strip("\"' ").strip()
         return title[:80] if title else None
     except Exception as e:
@@ -237,6 +239,7 @@ def _prepare_conversation(
 <retrieved_context>
 {context_block}
 </retrieved_context>
+{data_block_note("retrieved_context")}
 """
     else:
         context_block = format_context_for_prompt(sources)
@@ -245,6 +248,7 @@ def _prepare_conversation(
 <retrieved_context>
 {context_block}
 </retrieved_context>
+{data_block_note("retrieved_context")}
 """
 
     # 10. Build Messages
@@ -493,15 +497,15 @@ def get_response(
                 },
                 {"text": dynamic_prompt}
             ],
+            # Haiku 5.5 rejects non-default temperature/top_p, so the admin
+            # sampling settings are not sent. Thinking is on by default there;
+            # keep it off so the streamed reply starts with the answer.
             "inferenceConfig": {
                 "maxTokens": config.MAX_TOKENS,
-                "temperature": config.TEMPERATURE
-            }
-        }
-
-    if model_arn == config.SONNET_ARN:
-        request_payload["additionalModelRequestFields"] = {
-            "thinking" : {"type": "disabled"},
+            },
+            "additionalModelRequestFields": {
+                "thinking": {"type": "disabled"},
+            },
         }
 
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
@@ -612,6 +616,29 @@ def get_response(
         answer_text = "I encountered an error generating the response."
         cited_indices = []
 
+    # Every answer goes through the output guardrail before it is saved or sent
+    # in 'complete', which replaces any text already streamed. A blocked answer
+    # keeps no citations and is not trusted for grounding, state or the title.
+    # A guardrail error fails closed, like the input check.
+    output_blocked = False
+    if answer_text and not answer_text.startswith("I encountered an error"):
+        try:
+            screened = invoke_output_guardrail(answer_text, config.REGION)
+        except Exception as e:
+            logger.error(f"Output guardrail invocation failed: {type(e).__name__}")
+            screened = None
+        if screened is None:
+            answer_text = "I encountered an error generating the response."
+            cited_indices = []
+        elif screened['action'] == ACTION_BLOCKED:
+            output_blocked = True
+            answer_text = screened['text']
+            cited_indices = []
+            parsed_indices = []
+            full_response_text = ""
+        elif screened['action'] == ACTION_ANONYMIZED:
+            answer_text = screened['text']
+
     # Full cited sources feed the grounding verifier; only the trimmed public
     # projection is streamed to the client and persisted with the message.
     # Guide citations stay internal: they ground the answer but are never
@@ -645,7 +672,9 @@ def get_response(
 
     # Guideline mode: a clarifying question cites no section, so there is
     # nothing to verify; answers are checked against the full sections.
-    run_grounding_check = phase_name == "SUGGESTION" and (not has_guides or bool(used_sources))
+    run_grounding_check = (
+        phase_name == "SUGGESTION" and not output_blocked and (not has_guides or bool(used_sources))
+    )
 
     if run_grounding_check and answer_text and not answer_text.startswith("I encountered an error"):
         try:
@@ -721,7 +750,8 @@ def get_response(
 
     # Advance routing state only after a successful reply, so a failed
     # generation does not count as a question asked or guidance given.
-    if not exclusive_guideline and answer_text and not answer_text.startswith("I encountered an error"):
+    if (not exclusive_guideline and not output_blocked
+            and answer_text and not answer_text.startswith("I encountered an error")):
         try:
             # Journey/situation keys only (no text) for feedback analytics.
             journeys_touched, clusters_touched = touched_keys(
@@ -747,7 +777,7 @@ def get_response(
             logger.warning(f"Failed to save routing state: {e}")
 
     generated_title = None
-    if final_answer_text and not final_answer_text.startswith("I encountered an error"):
+    if final_answer_text and not output_blocked and not final_answer_text.startswith("I encountered an error"):
         try:
             current_title = get_session_title(db_connection, chat_session_id)
             is_untitled = current_title is None or current_title.strip() in ("", "New Session")

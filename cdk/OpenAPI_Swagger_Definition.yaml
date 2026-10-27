@@ -341,7 +341,13 @@ paths:
     post:
       tags:
         - Admin
-      summary: Create a new admin user
+      summary: Create an administrator
+      description: >
+        Creates the Cognito user (Cognito emails a temporary password), adds it
+        to the "admin" group and writes its admin users row. An email that
+        already has a Cognito account is added to the admin group and its row
+        elevated (200). Served by adminProvisioningFunction, the only request
+        handler allowed to call Cognito admin APIs.
       operationId: create_admin_user
       security:
         - adminAuthorizer: []
@@ -362,15 +368,12 @@ paths:
                   type: string
                   format: email
                   maxLength: 255
-                institution_id:
-                  type: string
-                  maxLength: 255
       responses:
         "201":
-          description: Admin user created
+          description: Admin user created and invited
           content:
             application/json:
-              schema:
+              schema: &adminUserProvisioned
                 type: object
                 properties:
                   id:
@@ -383,13 +386,25 @@ paths:
                   role:
                     type: string
                     example: "admin"
-        "409":
-          description: Email already exists
+                  cognito:
+                    type: string
+                    enum: [created, existing]
+        "200":
+          description: Existing Cognito account added to the admin group
+          content:
+            application/json:
+              schema: *adminUserProvisioned
+        "400":
+          description: Invalid display_name or email, or email domain not allowed
+        "401":
+          description: Unauthorized
+        "403":
+          description: Admin access required
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminProvisioningFunction.Arn}/invocations
         passthroughBehavior: "when_no_match"
         httpMethod: POST
         type: aws_proxy

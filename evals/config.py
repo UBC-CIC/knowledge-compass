@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
-DEFAULT_SIMULATOR_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_SIMULATOR_MODEL = "us.anthropic.claude-haiku-5-5"
 DEFAULT_JUDGE_MODEL = "us.anthropic.claude-opus-4-6-v1"
-DEFAULT_EXTRACT_MODEL = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_EXTRACT_MODEL = "us.anthropic.claude-haiku-5-5"
 
 
 def load_env_file(path: Optional[str]) -> Dict[str, str]:

@@ -52,6 +52,8 @@ export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[
     action: 'ANONYMIZE',
     inputAction: 'ANONYMIZE',
     inputEnabled: true,
+    outputAction: 'NONE',
+    outputEnabled: false,
   },
   {
     name: 'STREET_ADDRESS',
@@ -60,8 +62,69 @@ export const GUARDRAIL_REGEXES_CONFIG: bedrock.CfnGuardrail.RegexConfigProperty[
     action: 'ANONYMIZE',
     inputAction: 'ANONYMIZE',
     inputEnabled: true,
+    outputAction: 'NONE',
+    outputEnabled: false,
   },
 ];
+
+// High-risk identifiers, masked in model output as well as input. Every other
+// PII type is input-only: in an answer, names, emails, phone numbers, URLs and
+// street addresses are mostly the organizations, helplines and links families
+// need, so masking them would break the answer.
+export const GUARDRAIL_OUTPUT_MASKED_PII = [
+  'PASSWORD', 'PIN',
+  'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
+  'INTERNATIONAL_BANK_ACCOUNT_NUMBER',
+  'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
+];
+
+const GUARDRAIL_PII_TYPES = [
+  // General
+  'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
+  'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
+  // Finance
+  'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
+  'PIN', 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', 'SWIFT_CODE',
+  // IT
+  'IP_ADDRESS', 'MAC_ADDRESS', 'URL',
+  // Canada
+  'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
+];
+
+// Output settings are explicit on every entry: an omitted outputEnabled
+// defaults to on.
+export const GUARDRAIL_PII_ENTITIES_CONFIG: bedrock.CfnGuardrail.PiiEntityConfigProperty[] =
+  GUARDRAIL_PII_TYPES.map((type) => {
+    const masked = GUARDRAIL_OUTPUT_MASKED_PII.includes(type);
+    return {
+      type,
+      action: 'ANONYMIZE',
+      inputAction: 'ANONYMIZE',
+      inputEnabled: true,
+      outputAction: masked ? 'ANONYMIZE' : 'NONE',
+      outputEnabled: masked,
+    };
+  });
+
+// PROMPT_ATTACK is input-only (AWS applies it to user input only). The
+// harmful-content filters are output-only: on input they would refuse parents
+// describing hitting, restraint, bullying or abuse at school. Strengths are
+// MEDIUM, and LOW for VIOLENCE and MISCONDUCT, because answers legitimately
+// cover restraint, seclusion, police at school and reporting abuse. Tune with
+// the eval harness before raising them.
+export const GUARDRAIL_CONTENT_FILTERS_CONFIG: bedrock.CfnGuardrail.ContentFilterConfigProperty[] = [
+  { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
+  { type: 'HATE',          inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'INSULTS',       inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'SEXUAL',        inputStrength: 'NONE', outputStrength: 'MEDIUM' },
+  { type: 'VIOLENCE',      inputStrength: 'NONE', outputStrength: 'LOW' },
+  { type: 'MISCONDUCT',    inputStrength: 'NONE', outputStrength: 'LOW' },
+];
+
+export const GUARDRAIL_BLOCKED_INPUT_MESSAGE =
+  "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.";
+export const GUARDRAIL_BLOCKED_OUTPUT_MESSAGE =
+  "Sorry, I can't share that answer. I'm Knowledge Compass, here to help families navigate inclusive education in Canada. Please try asking in a different way.";
 
 /**
  * Per-IP WAF rate rules (finding f-9bda4252).
@@ -1434,9 +1497,9 @@ export class ApiGatewayStack extends cdk.Stack {
 
 
     // Main chat (answer) model: a US cross-region inference profile id. Same value as the
-    // documented /KC/LLM/SonnetArn parameter; also the ModelId dimension of the Bedrock
-    // token alarms below.
-    const generationModelId = 'us.anthropic.claude-sonnet-4-6';
+    // documented /KC/LLM/SonnetArn parameter (Haiku 5.5, same as /KC/LLM/HaikuArn); also
+    // the ModelId dimension of the Bedrock token alarms below.
+    const generationModelId = 'us.anthropic.claude-haiku-5-5';
 
     const lambdaTextGen = new lambda.Function(
       this,
@@ -1499,69 +1562,29 @@ export class ApiGatewayStack extends cdk.Stack {
       })
     );
 
-    // --- Bedrock Input Guardrail ---
-    const guardrailConfig = {
-      piiEntities: [
-        // General
-        'AGE', 'NAME', 'EMAIL', 'PHONE', 'USERNAME', 'PASSWORD',
-        'DRIVER_ID', 'LICENSE_PLATE', 'VEHICLE_IDENTIFICATION_NUMBER',
-        // Finance
-        'CREDIT_DEBIT_CARD_CVV', 'CREDIT_DEBIT_CARD_EXPIRY', 'CREDIT_DEBIT_CARD_NUMBER',
-        'PIN', 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', 'SWIFT_CODE',
-        // IT
-        'IP_ADDRESS', 'MAC_ADDRESS', 'URL',
-        // Canada
-        'CA_HEALTH_NUMBER', 'CA_SOCIAL_INSURANCE_NUMBER',
-      ],
-      regexes: GUARDRAIL_REGEXES_CONFIG,
-      piiInputAction: 'ANONYMIZE',
-      piiInputEnabled: true,
-      promptAttackStrength: 'HIGH',
-      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
+    // --- Bedrock Guardrail (input and output) ---
+    // Applied by text generation to the user's message (source='INPUT') and to
+    // the final answer (source='OUTPUT'). Construct id and name keep "input"
+    // so the existing guardrail is updated in place, not replaced.
+    const guardrailPolicy = {
+      blockedInputMessaging: GUARDRAIL_BLOCKED_INPUT_MESSAGE,
+      blockedOutputsMessaging: GUARDRAIL_BLOCKED_OUTPUT_MESSAGE,
+      sensitiveInformationPolicyConfig: {
+        piiEntitiesConfig: GUARDRAIL_PII_ENTITIES_CONFIG,
+        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
+      },
+      contentPolicyConfig: {
+        filtersConfig: GUARDRAIL_CONTENT_FILTERS_CONFIG,
+      },
     };
 
     const inputGuardrail = new bedrock.CfnGuardrail(this, 'InputGuardrail', {
       name: `${id}-input-guardrail`,
-      blockedInputMessaging: "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.",
-      blockedOutputsMessaging: 'Response blocked.',
-      sensitiveInformationPolicyConfig: {
-        piiEntitiesConfig: [
-          // General
-          { type: 'AGE',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'NAME',                       action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'EMAIL',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PHONE',                      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'USERNAME',                   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PASSWORD',                   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'DRIVER_ID',                  action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'LICENSE_PLATE',              action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'VEHICLE_IDENTIFICATION_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // Finance
-          { type: 'CREDIT_DEBIT_CARD_CVV',      action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CREDIT_DEBIT_CARD_EXPIRY',   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CREDIT_DEBIT_CARD_NUMBER',   action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'PIN',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'INTERNATIONAL_BANK_ACCOUNT_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'SWIFT_CODE',                 action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // IT
-          { type: 'IP_ADDRESS',                 action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'MAC_ADDRESS',                action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'URL',                        action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          // Canada
-          { type: 'CA_HEALTH_NUMBER',           action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-          { type: 'CA_SOCIAL_INSURANCE_NUMBER', action: 'ANONYMIZE', inputAction: 'ANONYMIZE', inputEnabled: true },
-        ],
-        regexesConfig: GUARDRAIL_REGEXES_CONFIG,
-      },
-      contentPolicyConfig: {
-        filtersConfig: [
-          // outputStrength must be NONE: AWS applies PROMPT_ATTACK to user input only, and this guardrail is applied with source='INPUT' only.
-          { type: 'PROMPT_ATTACK', inputStrength: 'HIGH', outputStrength: 'NONE' },
-        ],
-      },
+      ...guardrailPolicy,
     });
 
-    const configHash = computeConfigHash(guardrailConfig);
+    // Hash of the deployed policy itself, so any change publishes a new version.
+    const configHash = computeConfigHash(guardrailPolicy);
     cdk.Tags.of(inputGuardrail).add('ConfigHash', configHash);
 
     const inputGuardrailVersion = new bedrock.CfnGuardrailVersion(this, `InputGuardrailVersion-${configHash.substring(0, 8)}`, {
@@ -1914,12 +1937,9 @@ export class ApiGatewayStack extends cdk.Stack {
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
         `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
-        // Claude Sonnet 4.6 (Converse currently resolves this model in us-west-2)
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6`,
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6`,
-        // Claude Haiku 4.5 (Converse currently resolves this model in us-west-2)
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0`,
+        // Claude Haiku 5.5: every generation call (both /KC/LLM params point here)
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5`,
+        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-5-5`,
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
@@ -2314,6 +2334,97 @@ export class ApiGatewayStack extends cdk.Stack {
     const cfnLambda_admin = lambdaAdminFunction.node
       .defaultChild as lambda.CfnFunction;
     cfnLambda_admin.overrideLogicalId("adminFunction");
+
+    // POST /admin/users (handlers/adminProvisioningHandler.js): the only request
+    // handler that may call Cognito admin APIs, so it has its own role and its own
+    // boundary instead of RequestHandlerBoundary (which denies cognito-idp:Admin*,
+    // finding f-4597100e). The boundary caps it at the three calls it makes; the
+    // identity policy pins them to this user pool and the admin group.
+    const adminProvisioningBoundary = new iam.ManagedPolicy(this, `${id}-AdminProvisioningBoundary`, {
+      managedPolicyName: `${id}-AdminProvisioningBoundary`,
+      description: "Permissions boundary for the admin-provisioning Lambda role",
+      statements: [
+        new iam.PolicyStatement({
+          sid: "AllowAllExceptIamAndCognito",
+          effect: iam.Effect.ALLOW,
+          notActions: ["iam:*", "cognito-idp:*"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          sid: "AllowAdminProvisioningOnly",
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "cognito-idp:AdminCreateUser",
+            "cognito-idp:AdminGetUser",
+            "cognito-idp:AdminAddUserToGroup",
+          ],
+          resources: ["*"],
+        }),
+      ],
+    });
+    const adminProvisioningRole = new iam.Role(this, `${id}-adminProvisioningRole`, {
+      roleName: `${id}-adminProvisioningRole`,
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaVPCAccessExecutionRole"),
+      ],
+      permissionsBoundary: adminProvisioningBoundary,
+    });
+    adminProvisioningRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets",
+        ],
+        resources: ["*"],
+      })
+    );
+    db.secretPathUser.grantRead(adminProvisioningRole);
+    adminProvisioningRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser", "cognito-idp:AdminAddUserToGroup"],
+        resources: [this.userPool.userPoolArn],
+      })
+    );
+
+    const lambdaAdminProvisioningFunction = new lambda.Function(
+      this,
+      `${id}-adminProvisioningFunction`,
+      {
+        runtime: lambda.Runtime.NODEJS_22_X,
+        code: lambda.Code.fromAsset("lambda"),
+        handler: "handlers/adminProvisioningHandler.handler",
+        timeout: Duration.seconds(30),
+        vpc: vpcStack.vpc,
+        environment: {
+          SM_DB_CREDENTIALS: db.secretPathUser.secretName,
+          RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
+          USER_POOL_ID: this.userPool.userPoolId,
+          ALLOWED_ORIGIN_PARAM: this.allowedOriginsParamName,
+        },
+        functionName: `${id}-adminProvisioningFunction`,
+        memorySize: 256,
+        layers: [postgres],
+        role: adminProvisioningRole,
+        tracing: lambda.Tracing.ACTIVE,
+      }
+    );
+    lambdaAdminProvisioningFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter", "ssm:GetParameters"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+    lambdaAdminProvisioningFunction.addPermission("AllowApiGatewayInvoke", {
+      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+      action: "lambda:InvokeFunction",
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/POST/admin/users`,
+    });
+    (lambdaAdminProvisioningFunction.node.defaultChild as lambda.CfnFunction)
+      .overrideLogicalId("adminProvisioningFunction");
 
     // Define WebSocket API and related resources directly in ApiGatewayStack
     this.webSocketApi = new apigatewayv2.WebSocketApi(

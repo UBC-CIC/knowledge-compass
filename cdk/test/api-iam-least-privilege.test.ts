@@ -117,12 +117,51 @@ const cognitoTriggerRole = () => {
 };
 
 describe("API Lambda IAM least privilege", () => {
-  test("no role other than the Cognito trigger role holds a cognito-idp action", () => {
-    const trigger = cognitoTriggerRole();
+  test("no role other than the Cognito trigger and admin-provisioning roles holds a cognito-idp action", () => {
+    const allowed = new Set([cognitoTriggerRole(), roleOf("adminProvisioningFunction")]);
     for (const roleId of allRoleIds()) {
-      if (roleId === trigger) continue;
+      if (allowed.has(roleId)) continue;
       expect(allowActionsFor(roleId).filter((a) => a.startsWith("cognito-idp:"))).toEqual([]);
     }
+  });
+
+  test("admin provisioning has its own role, may only create, read and group users on this pool, and is capped by its own boundary", () => {
+    const roleId = roleOf("adminProvisioningFunction");
+    const onRole = Object.entries(resources)
+      .filter(([, r]) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === roleId)
+      .map(([id]) => id);
+    expect(onRole).toEqual(["adminProvisioningFunction"]);
+
+    const poolId = Object.entries(resources).find(([, r]) => r.Type === "AWS::Cognito::UserPool")![0];
+    const cognitoStatements = statementsFor(roleId).filter((s) =>
+      [s.Action].flat().some((a: string) => a.startsWith("cognito-idp:"))
+    );
+    expect(cognitoStatements).toHaveLength(1);
+    expect([cognitoStatements[0].Action].flat().sort()).toEqual([
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminGetUser",
+    ]);
+    expect(cognitoStatements[0].Resource).toEqual({ "Fn::GetAtt": [poolId, "Arn"] });
+
+    const boundaries = Object.entries(resources).filter(
+      ([, r]) =>
+        r.Type === "AWS::IAM::ManagedPolicy" && r.Properties.ManagedPolicyName === "KC-Api-AdminProvisioningBoundary"
+    );
+    expect(boundaries).toHaveLength(1);
+    const [boundaryId, boundary] = boundaries[0];
+    expect(resources[roleId].Properties.PermissionsBoundary).toEqual({ Ref: boundaryId });
+    const stmts: any[] = boundary.Properties.PolicyDocument.Statement;
+    const allowAll = stmts.find((s) => s.NotAction);
+    expect([allowAll.NotAction].flat().sort()).toEqual(["cognito-idp:*", "iam:*"]);
+    const cognitoAllowed = stmts
+      .filter((s) => s.Effect === "Allow" && s.Action)
+      .flatMap((s) => [s.Action].flat());
+    expect(cognitoAllowed.sort()).toEqual([
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminCreateUser",
+      "cognito-idp:AdminGetUser",
+    ]);
   });
 
   test("Cognito triggers use the readwrite DB credential, never the tablecreator one", () => {
@@ -459,5 +498,45 @@ describe("API Lambda IAM least privilege", () => {
     };
     for (const n of Object.keys(graph)) if (!state[n]) dfs(n, []);
     expect(cycles).toEqual([]);
+  });
+});
+
+// Finding A-01: the guardrail also screens the final answer. Asserted on the
+// synthesized template so the deployed policy, not just the constants, is covered.
+describe("Bedrock guardrail policy", () => {
+  const guardrail = () => {
+    const found = Object.values(resources).filter((r: any) => r.Type === "AWS::Bedrock::Guardrail");
+    expect(found).toHaveLength(1);
+    return (found[0] as any).Properties;
+  };
+
+  test("content filters screen output only; prompt attacks screen input only", () => {
+    const filters = guardrail().ContentPolicyConfig.FiltersConfig;
+    const byType = Object.fromEntries(filters.map((f: any) => [f.Type, f]));
+    expect(byType.PROMPT_ATTACK).toMatchObject({ InputStrength: "HIGH", OutputStrength: "NONE" });
+    for (const type of ["HATE", "INSULTS", "SEXUAL", "VIOLENCE", "MISCONDUCT"]) {
+      expect(byType[type].InputStrength).toBe("NONE");
+      expect(byType[type].OutputStrength).not.toBe("NONE");
+    }
+  });
+
+  test("output masks only high-risk identifiers; every entry states its output setting", () => {
+    const pii = guardrail().SensitiveInformationPolicyConfig.PiiEntitiesConfig;
+    for (const e of pii) expect(typeof e.OutputEnabled).toBe("boolean");
+    expect(pii.find((e: any) => e.Type === "NAME").OutputEnabled).toBe(false);
+    expect(pii.find((e: any) => e.Type === "URL").OutputEnabled).toBe(false);
+    expect(pii.find((e: any) => e.Type === "CA_SOCIAL_INSURANCE_NUMBER")).toMatchObject({
+      OutputEnabled: true,
+      OutputAction: "ANONYMIZE",
+    });
+    for (const r of guardrail().SensitiveInformationPolicyConfig.RegexesConfig) {
+      expect(r.OutputEnabled).toBe(false);
+    }
+  });
+
+  test("a new guardrail version is published for this policy", () => {
+    const versions = Object.entries(resources).filter(([, r]: [string, any]) => r.Type === "AWS::Bedrock::GuardrailVersion");
+    expect(versions).toHaveLength(1);
+    expect(versions[0][0]).toMatch(/^InputGuardrailVersion/);
   });
 });

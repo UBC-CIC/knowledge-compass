@@ -74,14 +74,32 @@ const decodeFakeToken = (token) => JSON.parse(token.slice("signed:".length));
 const TEST_ALLOWED_ORIGINS_PARAM = "/test/API/AllowedOrigins";
 const TEST_ALLOWED_ORIGIN = "https://app.example.test";
 
-function stubs(sql, secrets = {}, ssmParameters = {}) {
+function stubs(sql, secrets = {}, ssmParameters = {}, cognito = () => ({})) {
   ssmParameters = { [TEST_ALLOWED_ORIGINS_PARAM]: TEST_ALLOWED_ORIGIN, ...ssmParameters };
   class FakeCommand {
     constructor(input) {
       this.input = input;
     }
   }
+  // Each Cognito command class is named so `cognito(name, input)` can tell
+  // them apart; it returns the response or throws, as the SDK would.
+  const cognitoCommand = (name) =>
+    class extends FakeCommand {
+      get commandName() {
+        return name;
+      }
+    };
   return {
+    "@aws-sdk/client-cognito-identity-provider": {
+      CognitoIdentityProviderClient: class {
+        async send(command) {
+          return cognito(command.commandName, command.input);
+        }
+      },
+      AdminCreateUserCommand: cognitoCommand("AdminCreateUser"),
+      AdminGetUserCommand: cognitoCommand("AdminGetUser"),
+      AdminAddUserToGroupCommand: cognitoCommand("AdminAddUserToGroup"),
+    },
     // Records the connection config so tests can assert on it (e.g. TLS).
     postgres: (config) => {
       sql.connectionConfig = config;
@@ -136,6 +154,8 @@ function stubs(sql, secrets = {}, ssmParameters = {}) {
  * Error to throw); other ids return the default DB credentials.
  * options.ssmParameters maps an SSM parameter Name to its Value (or an Error
  * to throw); other names throw.
+ * options.cognito is `(commandName, input) => response` for the Cognito
+ * identity provider client (e.g. "AdminCreateUser"); it may throw.
  */
 function loadHandler(name, sql, options = {}) {
   process.env.ALLOWED_ORIGIN_PARAM = TEST_ALLOWED_ORIGINS_PARAM;
@@ -146,7 +166,7 @@ function loadHandler(name, sql, options = {}) {
     }
   }
 
-  const fakes = stubs(sql, options.secrets, options.ssmParameters);
+  const fakes = stubs(sql, options.secrets, options.ssmParameters, options.cognito);
   const originalLoad = Module._load;
   Module._load = function patchedLoad(request, ...rest) {
     if (Object.prototype.hasOwnProperty.call(fakes, request)) return fakes[request];
