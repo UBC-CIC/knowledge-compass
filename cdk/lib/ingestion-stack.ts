@@ -93,6 +93,9 @@ export class IngestionStack extends Stack {
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(53), "DNS TCP fallback");
 
     // ── S3 ingest bucket (uploads, transcript outputs, Textract artifacts) ────
+    // DESTROY + autoDeleteObjects on purpose: uploaded content must not outlive the
+    // deployment. See "Ingest buckets are deleted with the stack" in
+    // Docs/SECURITY_OVERVIEW.md section 9.1 before changing this to RETAIN.
     const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: RemovalPolicy.DESTROY,
