@@ -32,10 +32,31 @@ interface CICDStackProps extends cdk.StackProps {
 // ECR vulnerability scan gate, run as the image builders' post_build step.
 // Pushes only the unique candidate tag, waits for the scan-on-push result
 // (fail closed on errors, FAILED/unsupported status, or timeout), blocks on
-// any CRITICAL finding, and only then retags the scanned manifest as
+// any CRITICAL or HIGH finding not on ECR_SCAN_ALLOWED_FINDINGS (A-09), and
+// only then retags the scanned manifest as
 // `latest` (by digest) and updates the Lambda. A failing image never touches
 // `latest`. Embedded base64-encoded in the buildspec to avoid YAML/quoting
 // issues; exported so tests can run the exact shipped script.
+// CRITICAL/HIGH findings the scan gate accepts, keyed by finding name (the CVE id
+// ECR basic scanning reports) with the reason it is accepted and a review date.
+// Add an entry only when no fixed base image or package exists yet, and remove
+// it once one does. Applies to every image the pipeline builds.
+export const ECR_SCAN_ALLOWED_FINDINGS: Record<string, string> = {};
+
+// The space-separated SCAN_ALLOWED_FINDINGS value for the gate. Names are
+// restricted so they can go on the buildspec command line unquoted-safe.
+export function scanAllowListEnv(allowed: Record<string, string>): string {
+  for (const [name, reason] of Object.entries(allowed)) {
+    if (!/^[A-Za-z0-9._:-]+$/.test(name)) {
+      throw new Error(`Invalid ECR scan allow-list entry '${name}'`);
+    }
+    if (!reason.trim()) {
+      throw new Error(`ECR scan allow-list entry ${name} needs a reason`);
+    }
+  }
+  return Object.keys(allowed).join(" ");
+}
+
 export const ECR_SCAN_GATE_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 : "\${REPO_NAME:?}" "\${REPOSITORY_URI:?}" "\${IMAGE_TAG:?}" "\${LAMBDA_FUNCTION_NAME:?}"
@@ -83,23 +104,54 @@ while :; do
   sleep "$INTERVAL"
 done
 
-CRITICAL=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \\
-  --no-paginate --query 'imageScanFindings.findingSeverityCounts.CRITICAL' --output text)
-if [ -z "$CRITICAL" ] || [ "$CRITICAL" = "None" ]; then
-  CRITICAL=0
+# CRITICAL and HIGH findings block promotion unless their name is on the
+# allow-list (SCAN_ALLOWED_FINDINGS, space-separated; see ECR_SCAN_ALLOWED_FINDINGS).
+COUNTS=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \
+  --no-paginate --query '[imageScanFindings.findingSeverityCounts.CRITICAL, imageScanFindings.findingSeverityCounts.HIGH]' \
+  --output text)
+read -r CRITICAL HIGH _ <<< "$COUNTS" || true
+for SEV in CRITICAL HIGH; do
+  N="\${!SEV:-None}"
+  if [ "$N" = "None" ]; then
+    N=0
+  fi
+  if ! [[ "$N" =~ ^[0-9]+$ ]]; then
+    echo "Unexpected $SEV count '$N'. Blocking deployment."
+    exit 1
+  fi
+  printf -v "$SEV" '%s' "$N"
+done
+
+if [ $((CRITICAL + HIGH)) -gt 0 ]; then
+  NAMES=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \
+    --query "imageScanFindings.findings[?severity=='CRITICAL' || severity=='HIGH'].name" --output text)
+  LISTED=0
+  BLOCKING=""
+  for NAME in $NAMES; do
+    if [ "$NAME" = "None" ]; then
+      continue
+    fi
+    LISTED=$((LISTED + 1))
+    case " \${SCAN_ALLOWED_FINDINGS:-} " in
+      *" $NAME "*) echo "Allow-listed finding: $NAME" ;;
+      *) BLOCKING="$BLOCKING $NAME" ;;
+    esac
+  done
+  if [ "$LISTED" -eq 0 ]; then
+    echo "Scan reports CRITICAL: $CRITICAL, HIGH: $HIGH but no findings could be listed. Blocking deployment."
+    exit 1
+  fi
+  if [ -n "$BLOCKING" ]; then
+    echo "Blocking vulnerabilities found (CRITICAL: $CRITICAL, HIGH: $HIGH):$BLOCKING. Blocking deployment; latest left unchanged."
+    aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \
+      --query "imageScanFindings.findings[?severity=='CRITICAL' || severity=='HIGH'].[severity, name, attributes[?key=='package_name'].value | [0], attributes[?key=='package_version'].value | [0]]" \
+      --output table || true
+    exit 1
+  fi
+  echo "Every CRITICAL/HIGH finding is allow-listed. Promoting $IMAGE_TAG to latest."
+else
+  echo "No CRITICAL or HIGH vulnerabilities found. Promoting $IMAGE_TAG to latest."
 fi
-if ! [[ "$CRITICAL" =~ ^[0-9]+$ ]]; then
-  echo "Unexpected CRITICAL count '$CRITICAL'. Blocking deployment."
-  exit 1
-fi
-if [ "$CRITICAL" -gt 0 ]; then
-  echo "CRITICAL vulnerabilities found: $CRITICAL. Blocking deployment; latest left unchanged."
-  aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" --no-paginate \\
-    --query "imageScanFindings.findings[?severity=='CRITICAL'].[name, attributes[?key=='package_name'].value | [0], attributes[?key=='package_version'].value | [0]]" \\
-    --output table || true
-  exit 1
-fi
-echo "No critical vulnerabilities found. Promoting $IMAGE_TAG to latest."
 
 CURRENT=$(aws ecr describe-images --repository-name "$REPO_NAME" --image-ids imageTag=latest \\
   --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo "NONE")
@@ -432,10 +484,11 @@ export class CICDStack extends cdk.Stack {
               },
               post_build: {
                 commands: [
-                  // Push candidate tag -> wait for scan -> block on CRITICAL ->
-                  // promote to latest -> update Lambda. See ECR_SCAN_GATE_SCRIPT.
+                  // Push candidate tag -> wait for scan -> block on CRITICAL/HIGH
+                  // (minus the allow-list) -> promote to latest -> update Lambda.
+                  // See ECR_SCAN_GATE_SCRIPT.
                   'echo "Running ECR vulnerability scan gate (push candidate -> scan -> promote latest)..."',
-                  `echo ${Buffer.from(ECR_SCAN_GATE_SCRIPT).toString("base64")} | base64 -d > /tmp/ecr-scan-gate.sh && bash /tmp/ecr-scan-gate.sh`,
+                  `echo ${Buffer.from(ECR_SCAN_GATE_SCRIPT).toString("base64")} | base64 -d > /tmp/ecr-scan-gate.sh && SCAN_ALLOWED_FINDINGS="${scanAllowListEnv(ECR_SCAN_ALLOWED_FINDINGS)}" bash /tmp/ecr-scan-gate.sh`,
                 ],
               },
             },

@@ -2,7 +2,12 @@ import * as cdk from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
-import { CICDStack, ECR_SCAN_GATE_SCRIPT } from "../lib/cicd-stack";
+import {
+  CICDStack,
+  ECR_SCAN_ALLOWED_FINDINGS,
+  ECR_SCAN_GATE_SCRIPT,
+  scanAllowListEnv,
+} from "../lib/cicd-stack";
 
 function synth(): Template {
   const app = new cdk.App();
@@ -71,7 +76,9 @@ describe("CICDStack", () => {
     expect(buildSpec).not.toContain("docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:latest");
     expect(buildSpec).not.toContain("sleep 30");
     expect(buildSpec).not.toContain('|| echo \\"0\\"');
-    expect(buildSpec).toContain("base64 -d > /tmp/ecr-scan-gate.sh && bash /tmp/ecr-scan-gate.sh");
+    expect(buildSpec).toContain(
+      `base64 -d > /tmp/ecr-scan-gate.sh && SCAN_ALLOWED_FINDINGS=\\"${scanAllowListEnv(ECR_SCAN_ALLOWED_FINDINGS)}\\" bash /tmp/ecr-scan-gate.sh`
+    );
     expect(buildSpec).toContain(
       "export IMAGE_TAG=${MODULE_NAME}-${ENVIRONMENT}-${COMMIT_HASH}-${CODEBUILD_BUILD_NUMBER}"
     );
@@ -151,6 +158,9 @@ describe("ECR scan gate script", () => {
   interface Mock {
     statuses?: string; // space-separated sequence; last value repeats
     critical?: string;
+    high?: string;
+    names?: string; // finding names the CRITICAL/HIGH listing returns
+    allowed?: string; // SCAN_ALLOWED_FINDINGS
     currentLatest?: string; // digest `latest` resolves to before promotion
     lambdaExists?: boolean;
     succeeding?: string;
@@ -165,6 +175,7 @@ export LAMBDA_FUNCTION_NAME=KC-Ingestion-Crawler
 export SCAN_POLL_INTERVAL=0
 export SCAN_MAX_ATTEMPTS=3
 export CODEBUILD_BUILD_SUCCEEDING=${mock.succeeding ?? "1"}
+export SCAN_ALLOWED_FINDINGS="${mock.allowed ?? ""}"
 MOCK_DIR=$(mktemp -d)
 trap 'cat "$MOCK_DIR/calls" >&2; rm -rf "$MOCK_DIR"' EXIT
 : > "$MOCK_DIR/calls"
@@ -172,6 +183,8 @@ echo 0 > "$MOCK_DIR/n"
 echo "${mock.currentLatest ?? "NONE"}" > "$MOCK_DIR/latest"
 MOCK_STATUSES="${mock.statuses ?? "COMPLETE"}"
 MOCK_CRITICAL="${mock.critical ?? "None"}"
+MOCK_HIGH="${mock.high ?? "None"}"
+MOCK_NAMES="${mock.names ?? "CVE-2099-0001"}"
 MOCK_LAMBDA_EXISTS="${mock.lambdaExists === false ? "0" : "1"}"
 docker() { echo "CALL: docker $*" >> "$MOCK_DIR/calls"; }
 aws() {
@@ -196,7 +209,8 @@ aws() {
             AccessDenied) echo "An error occurred (AccessDeniedException)" >&2; return 254 ;;
             *) echo "\${arr[$i]}" ;;
           esac ;;
-        *findingSeverityCounts.CRITICAL*) echo "$MOCK_CRITICAL" ;;
+        *findingSeverityCounts*) printf '%s\t%s\n' "$MOCK_CRITICAL" "$MOCK_HIGH" ;;
+        *"].name"*) echo "$MOCK_NAMES" ;;
         *) echo "CVE-2099-0001 | openssl | 1.0" ;;
       esac ;;
     "ecr batch-get-image")
@@ -243,11 +257,56 @@ aws() {
   test("CRITICAL findings block the build without touching latest", () => {
     const r = runGate({ critical: "2", currentLatest: "sha256:previous" });
     expect(r.status).not.toBe(0);
-    expect(r.stdout).toContain("CRITICAL vulnerabilities found: 2");
+    expect(r.stdout).toContain("Blocking vulnerabilities found (CRITICAL: 2, HIGH: 0): CVE-2099-0001.");
     expect(r.stdout).toContain("CVE-2099-0001");
     expect(r.stderr).not.toContain("CALL: ecr put-image");
     expect(r.stderr).not.toContain("CALL: lambda update-function-code");
     expectNoLatestPush(r.stderr);
+  });
+
+  test("HIGH findings block the build without touching latest", () => {
+    const r = runGate({ high: "3", names: "CVE-2099-0002", currentLatest: "sha256:previous" });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain("Blocking vulnerabilities found (CRITICAL: 0, HIGH: 3): CVE-2099-0002.");
+    expect(r.stderr).not.toContain("CALL: ecr put-image");
+    expect(r.stderr).not.toContain("CALL: lambda update-function-code");
+    expectNoLatestPush(r.stderr);
+  });
+
+  test("allow-listed findings are reported and the image is promoted", () => {
+    const r = runGate({ critical: "1", high: "1", names: "CVE-2099-0001 CVE-2099-0002", allowed: "CVE-2099-0001 CVE-2099-0002" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Allow-listed finding: CVE-2099-0001");
+    expect(r.stdout).toContain("Allow-listed finding: CVE-2099-0002");
+    expect(r.stderr).toContain(putLatest);
+  });
+
+  test("a finding not on the allow-list still blocks", () => {
+    const r = runGate({ high: "2", names: "CVE-2099-0001 CVE-2099-0002", allowed: "CVE-2099-0001" });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain("HIGH: 2): CVE-2099-0002.");
+    expect(r.stdout).not.toMatch(/\): CVE-2099-0001/);
+    expect(r.stderr).not.toContain("CALL: ecr put-image");
+  });
+
+  test("an allow-list entry must match the whole finding name", () => {
+    const r = runGate({ high: "1", names: "CVE-2099-00011", allowed: "CVE-2099-0001" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).not.toContain("CALL: ecr put-image");
+  });
+
+  test("counts with no listable findings fail closed", () => {
+    const r = runGate({ high: "1", names: "None" });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain("no findings could be listed");
+    expect(r.stderr).not.toContain("CALL: ecr put-image");
+  });
+
+  test("an unexpected severity count fails closed", () => {
+    const r = runGate({ high: "lots" });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain("Unexpected HIGH count 'lots'");
+    expect(r.stderr).not.toContain("CALL: ecr put-image");
   });
 
   test("FAILED scan status blocks the build", () => {
@@ -298,5 +357,26 @@ aws() {
     expect(r.status).toBe(0);
     expect(r.stderr).toContain(putLatest);
     expect(r.stderr).not.toContain("CALL: lambda update-function-code");
+  });
+});
+
+describe("ECR scan allow-list", () => {
+  test("every shipped entry has a valid name and a reason", () => {
+    expect(() => scanAllowListEnv(ECR_SCAN_ALLOWED_FINDINGS)).not.toThrow();
+  });
+
+  test("joins names with spaces", () => {
+    expect(scanAllowListEnv({ "CVE-2099-0001": "no fix yet", "GHSA-xxxx.1": "base image" })).toBe(
+      "CVE-2099-0001 GHSA-xxxx.1"
+    );
+  });
+
+  test("rejects names that could break the buildspec command", () => {
+    expect(() => scanAllowListEnv({ 'CVE-1"; rm -rf /': "x" })).toThrow(/Invalid/);
+    expect(() => scanAllowListEnv({ "CVE 1": "x" })).toThrow(/Invalid/);
+  });
+
+  test("rejects entries without a reason", () => {
+    expect(() => scanAllowListEnv({ "CVE-2099-0001": " " })).toThrow(/needs a reason/);
   });
 });
