@@ -760,7 +760,9 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
     gatewayCorsOriginFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["apigateway:GET", "apigateway:PATCH"],
+      // Only PATCH is needed: the handler sets the stage variable with a
+      // "replace" UpdateStage op and no longer reads the stage (GetStage removed).
+      actions: ["apigateway:PATCH"],
       resources: [
         `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/${REST_API_STAGE_NAME}`,
       ],
@@ -1930,6 +1932,22 @@ export class ApiGatewayStack extends cdk.Stack {
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
+
+    // AWS Marketplace permissions for the text-gen role only. The Anthropic
+    // Claude models are Marketplace-backed, so Bedrock verifies/completes the
+    // Marketplace subscription at invoke time. Without these actions,
+    // ConverseStream fails with AccessDeniedException ("not authorized to
+    // perform the required AWS Marketplace actions"). Marketplace subscription
+    // actions do not support resource-level permissions, so resources is ["*"].
+    const textGenMarketplacePolicyStatement = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe",
+      ],
+      resources: ["*"],
+    });
+    lambdaTextGen.addToRolePolicy(textGenMarketplacePolicyStatement);
 
     // textGenRole reads db.secretPathUser (granted where the role is created).
 
