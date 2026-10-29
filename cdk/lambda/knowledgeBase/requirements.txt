@@ -13,5 +13,5 @@
 #
 # then commit the resulting package dirs + *.dist-info folders (and delete the
 # old version's dist-info if the version changed).
-pypdf==6.19.0
+pypdf==6.21.2
 python-docx==1.2.0
