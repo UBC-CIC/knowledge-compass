@@ -391,12 +391,20 @@ situation). The journey each situation belongs to is shown in brackets.
 {_situation_lines(catalog)}
 
 mode: ANSWER if there is already enough information to give useful, specific guidance
-now. ASK if a key fact is missing that would change the guidance.
+now. ASK if a key fact is missing that would change the guidance. When unsure, ASK.
 
 confidence: how clearly the family's situation AND what they need are identified.
-  HIGH   situation and need are both clear; full guidance is appropriate.
-  MEDIUM situation is clear, but one important detail is missing.
+Judge only facts the family has actually stated, never what is typical or likely.
+  HIGH   the family has stated what is happening, enough detail to tell the
+         situations apart (for example how long or how often, or what they have
+         already tried), and what they want help with. Full guidance is appropriate.
+  MEDIUM what is happening is stated and points to one situation, but one important
+         detail is missing.
   LOW    the situation or need is still unclear.
+A message that only names a topic or a broad concern, or asks a general question
+(for example "my child keeps getting sent home, what can I do?" or "what are my
+rights?"), is LOW, even when the topic clearly matches a journey. A first message
+is rarely HIGH: use HIGH there only when it already states all three things above.
 
 urgent: true only if something is happening right now that needs guidance immediately
 (for example, the school is calling to have the child picked up at this moment).

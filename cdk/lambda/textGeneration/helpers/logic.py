@@ -11,7 +11,8 @@ from helpers.routing import (
     public_phase,
 )
 
-DETECTIVE_RETRIEVAL_COUNT = 5
+# Detective turns ask a question only, so they get no library context to link.
+DETECTIVE_RETRIEVAL_COUNT = 0
 ANSWER_RETRIEVAL_COUNT = 15
 
 # Placeholders used by detective prompt versions before migration 027. Text

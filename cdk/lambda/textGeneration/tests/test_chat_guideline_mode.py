@@ -198,6 +198,31 @@ class StandardModeTest(ChatModeTestBase):
         )
 
 
+class DetectivePhaseTest(ChatModeTestBase):
+    # Even if the model emits citations, a detective turn has none to show.
+    reply = (
+        "Thanks for sharing that. How long has this been happening?"
+        "<cited_indices>[1]</cited_indices>"
+        "<detective_state>journey: J1</detective_state>"
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.patches["decide_phase"].return_value = "DETECTIVE"
+        self.patches["get_current_prompt"].return_value = (
+            "static", 0, "DETECTIVE", "<phase>ask</phase>", "haiku"
+        )
+
+    def test_detective_turn_gets_no_library_resources(self):
+        result, _ = self.respond("standard")
+        self.patches["retrieve_from_pgvector"].assert_not_called()
+        self.patches["retrieve_guideline_sections"].assert_not_called()
+        dynamic = self.bedrock.converse_stream.call_args.kwargs["system"][2]["text"]
+        self.assertNotIn("<retrieved_context>", dynamic)
+        self.assertEqual(result["sources_used"], [])
+        self.assertEqual(result["response"], "Thanks for sharing that. How long has this been happening?")
+
+
 class OutputGuardrailTest(ChatModeTestBase):
     """Finding A-01: the final answer is screened before it is saved or sent."""
 

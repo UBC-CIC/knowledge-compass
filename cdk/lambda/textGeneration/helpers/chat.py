@@ -196,13 +196,17 @@ def _prepare_conversation(
     )
 
     # 7. RAG Retrieval (using the routed query). Journey documents are hidden
-    # from this search; they are retrieved separately below.
-    sources = retrieve_from_pgvector(
-        search_query,
-        db_connection,
-        region,
-        num_results=num_retrieval_results,
-    )
+    # from this search; they are retrieved separately below. Detective turns
+    # retrieve nothing: with library titles and URLs in context the model
+    # links resources before the family's situation is known.
+    sources: List[Dict[str, Any]] = []
+    if num_retrieval_results > 0:
+        sources = retrieve_from_pgvector(
+            search_query,
+            db_connection,
+            region,
+            num_results=num_retrieval_results,
+        )
 
     sections: List[Dict[str, Any]] = []
     if phase != DETECTIVE:
@@ -241,6 +245,8 @@ def _prepare_conversation(
 </retrieved_context>
 {data_block_note("retrieved_context")}
 """
+    elif phase == DETECTIVE:
+        dynamic_prompt = phase_instructions
     else:
         context_block = format_context_for_prompt(sources)
         dynamic_prompt = f"""{phase_instructions}
