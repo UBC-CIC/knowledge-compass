@@ -268,3 +268,46 @@ test("missing tables give a 503 hint", async () => {
   const res = await call(sql, "GET /admin/journeys", adminEvent());
   assert.equal(res.statusCode, 503);
 });
+
+test("every journey and prompt mutation writes an admin_audit row with ids only (f-c47d6990)", async () => {
+  const VERSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
+  const CONTENT = "Ask the school for the reason in writing.";
+  const sql = () =>
+    fakeSql((text) => {
+      if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+      if (text.includes("journey_prompt_versions WHERE id") && text.includes("FOR UPDATE")) {
+        return [{ id: VERSION, field: "guidance", version: 2, is_active: false, journey_id: UUID, cluster_id: null }];
+      }
+      if (text.includes("FOR UPDATE")) return [{ id: UUID, is_archived: false }];
+      if (text.includes("SELECT id FROM journeys WHERE id")) return [{ id: UUID }];
+      if (text.includes("AS others")) return [{ others: 1 }];
+      if (text.includes("next_version")) return [{ next_version: 2 }];
+      if (text.includes("SELECT character_limit")) return [{ character_limit: 5000 }];
+      if (text.includes("RETURNING id")) return [{ id: VERSION }];
+      return [];
+    });
+  const cases = [
+    ["POST /admin/journeys", {}, { key: "J9", name: "New journey" }, "journey.create"],
+    ["PUT /admin/journeys/{journey_id}", { journey_id: UUID }, { name: "Renamed" }, "journey.update"],
+    ["POST /admin/journeys/{journey_id}/clusters", { journey_id: UUID }, { key: "C9", name: "Sent home", matches_when: "x" }, "journey_cluster.create"],
+    ["PUT /admin/clusters/{cluster_id}", { cluster_id: UUID }, { name: "Renamed" }, "journey_cluster.update"],
+    ["POST /admin/journey-prompts", {}, { field: "guidance", owner_id: UUID, content: CONTENT }, "journey_prompt.create"],
+    ["DELETE /admin/journey-prompts/{version_id}", { version_id: VERSION }, undefined, "journey_prompt.delete"],
+    ["POST /admin/journey-prompts/{version_id}/activate", { version_id: VERSION }, undefined, "journey_prompt.activate"],
+  ];
+  const saved = console.log;
+  console.log = () => {};
+  try {
+    for (const [routeKey, pathParameters, body, action] of cases) {
+      const db = sql();
+      const res = await call(db, routeKey, adminEvent({ pathParameters, body: body && JSON.stringify(body) }));
+      assert.ok(res.statusCode < 300, `${routeKey}: ${res.statusCode} ${JSON.stringify(res.body)}`);
+      const audits = db.calls.filter((c) => /^\s*INSERT INTO admin_audit/.test(c.text));
+      assert.equal(audits.length, 1, routeKey);
+      assert.equal(audits[0].values[2], action, routeKey);
+      assert.ok(!JSON.stringify(audits[0].values).includes(CONTENT), `${routeKey} must not audit prompt content`);
+    }
+  } finally {
+    console.log = saved;
+  }
+});

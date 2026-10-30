@@ -21,6 +21,7 @@ function fakeSql(handler = () => []) {
     calls.push({ text, values });
     return Promise.resolve(handler(text, values));
   };
+  sql.begin = async (fn) => fn(sql);
   sql.calls = calls;
   return sql;
 }
@@ -28,7 +29,7 @@ function fakeSql(handler = () => []) {
 // Emulates the UPDATE: applies the star/dismiss actions to an existing row.
 function triageSql(row) {
   return fakeSql((text, values) => {
-    if (!row) return [];
+    if (!row || text.includes("admin_audit")) return [];
     const [star, dismiss] = values;
     const apply = (action, current) =>
       action === "set" ? current ?? "now" : action === "clear" ? null : current;
@@ -38,7 +39,9 @@ function triageSql(row) {
   });
 }
 
+const ADMIN_SUB = "11111111-2222-3333-4444-555555555555";
 const triageEvent = (body, id = UUID) => ({
+  requestContext: { authorizer: { role: "admin", userId: ADMIN_SUB, email: "admin@example.com" } },
   pathParameters: { chat_session_id: id },
   body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
 });
@@ -221,4 +224,20 @@ test("rated message: no feedback returns 404, bad id returns 400", async () => {
 
 test("rated message route is status-only logged", () => {
   assert.equal(ft.isFeedbackTriageRoute(MESSAGE_ROUTE), true);
+});
+
+test("a triage change writes an admin_audit row in the same transaction (f-c47d6990)", async () => {
+  const sql = triageSql({ starred_at: null, dismissed_at: null });
+  const saved = console.log;
+  console.log = () => {};
+  try {
+    const res = await call(sql, triageEvent({ starred: true }));
+    assert.equal(res.statusCode, 200);
+  } finally {
+    console.log = saved;
+  }
+  const audit = sql.calls.find((c) => c.text.includes("INSERT INTO admin_audit"));
+  assert.ok(audit, "audited");
+  assert.equal(audit.values[0], ADMIN_SUB);
+  assert.equal(audit.values[2], "feedback.triage");
 });

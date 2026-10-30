@@ -51,7 +51,7 @@ from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_jo
 from helpers.embedding_space import index_name
 from helpers.ingestion_lock import LOCK_CODE, LOCK_MESSAGE, LOCK_TTL_SECONDS, lock_state
 from helpers.admin_user import normalize_email
-from helpers.admin_audit import with_actor
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit, with_actor
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -667,6 +667,9 @@ def purge_space(event, body, connection, space_id, admin):
     active space, is 'retired', has been retired for RETENTION_DAYS, no cutover holds the
     lock, no job is queued or running for it, and the typed name matches exactly.
     """
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     confirm_name = body.get("confirm_name")
 
     with connection.cursor() as cur:
@@ -718,6 +721,14 @@ def purge_space(event, body, connection, space_id, admin):
         return _response(event, 400, {
             "error": "Type the exact name of the space in confirm_name to purge it.",
         })
+
+    # The deletes below commit batch by batch and cannot be undone, so the
+    # decision is recorded before the first one (finding f-c47d6990).
+    audit_target = {"space_id": space_id, "name": name}
+    with connection.cursor() as cur:
+        insert_admin_audit(cur, actor, "embedding_space.purge", audit_target)
+    connection.commit()
+    log_admin_audit(actor, "embedding_space.purge", audit_target)
 
     deleted = 0
     batches = 0

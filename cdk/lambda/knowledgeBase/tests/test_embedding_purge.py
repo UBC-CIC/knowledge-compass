@@ -33,7 +33,7 @@ def purge_event(email="admin@example.org"):
         "path": PATH,
         "resource": RESOURCE,
         "pathParameters": {"id": SPACE_ID},
-        "requestContext": {"authorizer": {"email": email}} if email else {},
+        "requestContext": {"authorizer": {"email": email, "userId": "admin-sub"}} if email else {},
         "headers": {},
     }
 
@@ -205,6 +205,17 @@ class PurgeTest(unittest.TestCase):
         status = next(i for i, s in enumerate(statements) if "SET status = 'purged'" in s)
         self.assertLess(last_delete, drop)
         self.assertLess(drop, status)
+
+    def test_the_purge_is_audited_before_the_first_vector_is_deleted(self):
+        # The deletes commit batch by batch and cannot be undone (finding f-c47d6990).
+        conn = PurgeConnection(space_row(), delete_counts=(5000, 0))
+        response, conn = self.purge(conn)
+        self.assertEqual(response["statusCode"], 200)
+        statements = [sql for sql, _ in conn.executed]
+        audit_at = next(i for i, sql in enumerate(statements) if "INSERT INTO admin_audit" in sql)
+        delete_at = next(i for i, sql in enumerate(statements) if "DELETE FROM chunk_embeddings" in sql)
+        self.assertLess(audit_at, delete_at)
+        self.assertEqual(conn.sql_with("INSERT INTO admin_audit")[0][1][2], "embedding_space.purge")
 
     def test_commits_after_every_batch(self):
         conn = PurgeConnection(space_row(), delete_counts=(5000, 5000, 0))

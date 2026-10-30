@@ -22,6 +22,7 @@
 
 const { validateUUID } = require("./validation.js");
 const { resolveAdminUser } = require("./adminIdentity.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./adminAudit.js");
 
 const KEY_PATTERN = /^[A-Z0-9_]{1,16}$/;
 const RESERVED_KEYS = new Set(["BOTH", "UNCLEAR", "UNKNOWN", "NONE"]);
@@ -473,6 +474,21 @@ function parseJson(body) {
 
 async function route(sql, event, routeKey) {
   const params = event.pathParameters ?? {};
+  // Every mutation writes its admin_audit row in the same transaction as the
+  // change (these rows are the live LLM prompt); lines are logged after commit
+  // (finding f-c47d6990). Targets hold ids and field names, never content.
+  const committed = [];
+  const audit = async (tx, action, target) => {
+    const entry = auditEntry(event, action, target);
+    await insertAdminAudit(tx, entry);
+    committed.push(entry);
+  };
+  const result = await dispatch(sql, event, routeKey, params, audit);
+  committed.forEach(logAdminAudit);
+  return result;
+}
+
+async function dispatch(sql, event, routeKey, params, audit) {
 
   switch (routeKey) {
     case "GET /admin/journeys":
@@ -506,6 +522,7 @@ async function route(sql, event, routeKey) {
         `;
         if (questions) await insertVersion(tx, "detective_questions", row.id, questions, adminId);
         if (guidance) await insertVersion(tx, "guidance", row.id, guidance, adminId);
+        await audit(tx, "journey.create", { id: row.id, key: input.key });
         return row.id;
       });
       return { statusCode: 201, body: { id } };
@@ -529,6 +546,7 @@ async function route(sql, event, routeKey) {
           UPDATE journeys SET ${tx(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
            WHERE id = ${id}
         `;
+        await audit(tx, "journey.update", { id, fields: columns });
       });
       return { statusCode: 200, body: { id } };
     }
@@ -551,6 +569,7 @@ async function route(sql, event, routeKey) {
           RETURNING id
         `;
         if (pattern) await insertVersion(tx, "response_pattern", row.id, pattern, adminId);
+        await audit(tx, "journey_cluster.create", { id: row.id, journey_id: journeyId, key: input.key });
         return row.id;
       });
       return { statusCode: 201, body: { id } };
@@ -561,12 +580,15 @@ async function route(sql, event, routeKey) {
       const patch = validateClusterInput(parseJson(event.body), { partial: true });
       const adminId = await resolveAdmin(sql, event);
       const columns = Object.keys(patch);
-      const updated = await sql`
-        UPDATE journey_clusters SET ${sql(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
-         WHERE id = ${id}
-        RETURNING id
-      `;
-      if (updated.length === 0) throw new InputError("Situation not found", 404);
+      await sql.begin(async (tx) => {
+        const updated = await tx`
+          UPDATE journey_clusters SET ${tx(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
+           WHERE id = ${id}
+          RETURNING id
+        `;
+        if (updated.length === 0) throw new InputError("Situation not found", 404);
+        await audit(tx, "journey_cluster.update", { id, fields: columns });
+      });
       return { statusCode: 200, body: { id } };
     }
 
@@ -601,7 +623,9 @@ async function route(sql, event, routeKey) {
             );
           }
         }
-        return insertVersion(tx, field, ownerId, content, adminId);
+        const versionId = await insertVersion(tx, field, ownerId, content, adminId);
+        await audit(tx, "journey_prompt.create", { id: versionId, field, owner_id: ownerId });
+        return versionId;
       });
       return { statusCode: 200, body: await fetchVersion(sql, id) };
     }
@@ -616,6 +640,7 @@ async function route(sql, event, routeKey) {
         if (rows.length === 0) throw new InputError("Prompt version not found", 404);
         if (rows[0].is_active) throw new InputError("Cannot delete the active version");
         await tx`DELETE FROM journey_prompt_versions WHERE id = ${id}`;
+        await audit(tx, "journey_prompt.delete", { id, field: rows[0].field, version: rows[0].version });
         return rows[0];
       });
       return {
@@ -642,6 +667,7 @@ async function route(sql, event, routeKey) {
            WHERE field = ${target.field} AND ${tx(column)} = ${ownerId} AND is_active = true
         `;
         await tx`UPDATE journey_prompt_versions SET is_active = true WHERE id = ${id}`;
+        await audit(tx, "journey_prompt.activate", { id, field: target.field });
         return "activated";
       });
       return { statusCode: 200, body: { success: true, status, activated: await fetchVersion(sql, id) } };
