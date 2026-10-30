@@ -66,6 +66,7 @@ import logging
 import os
 import re
 import time
+import zipfile
 
 import boto3
 from docx import Document as DocxDocument
@@ -101,6 +102,14 @@ _MAX_WORDS_PER_CHUNK = 300
 _CSV_MIN_GROUP_WORDS = 100
 _CSV_AVG_EXTRA_WORDS = 100
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+# Size ceilings, checked before anything is parsed (finding f-5f6320bb). The
+# admin UI refuses files over 50 MB, but the presigned PUT cannot, so the
+# worker enforces it. A DOCX is a zip that python-docx inflates in memory, so
+# its expanded size is bounded too (the Lambda has 1 GB).
+MAX_SOURCE_FILE_BYTES = 50 * 1024 * 1024
+MAX_DOCX_EXPANDED_BYTES = 200 * 1024 * 1024
+MAX_DOCX_XML_PART_BYTES = 50 * 1024 * 1024
 
 # A run isn't started with less time than this left in the invocation (enough
 # for a short OCR wait plus pdf_text.RESERVE_SECONDS of chunking/embedding);
@@ -263,7 +272,32 @@ def _is_pdf(file_name: str) -> bool:
     return (file_name or "").lower().endswith(".pdf")
 
 
+def _read_source_object(bucket: str, key: str) -> bytes:
+    """The uploaded file's bytes, refusing anything over MAX_SOURCE_FILE_BYTES."""
+    too_large = RuntimeError("File is larger than 50 MB. Upload a smaller file.")
+    obj = s3_client.get_object(Bucket=bucket, Key=key)
+    if (obj.get("ContentLength") or 0) > MAX_SOURCE_FILE_BYTES:
+        raise too_large
+    raw_bytes = obj["Body"].read(MAX_SOURCE_FILE_BYTES + 1)
+    if len(raw_bytes) > MAX_SOURCE_FILE_BYTES:
+        raise too_large
+    return raw_bytes
+
+
+def _check_docx_expansion(raw_bytes: bytes) -> None:
+    """Refuse a DOCX whose parts inflate past the memory budget (zip bomb)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            parts = archive.infolist()
+    except zipfile.BadZipFile as e:
+        raise RuntimeError("Could not read this DOCX file.") from e
+    if (sum(p.file_size for p in parts) > MAX_DOCX_EXPANDED_BYTES
+            or any(p.filename.endswith(".xml") and p.file_size > MAX_DOCX_XML_PART_BYTES for p in parts)):
+        raise RuntimeError("This DOCX file expands to too much data to index. Upload a smaller file.")
+
+
 def _extract_docx_text(raw_bytes: bytes) -> str:
+    _check_docx_expansion(raw_bytes)
     doc = DocxDocument(io.BytesIO(raw_bytes))
     return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
@@ -704,7 +738,7 @@ def _load_companion_metadata(meta: dict) -> dict:
     if not bucket or not key:
         return {}
     try:
-        raw = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        raw = _read_source_object(bucket, key)
         return json.loads(raw.decode("utf-8", errors="replace"))
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not read companion metadata s3://%s/%s: %s", bucket, key, e)
@@ -884,7 +918,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             if not bucket or not key:
                 raise RuntimeError("Missing s3_bucket/s3_key on data source metadata")
 
-            raw_bytes = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            raw_bytes = _read_source_object(bucket, key)
 
             if ds_type == "markdown":
                 chunks = _chunk_markdown(raw_bytes.decode("utf-8", errors="replace"))
