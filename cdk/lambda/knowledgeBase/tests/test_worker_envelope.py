@@ -36,10 +36,10 @@ class VerifyWorkerEventTests(unittest.TestCase):
     def test_uses_a_constant_time_compare(self):
         with mock.patch.object(we.hmac, "compare_digest", wraps=we.hmac.compare_digest) as compare:
             we.verify_worker_event({"task": "t", "invoke_token": "wrong"})
-        compare.assert_called_once()
+        compare.assert_called()
 
     def test_secret_failure_fails_closed_without_logging_the_token(self):
-        with mock.patch.object(we, "_invoke_token", side_effect=RuntimeError("boom")), \
+        with mock.patch.object(we, "_invoke_tokens", side_effect=RuntimeError("boom")), \
                 self.assertLogs(level="ERROR") as logs:
             self.assertFalse(we.verify_worker_event({"task": "t", "invoke_token": TEST_INVOKE_TOKEN}))
         self.assertNotIn(TEST_INVOKE_TOKEN, "\n".join(logs.output))
@@ -47,11 +47,11 @@ class VerifyWorkerEventTests(unittest.TestCase):
 
 class InvokeTokenLoaderTests(unittest.TestCase):
     def setUp(self):
-        self._saved = we._cached_token
-        we._cached_token = None
+        self._saved = (we._cached_tokens, we._cached_at)
+        we._cached_tokens, we._cached_at = None, 0.0
 
     def tearDown(self):
-        we._cached_token = self._saved
+        we._cached_tokens, we._cached_at = self._saved
 
     def test_reads_the_secret_once_and_caches_it(self):
         client = mock.Mock()
@@ -60,6 +60,33 @@ class InvokeTokenLoaderTests(unittest.TestCase):
             self.assertEqual(we._invoke_token(), "from-secrets-manager")
             self.assertEqual(we._invoke_token(), "from-secrets-manager")
         client.get_secret_value.assert_called_once_with(SecretId=os.environ["WORKER_INVOKE_SECRET_ARN"])
+
+    def _client(self, *secrets):
+        client = mock.Mock()
+        client.get_secret_value.side_effect = [{"SecretString": json.dumps(s)} for s in secrets]
+        return client
+
+    def test_previous_token_is_accepted_and_payloads_use_the_current_one(self):
+        client = self._client({"token": "new-token", "previousToken": "old-token"})
+        with mock.patch.object(we, "_secrets_manager", return_value=client):
+            self.assertTrue(we.verify_worker_event({"task": "t", "invoke_token": "old-token"}))
+            self.assertTrue(we.verify_worker_event({"task": "t", "invoke_token": "new-token"}))
+            self.assertEqual(json.loads(we.worker_payload({"task": "t"}))["invoke_token"], "new-token")
+
+    def test_a_token_from_a_just_rotated_secret_refetches_once(self):
+        client = self._client({"token": "old-token"}, {"token": "new-token", "previousToken": "old-token"})
+        with mock.patch.object(we, "_secrets_manager", return_value=client):
+            self.assertTrue(we.verify_worker_event({"task": "t", "invoke_token": "old-token"}))
+            with mock.patch.object(we.time, "monotonic", return_value=we._cached_at + 31):
+                self.assertTrue(we.verify_worker_event({"task": "t", "invoke_token": "new-token"}))
+        self.assertEqual(client.get_secret_value.call_count, 2)
+
+    def test_forged_tokens_refetch_at_most_every_refresh_interval(self):
+        client = self._client({"token": "real-token"})
+        with mock.patch.object(we, "_secrets_manager", return_value=client):
+            for _ in range(5):
+                self.assertFalse(we.verify_worker_event({"task": "t", "invoke_token": "forged"}))
+        client.get_secret_value.assert_called_once()
 
     def test_missing_configuration_or_token_raises(self):
         with mock.patch.dict(os.environ, {"WORKER_INVOKE_SECRET_ARN": ""}):

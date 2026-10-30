@@ -74,11 +74,11 @@ const ADMIN_ROUTES = [
   arn("DELETE", "/admin/data_sources/5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99"),
 ];
 
-function loadUserAuthorizer() {
+function loadUserAuthorizer(secret = { jwtSecret: SECRET }) {
   process.env.JWT_ISSUER = "test-issuer";
   process.env.JWT_SECRET = "jwt-secret-arn";
   return load("authorization/userAuthorizerFunction.js", {
-    "@aws-sdk/client-secrets-manager": secretsManager(JSON.stringify({ jwtSecret: SECRET })),
+    "@aws-sdk/client-secrets-manager": secretsManager(JSON.stringify(secret)),
     jsonwebtoken: fakeJwt,
   });
 }
@@ -105,6 +105,21 @@ test("a role claim in a guest token never yields admin context", async () => {
     methodArn: GUEST_ROUTES[0],
   });
   assert.equal(policy.context.role, "user");
+});
+
+test("after a JWT secret rotation, tokens signed with the previous key still authorize", async () => {
+  const { handler } = loadUserAuthorizer({ jwtSecret: "rotated-secret", previousJwtSecret: SECRET });
+  const policy = await handler({ authorizationToken: token(ACCESS), methodArn: GUEST_ROUTES[0] });
+  assert.ok(allows(policy, GUEST_ROUTES[0]));
+
+  const retired = `Bearer signed:${JSON.stringify({ payload: ACCESS, secret: "retired-secret" })}`;
+  const saved = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(handler({ authorizationToken: retired, methodArn: GUEST_ROUTES[0] }), /Unauthorized/);
+  } finally {
+    console.error = saved;
+  }
 });
 
 function loadAdminAuthorizer(groups = ["admin"]) {

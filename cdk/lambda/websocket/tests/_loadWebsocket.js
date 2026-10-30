@@ -121,9 +121,10 @@ function dynamoFake(connections, calls = [], { rateState = new Map(), updateErro
  *   connections - Map<connectionId, userId> or Error (see dynamoFake)
  *   secretError - Error thrown by Secrets Manager
  *   updateError - Error thrown by DynamoDB UpdateItem only
+ *   jwtSecret   - the JWT secret JSON (default { jwtSecret: SECRET })
  * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections, rateState }.
  */
-function load(name, { connections = new Map(), secretError, updateError } = {}) {
+function load(name, { connections = new Map(), secretError, updateError, jwtSecret = { jwtSecret: SECRET } } = {}) {
   const rateState = new Map();
   const invocations = [];
   const posts = [];
@@ -137,7 +138,7 @@ function load(name, { connections = new Map(), secretError, updateError } = {}) 
       SecretsManagerClient: class {
         async send() {
           if (secretError) throw secretError;
-          return { SecretString: JSON.stringify({ jwtSecret: SECRET }) };
+          return { SecretString: JSON.stringify(jwtSecret) };
         }
       },
       GetSecretValueCommand: FakeCommand,

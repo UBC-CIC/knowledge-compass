@@ -242,6 +242,15 @@ test("a valid key is fetched once and reused", async () => {
   assert.ok(inserts.every(tagged));
 });
 
+test("after a signing-key rotation, tags signed with the previous key still verify", async () => {
+  const NEW_KEY = "n".repeat(48);
+  const secrets = { [SECRET_NAME]: JSON.stringify({ signingKey: NEW_KEY, previousSigningKey: KEY }) };
+  assert.ok(tagged((await createSession({ eval: tagFor(USER, {}, NEW_KEY) }, { secrets })).insert));
+  assert.ok(tagged((await createSession({ eval: tagFor(USER) }, { secrets })).insert));
+  const retired = await createSession({ eval: tagFor(USER, {}, "r".repeat(48)) }, { secrets });
+  assert.ok(!tagged(retired.insert));
+});
+
 test("a tag placed inside metadata is ignored", async () => {
   const tag = tagFor(USER);
   // Unknown metadata keys are rejected outright (utils/sessionMetadata.js),

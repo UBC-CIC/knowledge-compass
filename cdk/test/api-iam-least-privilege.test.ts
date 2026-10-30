@@ -336,15 +336,21 @@ describe("API Lambda IAM least privilege", () => {
     for (const { roles } of invokers) expect(roles).toEqual([kbRole]);
   });
 
-  test("the worker invoke secret is readable only by the knowledge base role and wired to it", () => {
+  test("the worker invoke secret is readable only by the knowledge base role (and its rotation) and wired to it", () => {
     const secretId = workerInvokeSecretId();
+    const rotationRole = roleOf(fnIdByName("KC-Api-AppSecretRotation"));
     const readers = policyStatements().filter(({ statement }) =>
       JSON.stringify(statement.Resource ?? "").includes(`"Ref":"${secretId}"`)
     );
     expect(readers.length).toBeGreaterThan(0);
-    for (const { roles, statement } of readers) {
+    const kbReaders = readers.filter(({ roles }) => roles[0] !== rotationRole);
+    expect(kbReaders.length).toBeGreaterThan(0);
+    for (const { roles, statement } of kbReaders) {
       expect(roles).toEqual([roleOf("lambdaKnowledgeBase")]);
       expect([statement.Action].flat()).toContain("secretsmanager:GetSecretValue");
+    }
+    for (const { roles } of readers.filter(({ roles }) => roles[0] === rotationRole)) {
+      expect(roles).toEqual([rotationRole]);
     }
     expect(resources.lambdaKnowledgeBase.Properties.Environment.Variables.WORKER_INVOKE_SECRET_ARN).toEqual({
       Ref: secretId,
@@ -701,5 +707,26 @@ describe("Shared Python layer", () => {
     for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
       expect(resources[fnId].Properties.Runtime).toBe("python3.12");
     }
+  });
+});
+
+describe("Application secret rotation (f-440374a2)", () => {
+  const schedules = () =>
+    Object.values(resources).filter((r: any) => r.Type === "AWS::SecretsManager::RotationSchedule") as any[];
+
+  test("the JWT secret and worker invoke token rotate every 90 days, never on deploy", () => {
+    const rotated = schedules().map((s) => JSON.stringify(s.Properties.SecretId));
+    expect(rotated.some((id) => id.includes("JwtSecret"))).toBe(true);
+    expect(rotated.some((id) => id.includes("WorkerInvokeSecret"))).toBe(true);
+    for (const schedule of schedules()) {
+      expect(schedule.Properties.RotationRules.ScheduleExpression).toBe("rate(90 days)");
+      expect(schedule.Properties.RotateImmediatelyOnUpdate).toBe(false);
+      expect(JSON.stringify(schedule.Properties.RotationLambdaARN)).toContain(fnIdByName("KC-Api-AppSecretRotation"));
+    }
+  });
+
+  test("the rotation function's role touches only Secrets Manager", () => {
+    const roleId = roleOf(fnIdByName("KC-Api-AppSecretRotation"));
+    for (const action of allowActionsFor(roleId)) expect(action).toMatch(/^secretsmanager:/);
   });
 });

@@ -37,4 +37,5 @@ TEST_INVOKE_TOKEN = "test-invoke-token"
 
 from helpers import worker_envelope  # noqa: E402
 
-worker_envelope._cached_token = TEST_INVOKE_TOKEN
+worker_envelope._cached_tokens = [TEST_INVOKE_TOKEN]
+worker_envelope._cached_at = float("inf")  # never expires or refetches in tests

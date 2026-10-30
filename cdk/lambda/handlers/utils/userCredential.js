@@ -47,20 +47,59 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const ACCESS_AUDIENCE = "kc-public-api";
 const CREDENTIAL_AUDIENCE = "kc-token-exchange";
 
-const secretsManager = new SecretsManagerClient();
-let cachedSecret;
-let cacheExpiry = 0;
+// A signature that matches no cached key refetches the secret (it may have
+// just rotated), at most this often per container.
+const SECRET_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
 
-async function jwtSecret() {
-  if (!cachedSecret || Date.now() > cacheExpiry) {
+const secretsManager = new SecretsManagerClient();
+let cachedKeys;
+let cachedAt = 0;
+
+// [current, previous] signing keys. appSecretRotation keeps the outgoing key as
+// previousJwtSecret; tokens are signed with the current key only and verified
+// against both, so a rotation does not invalidate live credentials.
+async function jwtKeys(refresh = false) {
+  const age = Date.now() - cachedAt;
+  if (!cachedKeys || age > SECRET_CACHE_TTL_MS || (refresh && age > SECRET_REFRESH_MIN_INTERVAL_MS)) {
     const response = await secretsManager.send(
       new GetSecretValueCommand({ SecretId: process.env.JWT_SECRET })
     );
-    cachedSecret = JSON.parse(response.SecretString).jwtSecret;
-    cacheExpiry = Date.now() + SECRET_CACHE_TTL_MS;
+    const secret = JSON.parse(response.SecretString);
+    cachedKeys = [secret.jwtSecret, secret.previousJwtSecret].filter((k) => typeof k === "string" && k);
+    cachedAt = Date.now();
   }
-  if (!cachedSecret) throw new Error("JWT secret is not configured");
-  return cachedSecret;
+  if (!cachedKeys[0]) throw new Error("JWT secret is not configured");
+  return cachedKeys;
+}
+
+/** The current signing key. */
+async function jwtSecret() {
+  return (await jwtKeys())[0];
+}
+
+const SIGNATURE_MISMATCH = Symbol("signature mismatch");
+
+/**
+ * Claims verified against the first key that signed `token`; null when the
+ * token is invalid for another reason (expired, malformed), which holds for
+ * every key; SIGNATURE_MISMATCH when no key signed it.
+ */
+function verifyWithKeys(token, keys) {
+  for (const key of keys) {
+    try {
+      return jwt.verify(token, key, { algorithms: ["HS256"] });
+    } catch (err) {
+      if (err?.message !== "invalid signature") return null;
+    }
+  }
+  return SIGNATURE_MISMATCH;
+}
+
+/** verifyWithKeys, refetching the keys once on a mismatch (they may have just rotated). */
+async function verifyJwt(token) {
+  let decoded = verifyWithKeys(token, await jwtKeys());
+  if (decoded === SIGNATURE_MISMATCH) decoded = verifyWithKeys(token, await jwtKeys(true));
+  return decoded === SIGNATURE_MISMATCH ? null : decoded;
 }
 
 /** The deployment's token issuer. Fails closed (500) when unset. */
@@ -116,13 +155,7 @@ async function verifyCredential(credential) {
   // credential for in-session callers; at page load UserContext.validateUser
   // still treats any failure as invalid (pre-existing, tracked as a follow-up).
   const iss = issuer();
-  const secret = await jwtSecret();
-  let decoded;
-  try {
-    decoded = jwt.verify(credential, secret, { algorithms: ["HS256"] });
-  } catch {
-    return null;
-  }
+  const decoded = await verifyJwt(credential);
   if (
     !decoded ||
     decoded.typ !== "credential" ||

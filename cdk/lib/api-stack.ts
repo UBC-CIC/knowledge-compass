@@ -1263,6 +1263,29 @@ export class ApiGatewayStack extends cdk.Stack {
         passwordLength: 128,
       },
     });
+    // Rotation for the JWT signing secret and the worker invoke token (finding
+    // f-440374a2). lambda/appSecretRotation keeps the outgoing key as the
+    // previous key and every verifier accepts both, so a scheduled rotation
+    // invalidates nothing live: 90 days exceeds the 30-day guest credential
+    // lifetime. Never on deploy (rotateImmediatelyOnUpdate: false), so a
+    // rotation cannot run before the two-key verifiers are live. To revoke a
+    // leaked key, rotate twice (Docs/runbooks/app-secret-rotation.md).
+    const appSecretRotation = new lambda.Function(this, `${id}-AppSecretRotation`, {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset("lambda/appSecretRotation"),
+      timeout: Duration.seconds(30),
+      memorySize: 128,
+      functionName: `${id}-AppSecretRotation`,
+    });
+    for (const [name, secret] of [["JwtSecretRotation", jwtSecret], ["WorkerInvokeSecretRotation", workerInvokeSecret]] as const) {
+      secret.addRotationSchedule(name, {
+        rotationLambda: appSecretRotation,
+        automaticallyAfter: Duration.days(90),
+        rotateImmediatelyOnUpdate: false,
+      });
+    }
+
     // iss claim of every public token (userCredential.js); each verifier checks it.
     // Not secret and not account-specific: it names this deployment.
     const jwtIssuer = `${id}/public-auth`;
