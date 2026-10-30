@@ -101,6 +101,16 @@ class MainGuardrailTests(unittest.TestCase):
         self.assertEqual(len(complete), 1)
         self.assertEqual(complete[0]["response"], DENIAL)
 
+    def test_authorization_header_and_body_are_never_logged(self):
+        event = make_event({"query": QUERY})
+        event["headers"] = {"Authorization": "Bearer guest-access-token-secret"}
+        event["multiValueHeaders"] = {"Authorization": ["Bearer guest-access-token-secret"]}
+        with self.assertLogs(main.logger, level="INFO") as logs:
+            main.handler(event)
+        output = "\n".join(logs.output)
+        self.assertNotIn("guest-access-token-secret", output)
+        self.assertNotIn(QUERY, output)
+
     def test_guardrail_runs_without_the_flag(self):
         main.handler(make_event({"query": QUERY}))
 

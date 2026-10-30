@@ -88,10 +88,20 @@ def _post_ws(apigw_management, connection_id, payload):
         return False
 
 
+def _event_summary(event):
+    """Allow-listed routing fields only. Never the whole event: headers carry
+    the caller's Authorization bearer token and the body carries the query."""
+    request_context = event.get('requestContext') or {}
+    return {
+        'resource': event.get('resource'),
+        'httpMethod': event.get('httpMethod'),
+        'routeKey': request_context.get('routeKey'),
+        'requestId': request_context.get('requestId'),
+    }
+
+
 def handler(event, context=None):
-    # Log event but exclude body to prevent sensitive data exposure (user_id, chat_session_id)
-    safe_event = {k: v for k, v in event.items() if k != 'body'}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event, default=str))
+    logger.info("Event: %s", json.dumps(_event_summary(event), default=str))
 
     # Resolved up front so every failure path can send a terminal "error"
     # event; otherwise the client waits on its typing indicator forever.

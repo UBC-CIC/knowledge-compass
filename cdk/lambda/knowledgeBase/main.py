@@ -118,10 +118,23 @@ def _parse_body(event):
 
     return body
 
+def _event_summary(event):
+    """Allow-listed routing fields only. Never the whole event: headers carry
+    the admin's Authorization ID token, task payloads carry the worker invoke
+    token, and bodies carry uploaded content."""
+    request_context = event.get("requestContext") or {}
+    return {
+        "resource": event.get("resource"),
+        "httpMethod": event.get("httpMethod"),
+        "requestId": request_context.get("requestId"),
+        "source": event.get("source"),
+        "detailType": event.get("detail-type"),
+        "task": str(event["task"])[:64] if event.get("task") else None,
+    }
+
+
 def handler(event, context=None):
-    # Never log the body or the worker invoke token.
-    safe_event = {k: v for k, v in event.items() if k not in ('body', INVOKE_TOKEN_FIELD)}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event))
+    logger.info("Event: %s", json.dumps(_event_summary(event), default=str))
     
     try:
         # Self-invoked {task} payloads rewrite the corpus and move the live

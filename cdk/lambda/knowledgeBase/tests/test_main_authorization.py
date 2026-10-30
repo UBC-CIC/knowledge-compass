@@ -118,6 +118,16 @@ class AdminGateTests(unittest.TestCase):
         self.assertEqual(self.main.handler(api_event(role="admin")), {"statusCode": 200})
         self.guideline.assert_called_once()
 
+    def test_authorization_header_is_never_logged(self):
+        event = api_event(role="admin")
+        event["headers"] = {"Authorization": "Bearer admin-id-token-secret"}
+        event["multiValueHeaders"] = {"Authorization": ["Bearer admin-id-token-secret"]}
+        with self.assertLogs(level="INFO") as logs:
+            self.main.handler(event)
+        output = "\n".join(logs.output)
+        self.assertNotIn("admin-id-token-secret", output)
+        self.assertIn("/admin/guideline", output)
+
     def test_presigned_url_route_is_gated_too(self):
         with mock.patch.object(self.main, "generate_presigned_url") as presign:
             response = self.main.handler(api_event(role="user", resource="/admin/generate-presigned-url"))
