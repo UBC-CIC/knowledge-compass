@@ -441,6 +441,27 @@ test("status lines name the acting admin's sub, never a body email (finding f-7f
   assert.ok(!JSON.stringify([promoted, denied]).includes("other@example.com"));
 });
 
+test("status lines record whose transcript an admin read (finding f-c3162843)", async () => {
+  const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
+  const [line] = await statusLines(fakeSql(() => []), {
+    httpMethod: "GET",
+    resource: "/admin/chat_sessions/{sessionId}/messages",
+    pathParameters: { sessionId: SESSION },
+    requestContext: auditContext,
+  });
+  assert.equal(line.actorSub, ADMIN_SUB);
+  assert.deepEqual(line.target, { sessionId: SESSION });
+
+  // Only id-shaped values are logged.
+  const [odd] = await statusLines(fakeSql(() => []), {
+    httpMethod: "GET",
+    resource: "/admin/users/{userId}/chat_sessions",
+    pathParameters: { userId: "someone@example.com <script>" },
+    requestContext: auditContext,
+  });
+  assert.equal(odd.target, undefined);
+});
+
 test("promote_user: a failing audit insert is a 500 with no success log", async () => {
   const sql = promoteSql({ failAudit: true });
   const res = await invokeCapturing(sql, {
