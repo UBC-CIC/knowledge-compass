@@ -223,3 +223,13 @@ test("removed and unknown routes fail without leaking details", async () => {
     assert.deepEqual(res.body, { error: "Internal server error" });
   }
 });
+
+test("chat history ignores negative or junk pagination instead of failing (f-5290289f)", async () => {
+  for (const qs of [{ limit: "-1" }, { offset: "-5" }, { limit: "abc", offset: "x" }]) {
+    const sql = historySql();
+    const res = await invoke(sql, historyEvent({ queryStringParameters: qs }));
+    assert.equal(res.statusCode, 200, JSON.stringify(qs));
+    const page = sql.queries().find((q) => q.text.includes("FROM chat_messages"));
+    assert.ok(page.values.every((v) => typeof v !== "number" || v >= 0), JSON.stringify(page.values));
+  }
+});

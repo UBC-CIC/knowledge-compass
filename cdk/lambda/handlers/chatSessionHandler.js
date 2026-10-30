@@ -55,12 +55,18 @@ const createResponse = async (event) => ({
     body: "",
 });
 
+// A JSON object, or "Invalid JSON body" (400 at every call site). Literal
+// null, arrays and scalars are refused too, so no route reads a property of a
+// non-object (finding f-5290289f).
 const parseBody = (body) => {
+  let parsed;
   try {
-    return JSON.parse(body || "{}");
+    parsed = JSON.parse(body || "{}");
   } catch {
     throw new Error("Invalid JSON body");
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid JSON body");
+  return parsed;
 };
 
 // New chat sessions one user may create per UTC day (finding F19, decision
@@ -268,7 +274,14 @@ exports.handler = async (event) => {
           break;
         }
 
-        const body = parseBody(event.body);
+        let body;
+        try {
+          body = parseBody(event.body);
+        } catch (error) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: error.message });
+          break;
+        }
         const title = sanitizeString(body.title, TITLE_MAX_LENGTH);
 
         if (!title) {

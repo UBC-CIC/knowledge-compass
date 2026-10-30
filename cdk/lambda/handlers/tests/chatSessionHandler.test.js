@@ -321,3 +321,17 @@ test("removed chat_history route is no longer served here", async () => {
   assert.equal(res.statusCode, 500);
   assert.deepEqual(res.body, { error: "Internal server error" });
 });
+
+test("malformed, null, array and scalar bodies are a 400 on every body route (f-5290289f)", async () => {
+  const routes = [
+    { httpMethod: "POST", resource: "/chat_sessions" },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}", pathParameters: { chat_session_id: SESSION } },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}/feedback", pathParameters: { chat_session_id: SESSION } },
+  ];
+  for (const route of routes) {
+    for (const body of ["{not json", "null", "[]", "42", '"text"']) {
+      const res = await invoke(sessionSql(), { ...route, body });
+      assert.equal(res.statusCode, 400, `${route.httpMethod} ${route.resource} ${body}`);
+    }
+  }
+});

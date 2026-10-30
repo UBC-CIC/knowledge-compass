@@ -586,3 +586,29 @@ test("activating the already-active version writes no audit row", async () => {
   assert.equal(res.body.status, "already_active");
   assert.equal(auditInserts(sql).length, 0);
 });
+
+test("admin session and transcript reads validate ids and cap the page size (f-5290289f)", async () => {
+  const routes = [
+    ["/admin/users/{userId}/chat_sessions", "userId", 100],
+    ["/admin/chat_sessions/{sessionId}/messages", "sessionId", 1000],
+  ];
+  for (const [resource, param, cap] of routes) {
+    const bad = await invoke(fakeSql(() => []), {
+      httpMethod: "GET", resource, pathParameters: { [param]: "not-a-uuid" }, requestContext: adminContext,
+    });
+    assert.equal(bad.statusCode, 400, resource);
+
+    const sql = fakeSql(() => []);
+    const ok = await invoke(sql, {
+      httpMethod: "GET",
+      resource,
+      pathParameters: { [param]: "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99" },
+      queryStringParameters: { limit: "999999", offset: "-3" },
+      requestContext: adminContext,
+    });
+    assert.equal(ok.statusCode, 200, resource);
+    const numbers = sql.queries().flatMap((q) => q.values).filter((v) => typeof v === "number");
+    assert.ok(numbers.includes(cap), `${resource} caps limit at ${cap}: ${numbers}`);
+    assert.ok(numbers.every((v) => v >= 0 && v <= cap), `${resource}: ${numbers}`);
+  }
+});

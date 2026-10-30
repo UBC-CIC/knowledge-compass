@@ -5,7 +5,7 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
-const { sanitizeString, validateUUID } = require("./utils/validation.js");
+const { parsePositiveInt, sanitizeString, validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
 const {
@@ -276,8 +276,9 @@ exports.handler = async (event) => {
           break;
         }
 
-        const limit = Math.min(parseInt(event.queryStringParameters?.limit) || 200, 1000);
-        const offset = parseInt(event.queryStringParameters?.offset) || 0;
+        // Negative or junk values fall back to the defaults instead of reaching SQL.
+        const limit = parsePositiveInt(event.queryStringParameters?.limit, 200, 1000);
+        const offset = parsePositiveInt(event.queryStringParameters?.offset, 0);
 
         const rows = await sqlConnection`
           SELECT
