@@ -203,6 +203,18 @@ test("an unexpected Cognito failure is 500 and logs no email", async () => {
   }
   assert.equal(res.statusCode, 500);
   assert.deepEqual(JSON.parse(res.body), { error: "Internal server error" });
-  assert.equal(sql.queries().length, 0, "no users row without the admin group");
+  // The grant comes last: the audit row already committed when it failed.
+  assert.ok(sql.queries().some((q) => q.text.startsWith("INSERT INTO admin_audit")), "audited before the grant");
   assert.ok(!lines.some((l) => l.includes("new@example.com")), "email never logged");
+});
+
+test("a database failure leaves the account outside the admin group (no unaudited admin)", async () => {
+  const sql = fakeSql((text) => {
+    if (text.startsWith("INSERT INTO admin_audit")) throw new Error("db down");
+    return text.startsWith("INSERT INTO users") ? [{ id: "new-admin", email: "new@example.com", role: "admin" }] : [];
+  });
+  const cognito = fakeCognito();
+  const res = await post(sql, cognito, { display_name: "New", email: "new@example.com" });
+  assert.equal(res.statusCode, 500);
+  assert.ok(!cognito.calls.some((c) => c.name === "AdminAddUserToGroup"));
 });
