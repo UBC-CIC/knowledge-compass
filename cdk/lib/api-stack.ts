@@ -2547,8 +2547,9 @@ export class ApiGatewayStack extends cdk.Stack {
         JWT_ISSUER: jwtIssuer,
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
-        // Per-connection generate_text limit (fixed window, stored on the
-        // WsConnections item). default.js applies the same defaults.
+        // generate_text limit (fixed window) applied per connection and per
+        // bound guest across all of its sockets, both stored in WsConnections.
+        // default.js applies the same defaults.
         WS_GENERATE_RATE_LIMIT: "10",
         WS_GENERATE_RATE_WINDOW_SECONDS: "60",
       },
@@ -2673,7 +2674,7 @@ export class ApiGatewayStack extends cdk.Stack {
       autoDeploy: true,
       // Stage-wide backstop against anonymous message floods (all routes, all clients).
       // These throttles are aggregate, not per client. WAFv2 cannot attach to a
-      // WebSocket API, so per-client protection is the per-connection generate_text
+      // WebSocket API, so per-client protection is the per-guest generate_text
       // limit in lambda/websocket/default.js (WS_GENERATE_RATE_* above).
       defaultRouteSettings: {
         throttlingRateLimit: 20,

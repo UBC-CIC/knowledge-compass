@@ -24,7 +24,9 @@ const {
   DeleteConnectionCommand,
 } = require("@aws-sdk/client-apigatewaymanagementapi");
 const { verifyAccessToken } = require("./accessToken.js");
-const { getConnectionUserId, consumeGenerateAllowance, rateLimitConfig } = require("./connections.js");
+const {
+  getConnectionUserId, consumeGenerateAllowance, consumeUserGenerateAllowance, rateLimitConfig,
+} = require("./connections.js");
 const messageLimit = require("./messageLimit.js");
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -121,9 +123,14 @@ exports.handler = async (event) => {
 
     if (action === "generate_text") {
       // Count every generate_text frame (valid or not) before doing any work.
+      // Both windows must allow it: this socket's, and the bound guest's across
+      // all of their sockets, so opening more connections buys no allowance.
       let allowed;
       try {
-        allowed = await consumeGenerateAllowance(connectionId, rateLimitConfig());
+        const limits = rateLimitConfig();
+        allowed =
+          (await consumeGenerateAllowance(connectionId, limits)) &&
+          (await consumeUserGenerateAllowance(boundUserId, limits));
       } catch (err) {
         console.error("WebSocket rate limit check failed", { connectionId, error: err?.name });
         await sendErrorEvent(event, "Internal server error", GENERIC_MESSAGE);

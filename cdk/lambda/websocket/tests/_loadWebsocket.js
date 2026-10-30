@@ -52,6 +52,9 @@ const conditionFailed = () =>
 // The three rate-limit UpdateItem shapes in connections.js consumeGenerateAllowance.
 const RL_INCREMENT = "attribute_exists(connectionId) AND rlWindow = :w AND rlCount < :max";
 const RL_START = "attribute_exists(connectionId) AND (attribute_not_exists(rlWindow) OR rlWindow < :w)";
+// The per-user window (consumeUserGenerateAllowance) lives on a "user#<id>" item it may create.
+const USER_RL_INCREMENT = "rlWindow = :w AND rlCount < :max";
+const USER_RL_START = "attribute_not_exists(rlWindow) OR rlWindow < :w";
 
 /**
  * Fake @aws-sdk/client-dynamodb. `connections` is a Map<connectionId, userId>
@@ -73,6 +76,23 @@ function dynamoFake(connections, calls = [], { rateState = new Map(), updateErro
         const id = command.input.Key?.connectionId?.S ?? command.input.Item?.connectionId?.S;
         if (command instanceof UpdateItemCommand) {
           if (updateError) throw updateError;
+          if (id?.startsWith("user#")) {
+            const values = command.input.ExpressionAttributeValues;
+            const w = Number(values[":w"].N);
+            const state = rateState.get(id);
+            const { ConditionExpression: condition } = command.input;
+            if (condition === USER_RL_INCREMENT) {
+              if (!state || state.rlWindow !== w || !(state.rlCount < Number(values[":max"].N))) throw conditionFailed();
+              state.rlCount += 1;
+              return {};
+            }
+            if (condition === USER_RL_START) {
+              if (state && !(state.rlWindow < w)) throw conditionFailed();
+              rateState.set(id, { rlWindow: w, rlCount: 1, expiresAt: Number(values[":exp"].N) });
+              return {};
+            }
+            throw new Error(`unexpected user UpdateItem shape: ${condition}`);
+          }
           if (!connections.has(id)) throw conditionFailed();
           const values = command.input.ExpressionAttributeValues;
           const w = Number(values[":w"].N);
