@@ -45,12 +45,15 @@ def body_of(response):
 class PurgeConnection(fakes.ScriptedConnection):
     """ScriptedConnection whose DELETE reports a different row count per batch."""
 
-    def __init__(self, space_row, delete_counts=(0,), lock=UNLOCKED, running=None, purge_updates=1):
+    def __init__(self, space_row, delete_counts=(0,), lock=UNLOCKED, running=None, purge_updates=1, lock_taken=1):
         super().__init__({
             "FROM embedding_spaces s WHERE s.id": [space_row] if space_row else [],
             "SELECT cutover_locked": [lock],
             "SELECT id::text FROM embedding_jobs WHERE status IN": [(running,)] if running else [],
-        }, rowcounts={"UPDATE embedding_spaces SET status = 'purged'": purge_updates})
+        }, rowcounts={
+            "UPDATE embedding_spaces SET status = 'purged'": purge_updates,
+            "SET cutover_locked = true": lock_taken,
+        })
         self.delete_counts = list(delete_counts)
 
     def respond(self, text, params):
@@ -150,6 +153,29 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(response["statusCode"], 409)
         self.assertEqual(body_of(response)["code"], "CUTOVER_LOCKED")
         self.assert_nothing_deleted(conn)
+
+    def test_refused_when_a_cutover_takes_the_lock_first(self):
+        # lock_state looked free, but the atomic take lost the race (finding f-71ff7846).
+        response, conn = self.purge(PurgeConnection(space_row(), lock_taken=0))
+        self.assertEqual(response["statusCode"], 409)
+        self.assertEqual(body_of(response)["code"], "CUTOVER_LOCKED")
+        self.assert_nothing_deleted(conn)
+
+    def test_the_cutover_lock_is_held_for_the_purge_and_released_after(self):
+        for crash in (False, True):
+            with self.subTest(crash=crash):
+                conn = PurgeConnection(space_row(), delete_counts=(5000, 0))
+                if crash:
+                    conn.fail_next("DELETE FROM chunk_embeddings", RuntimeError("connection lost"))
+                self.purge(conn)
+                statements = [sql for sql, _ in conn.executed]
+                take = next(i for i, sql in enumerate(statements) if "SET cutover_locked = true" in sql)
+                first_delete = next(i for i, sql in enumerate(statements) if "DELETE FROM chunk_embeddings" in sql)
+                release = max(i for i, sql in enumerate(statements) if "SET cutover_locked = false" in sql)
+                self.assertLess(take, first_delete)
+                self.assertGreater(release, first_delete)
+                lock_id = conn.executed[take][1][0]
+                self.assertEqual(conn.executed[release][1], (lock_id,))
 
     def test_refused_while_a_job_is_running_for_the_space(self):
         conn = PurgeConnection(space_row(), running=JOB_ID)
