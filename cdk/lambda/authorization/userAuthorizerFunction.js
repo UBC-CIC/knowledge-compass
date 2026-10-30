@@ -44,12 +44,6 @@ exports.handler = async (event) => {
       throw new Error("not an access token for this API");
     }
 
-    // Extract API Gateway ARN parts to create wildcard resource
-    // methodArn format: arn:aws:execute-api:region:account:apiId/stage/method/resource
-    const arnParts = event.methodArn.split('/');
-    const apiGatewayArnPrefix = arnParts.slice(0, 2).join('/'); // arn:aws:execute-api:region:account:apiId/stage
-    const wildcardResource = `${apiGatewayArnPrefix}/*/*`; // Allow all methods and resources
-
     // tokenId is the access token's random jti (userCredential.js), for audit
     // correlation only ($context.authorizer.* in the API access log). It is
     // never an identity: anonymous tokens get principalId "anonymous:<jti>"
@@ -58,15 +52,15 @@ exports.handler = async (event) => {
       typeof decoded.jti === "string" && UUID_REGEX.test(decoded.jti) ? decoded.jti : "";
     const policy = generatePolicy(
       decoded.sub || (tokenId ? `anonymous:${tokenId}` : "anonymous"),
-      "Allow",
-      wildcardResource
+      event.methodArn
     );
     // userId is the only caller identity handlers may trust. Anonymous tokens
     // (issued without a credential) carry none, so user and session routes
-    // reject them. Only known scalar claims are forwarded.
+    // reject them. role is fixed: guest tokens are only ever minted as "user"
+    // (userCredential.js), and the claim must never yield admin context.
     policy.context = {
       userId: typeof decoded.sub === "string" ? decoded.sub : "",
-      role: typeof decoded.role === "string" ? decoded.role : "user",
+      role: "user",
       tokenId,
     };
     return policy;
@@ -76,18 +70,23 @@ exports.handler = async (event) => {
   }
 };
 
-function generatePolicy(principalId, effect, resource) {
+// The decision is cached per token (300 s) and reused across routes, so the
+// policy must cover every guest route rather than just this methodArn. It
+// explicitly denies the admin tier: guest tokens are mintable anonymously, so
+// /admin/* must stay closed even if a route is ever bound to this authorizer.
+// methodArn format: arn:aws:execute-api:region:account:apiId/stage/METHOD/resource
+function generatePolicy(principalId, methodArn) {
+  const stageArn = methodArn.split("/").slice(0, 2).join("/");
   return {
     principalId,
     policyDocument: {
       Version: "2012-10-17",
       Statement: [
-        {
-          Action: "execute-api:Invoke",
-          Effect: effect,
-          Resource: resource,
-        },
+        { Action: "execute-api:Invoke", Effect: "Allow", Resource: `${stageArn}/*/*` },
+        { Action: "execute-api:Invoke", Effect: "Deny", Resource: `${stageArn}/*/admin/*` },
       ],
     },
   };
 }
+
+exports.generatePolicy = generatePolicy;
