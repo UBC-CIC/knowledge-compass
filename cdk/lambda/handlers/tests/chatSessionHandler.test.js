@@ -200,6 +200,32 @@ test("owner can delete; messages are removed before the session", async () => {
   assert.match(deletes[1], /DELETE FROM chat_sessions/);
 });
 
+test("session titles are strings capped at 120 characters on create and rename", async () => {
+  const long = "x".repeat(5000);
+  const insertedTitle = async (title) => {
+    const sql = createSql();
+    assert.equal((await post(sql, { title })).statusCode, 201);
+    const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+    return insert.values.filter((v) => typeof v === "string" && v.startsWith("x")).concat(
+      insert.values.filter((v) => v && typeof v === "object" && !Array.isArray(v) && "nested" in v),
+    );
+  };
+  assert.deepEqual(await insertedTitle(long), ["x".repeat(120)]);
+  assert.deepEqual(await insertedTitle({ nested: long }), []); // non-strings are dropped
+
+  const sql = sessionSql(USER, (text, values) =>
+    text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],
+  );
+  const renamed = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/chat_sessions/{chat_session_id}",
+    pathParameters: { chat_session_id: SESSION },
+    body: JSON.stringify({ title: long }),
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.title.length, 120);
+});
+
 test("owner can rename; the title is trimmed", async () => {
   const sql = sessionSql(USER, (text, values) =>
     text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],

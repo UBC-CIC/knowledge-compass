@@ -76,6 +76,10 @@ const nextUtcMidnight = (now) =>
 
 const FEEDBACK_RATINGS = ["up", "down"];
 const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
+// chat_sessions.title is an unbounded varchar; the auto-titler writes at most
+// 80 characters (textGeneration/helpers/chat.py). Guest titles are capped too,
+// with room for a longer hand-written name (finding f-3406ec2a).
+const TITLE_MAX_LENGTH = 120;
 
 // The acting user always comes from the verified token (resolveCaller). A
 // user_id the client still sends (query or body, for older clients) must match
@@ -161,7 +165,7 @@ exports.handler = async (event) => {
         }
         const userId = caller.userId;
 
-        const title = body.title || null;
+        const title = sanitizeString(body.title, TITLE_MAX_LENGTH);
 
         // Server-authored keys (journey_state, guide_state, routing) reach the
         // model prompt, so clients may only set allow-listed keys.
@@ -265,7 +269,7 @@ exports.handler = async (event) => {
         }
 
         const body = parseBody(event.body);
-        const title = typeof body.title === "string" ? body.title.trim() : "";
+        const title = sanitizeString(body.title, TITLE_MAX_LENGTH);
 
         if (!title) {
           response.statusCode = 400;
