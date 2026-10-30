@@ -143,7 +143,10 @@ def handler(event, context=None):
         # a generated Secrets Manager value only this function's role can read.
         # Checked before any dispatch or logging of the payload's actor.
         # EventBridge events (aws.transcribe / aws.ecs via transcribeRelay)
-        # never carry "task" and are handled below without a token.
+        # never carry "task" and are handled below without a token: anyone
+        # able to invoke this function can forge one, so their handlers take
+        # only the job name / task ARN from the event and read the state back
+        # from Transcribe / ECS.
         if "task" in event and not verify_worker_event(event):
             logger.warning(
                 "Rejected worker invocation without a valid invoke token: task=%s",

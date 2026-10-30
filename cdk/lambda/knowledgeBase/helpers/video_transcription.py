@@ -74,11 +74,23 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
 
 
 def handle_transcribe_complete(event, connection):
+    # The event reaches this Lambda with no authorization check (any principal
+    # that can invoke it, or the relay, can supply one), so only the job name
+    # is taken from it. Status and failure reason come from Transcribe itself.
     detail = event.get("detail") or {}
     job_name = detail.get("TranscriptionJobName")
-    status = (detail.get("TranscriptionJobStatus") or "").upper()
+    if not isinstance(job_name, str) or not job_name:
+        logger.info("Ignoring Transcribe event without a job name")
+        return {"ignored": True}
 
-    if not job_name or status not in {"COMPLETED", "FAILED"}:
+    try:
+        job = transcribe_client.get_transcription_job(TranscriptionJobName=job_name).get("TranscriptionJob", {})
+    except Exception:
+        logger.exception("Could not load Transcribe job %s", job_name)
+        return {"error": "transcription job not found", "job_name": job_name}
+    status = (job.get("TranscriptionJobStatus") or "").upper()
+
+    if status not in {"COMPLETED", "FAILED"}:
         logger.info("Ignoring Transcribe event: %s %s", job_name, status)
         return {"ignored": True}
 
@@ -116,17 +128,7 @@ def handle_transcribe_complete(event, connection):
     metadata = dict(metadata)
 
     if status == "FAILED":
-        failure = detail.get("FailureReason") or "Amazon Transcribe job failed"
-        try:
-            failure = (
-                transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
-                .get("TranscriptionJob", {})
-                .get("FailureReason")
-                or failure
-            )
-        except Exception:
-            logger.exception("Could not load Transcribe failure reason for %s", job_name)
-
+        failure = job.get("FailureReason") or "Amazon Transcribe job failed"
         metadata["transcribe_status"] = "FAILED"
         metadata["transcribe_error"] = failure[:1000]
         with connection.cursor() as cursor:

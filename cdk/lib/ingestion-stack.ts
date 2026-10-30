@@ -361,9 +361,11 @@ export class IngestionStack extends Stack {
         this.cluster.clusterArn,
       ],
     });
-    const tagTaskStatement = new iam.PolicyStatement({
+    // DescribeTasks: handle_ecs_task_stopped re-reads a stopped task's state
+    // from ECS instead of trusting the forwarded event.
+    const taskStatement = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ["ecs:TagResource"],
+      actions: ["ecs:TagResource", "ecs:DescribeTasks"],
       resources: [
         `arn:aws:ecs:${this.region}:${this.account}:task/${this.cluster.clusterName}/*`,
       ],
@@ -381,7 +383,7 @@ export class IngestionStack extends Stack {
     });
     if (principal.addToRolePolicy) {
       principal.addToRolePolicy(runTaskStatement);
-      principal.addToRolePolicy(tagTaskStatement);
+      principal.addToRolePolicy(taskStatement);
       principal.addToRolePolicy(passRoleStatement);
       principal.addToRolePolicy(
         new iam.PolicyStatement({
