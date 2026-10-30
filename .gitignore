@@ -48,3 +48,4 @@ evals/.venv/
 
 .agents/tasks
 .agents
+.worktrees
