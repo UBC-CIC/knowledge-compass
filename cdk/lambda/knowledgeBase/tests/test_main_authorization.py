@@ -12,6 +12,7 @@ import _setup  # noqa: F401  (must be first)
 from _setup import TEST_INVOKE_TOKEN
 
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -133,6 +134,21 @@ class AdminGateTests(unittest.TestCase):
             response = self.main.handler(api_event(role="user", resource="/admin/generate-presigned-url"))
         self.assertEqual(response["statusCode"], 403)
         presign.assert_not_called()
+
+
+class DbTlsTests(unittest.TestCase):
+    """The DB connection verifies the server certificate and hostname, not just encryption."""
+
+    def test_connect_uses_verify_full_with_a_real_ca_bundle(self):
+        main = _import_main()
+        secret = {"dbname": "d", "username": "u", "password": "p", "port": 5432}
+        with mock.patch.object(main, "connection", None), \
+                mock.patch.object(main, "_get_secret", return_value=secret), \
+                mock.patch.object(main.psycopg2, "connect", create=True) as connect:
+            main._connect_to_db()
+        kwargs = connect.call_args.kwargs
+        self.assertEqual(kwargs["sslmode"], "verify-full")
+        self.assertTrue(os.path.isfile(kwargs["sslrootcert"]))
 
 
 if __name__ == "__main__":

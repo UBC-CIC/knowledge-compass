@@ -4,6 +4,7 @@ from kc_shared.cors import get_cors_headers
 import boto3
 import logging
 import psycopg2
+from botocore.httpsession import get_cert_path
 
 from helpers.stage_data_sources import stage_data_sources
 from helpers.stage_data_sources_batch import stage_data_sources_batch
@@ -75,8 +76,11 @@ def _connect_to_db():
                 'user': db_secret["username"],
                 'password': db_secret["password"],
                 'host': RDS_PROXY_ENDPOINT,
-                'port': db_secret["port"], 
-                'sslmode': 'require'
+                'port': db_secret["port"],
+                # verify-full against botocore's public CA bundle: RDS Proxy
+                # serves an ACM (Amazon Trust Services) certificate.
+                'sslmode': 'verify-full',
+                'sslrootcert': get_cert_path(True),
             }
             connection = psycopg2.connect(**connection_params)
             logger.info("Connected to the database!")

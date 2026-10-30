@@ -4,6 +4,7 @@ import boto3
 import json
 import psycopg2
 import logging
+from botocore.httpsession import get_cert_path
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,13 @@ def get_db_connection():
             # If proxy endpoint is not set, fallback to secret's host (direct connection, might fail if in private subnet without VPC config?)
             host = RDS_PROXY_ENDPOINT if RDS_PROXY_ENDPOINT else secret.get('host')
 
+            # verify-full: check the certificate chain and hostname, not just
+            # encrypt. RDS Proxy serves an ACM (Amazon Trust Services)
+            # certificate, so verify against botocore's public CA bundle, not
+            # the rds-ca-* bundle (same as containers/*/Dockerfile).
             connection = psycopg2.connect(
-                sslmode='require',
+                sslmode='verify-full',
+                sslrootcert=get_cert_path(True),
                 host=host,
                 user=secret.get('username'),
                 password=secret.get('password'),
