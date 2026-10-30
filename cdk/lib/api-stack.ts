@@ -28,6 +28,9 @@ import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
+
+/** Fail-closed seed for the CORS allow-list: an origin no browser page can have. */
+export const UNCONFIGURED_ALLOWED_ORIGIN = "https://origin-not-configured.invalid";
 import * as path from "path";
 
 // REST stage name. The WAF association and execute-api ARNs also use "prod".
@@ -401,14 +404,19 @@ export class ApiGatewayStack extends cdk.Stack {
       description: "kc_shared: Python modules shared by the text generation and knowledge base Lambdas",
     });
 
-    // Create Allowed Origin Parameters
+    // Create Allowed Origin Parameters. Seeded fail-closed (finding f-9ff3f181):
+    // `.invalid` never resolves (RFC 2606), so no page has this origin and no
+    // cross-origin read is allowed until the Amplify stack writes the SPA origin
+    // (or an operator adds one; Docs/DEPLOYMENT_GUIDE.md). It is still a valid
+    // http(s) origin, which gatewayCorsOrigin requires. An existing parameter
+    // is left as it is (ParameterAlreadyExists).
       this.allowedOriginsParamName = `/${id}/API/AllowedOrigins`;
       const crParams = {
           service: 'SSM',
           action: 'putParameter',
           parameters: {
             Name: this.allowedOriginsParamName,
-            Value: 'http://localhost:5173/',
+            Value: UNCONFIGURED_ALLOWED_ORIGIN,
             Type: 'String',
             Description: 'List of allowed CORS origins for the API',
           },

@@ -739,3 +739,15 @@ describe("Application secret rotation (f-440374a2)", () => {
     for (const action of allowActionsFor(roleId)) expect(action).toMatch(/^secretsmanager:/);
   });
 });
+
+describe("CORS allow-list seed (f-9ff3f181)", () => {
+  test("a fresh deploy trusts no browser origin until the SPA origin is written", () => {
+    const seeds = Object.values(resources).filter(
+      (r: any) => r.Type === "Custom::AWS" && JSON.stringify(r.Properties.Create ?? "").includes("/API/AllowedOrigins")
+    ) as any[];
+    expect(seeds).toHaveLength(1);
+    const create = JSON.stringify(seeds[0].Properties.Create);
+    expect(create).toContain("https://origin-not-configured.invalid");
+    expect(create).not.toContain("localhost");
+  });
+});
