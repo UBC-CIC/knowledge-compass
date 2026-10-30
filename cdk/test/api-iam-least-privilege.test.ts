@@ -357,6 +357,15 @@ describe("API Lambda IAM least privilege", () => {
     });
   });
 
+  test("the app client cannot write the email attribute (f-eb536a80)", () => {
+    const clients = Object.values(resources).filter((r: any) => r.Type === "AWS::Cognito::UserPoolClient") as any[];
+    expect(clients).toHaveLength(1);
+    const writable = clients[0].Properties.WriteAttributes;
+    // Unset or empty would leave every attribute writable.
+    expect(Array.isArray(writable) && writable.length > 0).toBe(true);
+    expect(writable).not.toContain("email");
+  });
+
   test("the admin user pool requires TOTP MFA and keeps its logical ID", () => {
     const pools = Object.entries(resources).filter(([, r]) => r.Type === "AWS::Cognito::UserPool");
     expect(pools).toHaveLength(1);

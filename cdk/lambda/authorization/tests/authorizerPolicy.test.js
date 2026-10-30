@@ -122,7 +122,7 @@ test("after a JWT secret rotation, tokens signed with the previous key still aut
   }
 });
 
-function loadAdminAuthorizer(groups = ["admin"]) {
+function loadAdminAuthorizer(groups = ["admin"], claims = { email_verified: true }) {
   process.env.SM_COGNITO_CREDENTIALS = "cognito-secret-arn";
   return load("adminAuthorizerFunction/adminAuthorizerFunction.js", {
     "@aws-sdk/client-secrets-manager": secretsManager(
@@ -130,7 +130,9 @@ function loadAdminAuthorizer(groups = ["admin"]) {
     ),
     "aws-jwt-verify": {
       CognitoJwtVerifier: {
-        create: () => ({ verify: async () => ({ sub: "admin-sub", email: "a@example.org", "cognito:groups": groups }) }),
+        create: () => ({
+          verify: async () => ({ sub: "admin-sub", email: "a@example.org", "cognito:groups": groups, ...claims }),
+        }),
       },
     },
   });
@@ -143,6 +145,19 @@ test("admin policy covers admin routes on this stage only", async () => {
   for (const route of GUEST_ROUTES) assert.ok(!allows(policy, route), route);
   // The old `apiId/prod*` resource also matched stages named prod-*, prod2, ...
   assert.ok(!allows(policy, ADMIN_ROUTES[0].replace("/prod/", "/prod2/")));
+});
+
+test("the admin email reaches the context only when Cognito marks it verified", async () => {
+  const context = async (claims) =>
+    (await loadAdminAuthorizer(["admin"], claims).handler({ authorizationToken: "Bearer id-token", methodArn: ADMIN_ROUTES[0] }))
+      .context;
+  assert.equal((await context({ email_verified: true })).email, "a@example.org");
+  assert.equal((await context({ email_verified: "true" })).email, "a@example.org");
+  for (const claims of [{ email_verified: false }, { email_verified: "false" }, {}]) {
+    const ctx = await context(claims);
+    assert.equal(ctx.email, "", JSON.stringify(claims));
+    assert.equal(ctx.userId, "admin-sub");
+  }
 });
 
 test("non-admin Cognito users are rejected", async () => {

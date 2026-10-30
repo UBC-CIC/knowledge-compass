@@ -562,6 +562,12 @@ export class ApiGatewayStack extends cdk.Stack {
         userSrp: true,
       },
       preventUserExistenceErrors: true,
+      // Signed-in staff must not rewrite their own email (UpdateUserAttributes):
+      // it attributes audit rows and staff users rows (finding f-eb536a80). The
+      // frontend writes no attributes, and admins are provisioned through the
+      // admin API, which this list does not restrict. `locale` keeps the list
+      // non-empty, since an unset list leaves every attribute writable.
+      writeAttributes: new cognito.ClientAttributes().withStandardAttributes({ locale: true }),
     });
 
     this.identityPool = new cognito.CfnIdentityPool(

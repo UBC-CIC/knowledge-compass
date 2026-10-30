@@ -78,7 +78,9 @@ exports.handler = async (event) => {
       },
       context: {
         userId: payload.sub,
-        email: payload.email,
+        // Only a verified address may attribute audit rows (admin_audit.actor_email)
+        // and staff users.email; identity and authorization key on sub alone.
+        email: payload.email_verified === true || payload.email_verified === "true" ? payload.email : "",
         role: "admin",
       },
     };
