@@ -61,6 +61,11 @@ ANSWER_CHAR_CAP_FALLBACK = 5000
 # Ends an answer that was cut to the cap. Counted within the cap.
 ANSWER_TRUNCATION_MARKER = "…"
 
+# Sent when generation or the output guardrail fails. Failure is tracked by the
+# generation_failed flag, never by matching this text: the model can be asked
+# to start its answer with it (finding f-db9c8d85).
+GENERATION_ERROR_TEXT = "I encountered an error generating the response."
+
 
 def answer_char_cap() -> int:
     """The per-answer character cap from the loaded system settings."""
@@ -558,6 +563,7 @@ def get_response(
     char_cap = answer_char_cap()
     answer_started = False
     answer_text = ""
+    generation_failed = False
     cited_indices = []
     parsed_indices = None
     expect_answer_tags = phase_name == "SUGGESTION"
@@ -664,7 +670,8 @@ def get_response(
 
     except Exception as e:
         logger.error(f"Generation Failed: {e}")
-        answer_text = "I encountered an error generating the response."
+        answer_text = GENERATION_ERROR_TEXT
+        generation_failed = True
         cited_indices = []
 
     # Every answer goes through the output guardrail before it is saved or sent
@@ -672,14 +679,15 @@ def get_response(
     # keeps no citations and is not trusted for grounding, state or the title.
     # A guardrail error fails closed, like the input check.
     output_blocked = False
-    if answer_text and not answer_text.startswith("I encountered an error"):
+    if answer_text and not generation_failed:
         try:
             screened = invoke_output_guardrail(answer_text, config.REGION)
         except Exception as e:
             logger.error(f"Output guardrail invocation failed: {type(e).__name__}")
             screened = None
         if screened is None:
-            answer_text = "I encountered an error generating the response."
+            answer_text = GENERATION_ERROR_TEXT
+            generation_failed = True
             cited_indices = []
         elif screened['action'] == ACTION_BLOCKED:
             output_blocked = True
@@ -709,7 +717,7 @@ def get_response(
     # Fallback items are display-only and are not sent to grounding.
     fallback_count = 0
     if (has_guides and guide_state and not public_sources and parsed_indices != []
-            and answer_text and not answer_text.startswith("I encountered an error")):
+            and answer_text and not generation_failed):
         public_sources = [
             to_public_source(s)
             for s in _fallback_resources(
@@ -727,7 +735,7 @@ def get_response(
         phase_name == "SUGGESTION" and not output_blocked and (not has_guides or bool(used_sources))
     )
 
-    if run_grounding_check and answer_text and not answer_text.startswith("I encountered an error"):
+    if run_grounding_check and answer_text and not generation_failed:
         try:
             intervention_result = assess_response(
                 query=query,
@@ -760,7 +768,7 @@ def get_response(
             len(sources), len(used_sources), fallback_count,
             guide_state["section_key"] if guide_state else None,
         )
-        if guide_state and answer_text and not answer_text.startswith("I encountered an error"):
+        if guide_state and answer_text and not generation_failed:
             try:
                 save_guide_state(db_connection, chat_session_id, guide_state)
                 db_connection.commit()
@@ -802,7 +810,7 @@ def get_response(
     # Advance routing state only after a successful reply, so a failed
     # generation does not count as a question asked or guidance given.
     if (not exclusive_guideline and not output_blocked
-            and answer_text and not answer_text.startswith("I encountered an error")):
+            and answer_text and not generation_failed):
         try:
             # Journey/situation keys only (no text) for feedback analytics.
             journeys_touched, clusters_touched = touched_keys(
@@ -828,7 +836,7 @@ def get_response(
             logger.warning(f"Failed to save routing state: {e}")
 
     generated_title = None
-    if final_answer_text and not output_blocked and not final_answer_text.startswith("I encountered an error"):
+    if final_answer_text and not output_blocked and not generation_failed:
         try:
             current_title = get_session_title(db_connection, chat_session_id)
             is_untitled = current_title is None or current_title.strip() in ("", "New Session")
