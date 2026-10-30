@@ -13,6 +13,11 @@ ACTION_BLOCKED = 'BLOCKED'             # Prompt injection — skip LLM entirely
 # message. Never fall back to the answer itself.
 OUTPUT_BLOCKED_FALLBACK = "Sorry, I can't share that answer. Please try asking in a different way."
 
+# Stored in place of a user message the input guardrail blocked. History is
+# replayed to the model unscreened, so the raw text (and any PII it holds)
+# must never reach chat_messages.
+BLOCKED_INPUT_PLACEHOLDER = "[Message blocked by the content filter]"
+
 
 def _apply_guardrail(text: str, source: str, region: str) -> dict:
     client = boto3.client('bedrock-runtime', region_name=region)

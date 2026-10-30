@@ -29,7 +29,9 @@ from helpers.citations import (
 from helpers.intervention import assess_response
 import helpers.config as config
 from helpers.message_limits import reserve_daily_message
-from helpers.guardrail import invoke_guardrail, invoke_output_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED
+from helpers.guardrail import (
+    invoke_guardrail, invoke_output_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED, BLOCKED_INPUT_PLACEHOLDER,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -467,7 +469,9 @@ def get_response(
         if guardrail_result['action'] == ACTION_BLOCKED:
             denial_text = guardrail_result['text']
             try:
-                insert_message(db_connection, chat_session_id, 'user', query, sources=None, warning=None)
+                # Not `query`: the next turn replays history into Bedrock
+                # without re-screening it.
+                insert_message(db_connection, chat_session_id, 'user', BLOCKED_INPUT_PLACEHOLDER, sources=None, warning=None)
                 update_last_active_session(db_connection, chat_session_id)
                 db_connection.commit()
             except Exception as db_err:
