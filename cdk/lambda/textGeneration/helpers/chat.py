@@ -52,6 +52,39 @@ linked. Also output <guide_state>section: n</guide_state> with that section's
 number, or 0 if you did not use one.
 """.strip()
 
+# Per-answer character cap (finding A-06). The admin setting
+# max_characters_per_ai_message sets it; this is used when the loaded value is
+# missing or not a positive integer. Matches config.MAX_CHARACTERS_PER_AI_MESSAGE.
+ANSWER_CHAR_CAP_FALLBACK = 5000
+# Ends an answer that was cut to the cap. Counted within the cap.
+ANSWER_TRUNCATION_MARKER = "…"
+
+
+def answer_char_cap() -> int:
+    """The per-answer character cap from the loaded system settings."""
+    try:
+        cap = int(config.MAX_CHARACTERS_PER_AI_MESSAGE)
+    except (TypeError, ValueError):
+        return ANSWER_CHAR_CAP_FALLBACK
+    return cap if cap > 0 else ANSWER_CHAR_CAP_FALLBACK
+
+
+def cap_answer_length(text: str, cap: int) -> str:
+    """
+    Cut text to at most cap characters. The cut falls on the last whitespace
+    in the second half of the allowed length, so a word or link is not split
+    when that is avoidable, and ends with ANSWER_TRUNCATION_MARKER.
+    """
+    if len(text) <= cap:
+        return text
+    keep = max(cap - len(ANSWER_TRUNCATION_MARKER), 0)
+    cut = text[:keep]
+    boundary = max(cut.rfind(" "), cut.rfind("\n"))
+    if boundary > keep // 2:
+        cut = cut[:boundary]
+    return cut.rstrip() + ANSWER_TRUNCATION_MARKER
+
+
 def _generate_session_title(
     query: str,
     answer_text: str,
@@ -518,6 +551,7 @@ def get_response(
     
     full_response_text = ""
     yielded_text = ""
+    char_cap = answer_char_cap()
     answer_started = False
     answer_text = ""
     cited_indices = []
@@ -586,7 +620,7 @@ def get_response(
                     # the settled prefix is sanitized and streamed; the held-back
                     # tail arrives with the next delta or the 'complete' event.
                     settled = safe_text if stop_found else safe_text[:stream_settled_length(safe_text)]
-                    visible = strip_internal_links(settled)
+                    visible = strip_internal_links(settled)[:char_cap]
 
                     # 5. Stream only the newly added text. If sanitizing changed
                     # text already sent, pause; 'complete' carries the clean reply.
@@ -603,7 +637,14 @@ def get_response(
         else:
             # Detective phase: strip any trailing <detective_state> tag from saved text
             answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
-            
+
+        # The visible answer is held to the per-answer cap before it is
+        # screened, saved or sent. The stream above stops at the same length;
+        # 'complete' carries the cut text. Hidden tags are still parsed.
+        if len(answer_text) > char_cap:
+            logger.info("Answer cut to the per-answer cap (chars=%d, cap=%d)", len(answer_text), char_cap)
+            answer_text = cap_answer_length(answer_text, char_cap)
+
         # Parse cited_indices tolerantly: one malformed token must not drop
         # every citation.
         parsed_indices = parse_cited_indices(full_response_text)
