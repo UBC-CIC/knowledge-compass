@@ -3,7 +3,6 @@
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 const {
   APIGatewayClient,
-  GetStageCommand,
   UpdateStageCommand,
 } = require("@aws-sdk/client-api-gateway");
 const { gatewayAllowOrigin } = require("./origin");
@@ -26,14 +25,16 @@ exports.handler = async (event) => {
   const got = await ssm.send(new GetParameterCommand({ Name: paramName }));
   const origin = gatewayAllowOrigin(got.Parameter && got.Parameter.Value);
 
-  const stage = await apigw.send(new GetStageCommand({ restApiId, stageName }));
-  const variables = (stage && stage.variables) || {};
-  const op = Object.prototype.hasOwnProperty.call(variables, variable) ? "replace" : "add";
+  // API Gateway's stage-variable PATCH model only accepts "replace" for
+  // /variables/{name}; "add" is rejected even when the variable does not yet
+  // exist, and "replace" creates it in that case. So always use "replace".
   await apigw.send(
     new UpdateStageCommand({
       restApiId,
       stageName,
-      patchOperations: [{ op, path: `/variables/${variable}`, value: origin }],
+      patchOperations: [
+        { op: "replace", path: `/variables/${variable}`, value: origin },
+      ],
     }),
   );
 
