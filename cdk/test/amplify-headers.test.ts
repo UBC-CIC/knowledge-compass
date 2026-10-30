@@ -25,13 +25,13 @@ describe("spaSecurityHeaders", () => {
     expect(headers["Permissions-Policy"]).toContain("microphone=()");
   });
 
-  test("ships the CSP as Report-Only (decision D8)", () => {
-    expect(headers["Content-Security-Policy-Report-Only"]).toBeDefined();
-    expect(headers["Content-Security-Policy"]).toBeUndefined();
+  test("enforces the CSP rather than only reporting it (f-9ff3f181)", () => {
+    expect(headers["Content-Security-Policy"]).toBeDefined();
+    expect(headers["Content-Security-Policy-Report-Only"]).toBeUndefined();
   });
 
   test("scripts are same-origin only and nothing can frame the app", () => {
-    const csp = directives(headers["Content-Security-Policy-Report-Only"]);
+    const csp = directives(headers["Content-Security-Policy"]);
     expect(csp["default-src"]).toEqual(["'self'"]);
     expect(csp["script-src"]).toEqual(["'self'"]);
     expect(csp["object-src"]).toEqual(["'none'"]);
@@ -45,7 +45,7 @@ describe("spaSecurityHeaders", () => {
   });
 
   test("connect-src lists the APIs, Cognito and S3 uploads", () => {
-    const csp = directives(headers["Content-Security-Policy-Report-Only"]);
+    const csp = directives(headers["Content-Security-Policy"]);
     expect(csp["connect-src"]).toEqual([
       "'self'",
       origins.restApiOrigin,
@@ -56,13 +56,13 @@ describe("spaSecurityHeaders", () => {
   });
 
   test("allows Google Fonts used by index.html", () => {
-    const csp = directives(headers["Content-Security-Policy-Report-Only"]);
+    const csp = directives(headers["Content-Security-Policy"]);
     expect(csp["style-src"]).toContain("https://fonts.googleapis.com");
     expect(csp["font-src"]).toContain("https://fonts.gstatic.com");
   });
 
   test("omits an empty WebSocket origin", () => {
-    const csp = directives(spaSecurityHeaders({ ...origins, webSocketOrigin: "" })["Content-Security-Policy-Report-Only"]);
+    const csp = directives(spaSecurityHeaders({ ...origins, webSocketOrigin: "" })["Content-Security-Policy"]);
     expect(csp["connect-src"]).not.toContain("");
     expect(csp["connect-src"]).toHaveLength(4);
   });
