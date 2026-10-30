@@ -151,6 +151,16 @@ class SsrfTests(unittest.TestCase):
         self.assertIn("blocked", ctx.exception.reason)
         self.assertEqual(web.requests, [])
 
+    def test_blocked_reason_never_names_the_resolved_address(self):
+        # The reason is shown to admins (csv_row_links.reason); the address would
+        # make it a VPC DNS-resolution oracle.
+        fetcher, _, _ = make_fetcher({}, hosts={"internal.example": ["10.0.0.12"]})
+        with self.assertLogs("helpers.link_fetcher", level="WARNING") as logs, \
+                self.assertRaises(FetchError) as ctx:
+            fetcher.fetch("http://internal.example/admin")
+        self.assertNotIn("10.0.0.12", ctx.exception.reason)
+        self.assertIn("10.0.0.12", "\n".join(logs.output))
+
     def test_ip_literal_metadata_endpoint_blocked(self):
         fetcher, web, _ = make_fetcher({})
         for url in ("http://169.254.169.254/latest/meta-data/", "http://169.254.170.2/v2/credentials",

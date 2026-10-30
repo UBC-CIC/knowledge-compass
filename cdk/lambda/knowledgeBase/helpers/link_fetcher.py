@@ -23,6 +23,7 @@ which decides whether previously indexed content for the link is kept.
 """
 
 import http.client
+import logging
 import os
 import socket
 import ssl
@@ -35,6 +36,13 @@ from urllib import robotparser
 from urllib.parse import urljoin, urlsplit
 
 from helpers.url_safety import BlockedURL, InvalidURL, normalize_url, resolve_public_addresses
+
+logger = logging.getLogger(__name__)
+
+# FetchError reasons reach admins (csv_row_links.reason). BlockedURL messages
+# name the resolved address, which would make the CSV-link path an oracle for
+# what hostnames resolve to inside the VPC, so clients only get this text.
+BLOCKED_REASON = "blocked: destination is not a public address"
 
 ROBOTS_USER_AGENT = "KnowledgeCompassBot"
 USER_AGENT = f"{ROBOTS_USER_AGENT}/1.0 (knowledge base link indexer)"
@@ -208,7 +216,8 @@ class LinkFetcher:
         try:
             ip = resolve_public_addresses(host, port, self._resolver)[0]
         except BlockedURL as e:
-            raise FetchError(f"blocked: {e}", permanent=True) from e
+            logger.warning("Link fetch blocked: %s", e)
+            raise FetchError(BLOCKED_REASON, permanent=True) from e
         except OSError as e:
             raise FetchError(f"could not resolve host {host}", permanent=True) from e
 
