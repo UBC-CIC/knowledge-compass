@@ -1,6 +1,6 @@
 # Security Overview
 
-**Project:** Specialization Explorer
+**Project:** Knowledge Compass
 **Document Type:** Public Security Architecture Overview
 **Last Updated:** October 2026
 
@@ -23,7 +23,7 @@
 
 ## 1. Introduction
 
-Specialization Explorer is an AI-powered conversational application that helps undergraduate students navigate academic specialization choices. This document provides an overview of the security measures implemented to protect user data, ensure system integrity, and maintain service availability.
+Knowledge Compass is an AI-powered conversational application that answers questions from a curated knowledge base. This document provides an overview of the security measures implemented to protect user data, ensure system integrity, and maintain service availability.
 
 ### 1.1 Security Principles
 
@@ -91,8 +91,8 @@ Specialization Explorer is an AI-powered conversational application that helps u
 ║                         AI / ML LAYER                           ║
 ║                                                                 ║
 ║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │    Bedrock      │  │ Knowledge Base  │  │  OpenSearch   │   ║
-║   │   Guardrails    │  │     RAG         │  │  Serverless   │   ║
+║   │    Bedrock      │  │   pgvector      │  │   Bedrock     │   ║
+║   │   Guardrails    │  │   retrieval     │  │   models      │   ║
 ║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
 ╚═════════════════════════════════════════════════════════════════╝
 ```
@@ -104,7 +104,7 @@ Specialization Explorer is an AI-powered conversational application that helps u
 | **Edge** | CloudFront, WAF, Shield | DDoS protection, TLS termination, rate limiting |
 | **Application** | API Gateway, Lambda | Authentication, authorization, input validation |
 | **Data** | RDS, S3, Secrets Manager | Encryption, access control, credential rotation |
-| **AI/ML** | Bedrock, Knowledge Base | PII protection, prompt security, output validation |
+| **AI/ML** | Bedrock models and guardrails, pgvector retrieval | PII protection, prompt security, output validation |
 
 ---
 
@@ -280,7 +280,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 ╠═════════════════════════════════════════════════════════════════╣
 ║                                                                 ║
 ║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │      RDS        │  │       S3        │  │  OpenSearch   │   ║
+║   │  RDS + vectors  │  │       S3        │  │   Secrets     │   ║
 ║   │    AES-256      │  │     SSE-S3      │  │ AWS-managed   │   ║
 ║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
 ║                                                                 ║
@@ -296,7 +296,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 ╚═════════════════════════════════════════════════════════════════╝
 ```
 
-> All encrypted resources currently use AWS managed keys. For details on which resources are affected and how to switch to customer-managed KMS keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
+> Encrypted resources use AWS managed keys, except the API Gateway and WAF log groups, which use a customer-managed key. For details on which resources are affected and how to switch to customer-managed KMS keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
 
 ### 6.3 Credential Management
 

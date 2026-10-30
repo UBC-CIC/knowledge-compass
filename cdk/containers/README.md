@@ -15,14 +15,13 @@ covers both web content and video transcripts.
 
 ```
 cdk/containers/
-  common/            Shared, secret-free DB/AWS config helper (db_config.py)
+  common/            Shared helpers: db_config.py, embeddings.py, url_safety.py
   crawler/           Web crawler pipeline (Playwright → chunking → pgvector)
   transcriber/       Video transcript pipeline (Transcribe JSON → chunking → pgvector)
-  tools/             compare_retrieval.py — live retrieval comparison harness (R9)
+  tests/             Unit tests, run in the pipeline's test stage
 ```
 
-`crawler/` and `transcriber/` both import `common/db_config.py` as a sibling
-package, so their Dockerfiles build with `cdk/containers` as the build
+`crawler/` and `transcriber/` both import `common/` as a sibling package, so their Dockerfiles build with `cdk/containers` as the build
 context — see the `docker build` command at the top of each Dockerfile.
 
 ---
@@ -60,34 +59,38 @@ repo.
 ## Two Data Pipelines
 
 ### 1. Web Crawler
-Crawls Inclusion Canada's website, extracts article content, chunks it
-semantically, and embeds it into pgvector.
+Crawls one website per task (same-domain links, up to 50 pages), extracts
+article content, chunks it at headings, and embeds it into pgvector.
 
 See [`crawler/README.md`](crawler/README.md) for full technical detail.
 
 ```
-Admin triggers crawl
-    → Lambda (proxy): inserts crawl job row in DB (status=queued), returns job_id
-    → Lambda starts ECS Fargate task with job_id + seed_url
+Admin adds a website, then clicks Sync now
+    → lambdaKnowledgeBase marks the ingestion_runs row running and calls
+      ecs:RunTask with JOB_ID + SEED_URL (process_crawler_batch.py)
     → ECS Fargate runs crawler.py (Playwright + Chromium)
-    → On completion: ECS updates job row status → admin sees result in dashboard
-Automation: EventBridge cron rule → same Lambda, no frontend interaction needed
+    → crawler.py marks the run completed or failed
+    → if the task dies first, the ECS task-stopped event fails the run
 ```
 
 ### 2. Video Transcription
-Admin uploads a video file → Amazon Transcribe converts it to a structured
-JSON → the ingestor chunks it by speaker segment and embeds into pgvector
-with timestamps for deep-linking.
+Admin uploads a video or audio file → Amazon Transcribe converts it to a
+structured JSON → the ingestor chunks it by sentence segment and embeds into
+pgvector with timestamps for deep-linking.
 
 See [`transcriber/README.md`](transcriber/README.md) for full technical detail.
 
 ```
-Admin uploads video to S3 + provides source URL
-    → S3 PutObject event → EventBridge rule
-    → Lambda: starts Transcribe job, inserts ingestion job row in DB
-    → Transcribe completion event → EventBridge
-    → Lambda: runs transcrbe.py logic, updates job row status
+Admin uploads the file (presigned URL) and stages it with a public video_url
+    → lambdaKnowledgeBase starts an Amazon Transcribe job (video_transcription.py)
+    → Transcribe completion event → EventBridge → transcribeRelay
+    → lambdaKnowledgeBase launches the transcriber task with the transcript location
+    → transcrbe.py marks the run completed or failed
 ```
+
+Both tasks read the embedding model from the active embedding space, connect
+through RDS Proxy with the database secret (`DB_AUTH=secret`, set on every
+`RunTask`), and write vectors to `chunk_embeddings`.
 
 ---
 
@@ -101,8 +104,8 @@ this pipeline:
 | `000_initial_schema.js` | users, chat_*, system_*, data_sources, ingestion_runs | Base app schema (+ `vector` extension) |
 | `001_unified_chunks.js` | `sources`, `chunks`; extends `ingestion_runs` | Unified pgvector retrieval corpus + unified ingestion-run model |
 
-**`sources` table:** one row per ingested source (web page or video).
-- `source_type`: `'web'` or `'video'`
+**`sources` table:** one row per ingested source.
+- `source_type`: `'web'` or `'video'` from these pipelines (`'document'`, `'csv_link'` and `'csv_row'` come from the knowledge base Lambda)
 - `url`: canonical URL (web page URL or YouTube link)
 
 **`chunks` table:** one row per embedded text chunk.
@@ -114,18 +117,22 @@ this pipeline:
 
 ## Retrieval in Production
 
-`cdk/lambda/textGeneration/helpers/retrieval.py` runs the pgvector cosine
-similarity query against `chunks` + `sources` that these pipelines feed.
-`cdk/containers/tools/compare_retrieval.py` is the live harness (R9) used to
-compare that retrieval path against the retired Bedrock Knowledge Base
-backend before cutover.
+`cdk/lambda/textGeneration/helpers/retrieval.py` embeds the query with the
+active space's model and runs the shared similarity search in
+`cdk/layers/shared_python/python/kc_shared/retrieval_core.py` against
+`chunk_embeddings`, `chunks` and `sources`. See
+[`Docs/KNOWLEDGE_BASE_DOCUMENTATION.md`](../../Docs/KNOWLEDGE_BASE_DOCUMENTATION.md).
+
+`common/embeddings.py` is a copy of the layer's `kc_shared/embeddings.py`
+(containers cannot use a Lambda layer), and `common/url_safety.py` mirrors the
+knowledge base Lambda's `helpers/url_safety.py`. The parity tests fail if
+either drifts.
 
 ## See Also
 
 - [`crawler/README.md`](crawler/README.md) — web crawler pipeline
 - [`transcriber/README.md`](transcriber/README.md) — video transcription pipeline
-- [`tools/README.md`](tools/README.md) — retrieval comparison harness
-- [`Docs/PGVECTOR_MIGRATION_PLAN.md`](../../Docs/PGVECTOR_MIGRATION_PLAN.md) — the original migration plan and decision log
-- [`Docs/RETIREMENT_RUNBOOK.md`](../../Docs/RETIREMENT_RUNBOOK.md) — Bedrock KB / OpenSearch retirement runbook
+- [`Docs/KNOWLEDGE_BASE_DOCUMENTATION.md`](../../Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — ingestion end to end
+- [`Docs/PGVECTOR_MIGRATION_PLAN.md`](../../Docs/PGVECTOR_MIGRATION_PLAN.md) — the original migration plan and decision log (historical)
 - [`Docs/user-stories/`](../../Docs/user-stories/) — user stories and prompt design
 - `cdk/lambda/textGeneration/helpers/` — production Lambda helpers that consume this pipeline's data

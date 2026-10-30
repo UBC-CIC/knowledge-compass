@@ -1,5 +1,7 @@
 # pgvector Migration Plan
 
+> **Historical.** This migration is complete: the Bedrock Knowledge Base and OpenSearch Serverless have been removed from the CDK app, and retrieval runs on pgvector. Some details below were superseded later (for example, embedding models are now swappable through embedding spaces, and new installs use Titan Text Embeddings V2). For the current design see [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md) and [`ARCHITECTURE_DEEP_DIVE.md`](./ARCHITECTURE_DEEP_DIVE.md).
+
 Status: Draft for review
 Owner: (assign)
 Last updated: 2026-09-02

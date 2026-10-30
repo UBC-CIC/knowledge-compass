@@ -1,23 +1,23 @@
 # Bedrock Guardrails Implementation
 
-This document explains the Bedrock Guardrails implementation integrated into the Specialization Explorer project. It covers how guardrails are created in CDK, configured, and enforced at runtime in the text generation Lambda, and provides tips for testing, monitoring, and troubleshooting.
+This document explains the Bedrock Guardrails implementation integrated into the Knowledge Compass project. It covers how guardrails are created in CDK, configured, and enforced at runtime in the text generation Lambda, and provides tips for testing, monitoring, and troubleshooting.
 
 ## Introduction
 
 ### What is Amazon Bedrock?
-Amazon Bedrock is a fully managed service that provides access to foundation models (LLMs) from leading AI providers through a single API. In this project, Amazon Bedrock powers the conversational AI assistant that helps students explore UBC Science specializations.
+Amazon Bedrock is a fully managed service that provides access to foundation models (LLMs) from leading AI providers through a single API. In this project, Amazon Bedrock powers the conversational assistant that helps families find their way through inclusive-education guidance.
 **Learn more:** https://docs.aws.amazon.com/bedrock/
 
 ### How this project uses LLMs
-The Specialization Explorer uses Bedrock foundation models to:
-- Answer student questions about UBC Science specializations
-- Guide students through a structured discovery flow (Detective → Suggestion phases)
-- Provide personalized recommendations via natural language conversation
+Knowledge Compass uses Bedrock foundation models to:
+- Route each message and decide whether to ask a clarifying question or give guidance (Detective → Partial → Suggestion phases)
+- Answer from the knowledge base, citing the sources it used
+- Check guidance answers for grounding, and write session titles
 
 The primary model used is configurable via environment variables (Claude Haiku 5.5 for every generation call), accessed through Amazon Bedrock.
 
 ### What are Bedrock Guardrails?
-Bedrock Guardrails are safety controls that check, filter, and moderate model inputs. They help ensure user messages are safe to process before they ever reach the LLM.
+Bedrock Guardrails are safety controls that check, filter, and moderate model inputs and outputs. This project screens every user message before it reaches the LLM and every answer before it is saved or shown.
 
 ### Purpose of this document
 This document is a technical reference for administrators and developers who need to understand how Bedrock Guardrails are wired into the system, how they are enforced at runtime, and how to customize or troubleshoot guardrail behavior. Guardrails are created automatically during CDK deployment; this file is primarily for advanced customization and reference.

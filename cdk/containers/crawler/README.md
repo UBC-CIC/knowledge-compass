@@ -12,7 +12,7 @@
 1. Uses **Playwright** (headless Chromium) to render JS-heavy pages — required for Wix/SPA sites
 2. Extracts article content via **trafilatura** (readability-style boilerplate removal)
 3. Chunks content at **heading boundaries** (H1/H2/H3) with optional semantic splitting
-4. Embeds each chunk via **Cohere embed-english-v3** through Amazon Bedrock
+4. Embeds each chunk through Amazon Bedrock with the model of the **active embedding space** (read from the database)
 5. Writes to the unified **`sources` + `chunks`** tables in RDS PostgreSQL (pgvector)
 
 Change detection: each chunk stores a `content_hash` (sha256[:16] of body text). On re-crawl, chunks whose hash hasn't changed are skipped — no redundant embedding API calls.
@@ -79,7 +79,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 
 **Default (fixed-size):** splits at heading boundaries (H1/H2/H3 from trafilatura XML output). Sections longer than `max_words` are split at sentence boundaries with 2-sentence overlap.
 
-**Semantic (`--semantic`):** embeds each sentence individually, finds cosine similarity drops between adjacent sentences (topic changes), splits there. `max_words` is applied as a hard cap. Costs one extra Cohere batch call per page.
+**Semantic (`--semantic`):** embeds each sentence individually, finds cosine similarity drops between adjacent sentences (topic changes), splits there. `max_words` is applied as a hard cap. Costs one extra embedding batch call per page.
 
 `embed_text` (what gets embedded) = `"Section > Subsection\n\nBody text"` — heading path prefix ensures the embedding captures WHERE in the site the content lives, not just WHAT it says.
 
@@ -89,7 +89,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 
 Each page → one `sources` row (`source_type='web'`, `url=page_url`).
 Each chunk → one `chunks` row with:
-- `embedding vector(1024)`
+- one `chunk_embeddings` row holding its vector in the active embedding space
 - `metadata = {"heading_path": "Section > Subsection"}`
 - `content_hash` for change detection
 
@@ -165,5 +165,5 @@ The ECS Fargate container needs:
 - Playwright chromium (`playwright install chromium`)
 - The RDS CA bundle fetched at build/runtime (`global-bundle.pem`), with
   `DB_SSL_ROOT_CERT` pointing at it — not a committed cert
-- Config via environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_AUTH=iam`, ...)
-- IAM task role with: `bedrock:InvokeModel` (Cohere embed), `rds-db:connect` (IAM auth to RDS)
+- Config via environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, ...). In ECS, `process_crawler_batch.py` sets `DB_AUTH=secret` and `DB_SECRET_NAME` on every `RunTask`, because RDS Proxy does not accept IAM tokens
+- IAM task role (`cdk/lib/ingestion-stack.ts`) with: `bedrock:InvokeModel` on the embedding models the spaces can use, and read access to the database secret. No `rds-db:connect`

@@ -1,5 +1,7 @@
 # Bedrock KB / OpenSearch Retirement Runbook (R10)
 
+> **Historical.** The Bedrock Knowledge Base stack is no longer part of the CDK app. This runbook is kept as a record and for deployments that still have a `<PREFIX>-KnowledgeBase` stack from before the retirement. For the current design see [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
+
 > ⚠️ **DESTRUCTIVE — DO NOT AUTO-RUN.** This procedure deletes the production
 > Bedrock Knowledge Base, the OpenSearch Serverless collection, and related
 > resources. Execute it manually, step by step, only after the pgvector cutover

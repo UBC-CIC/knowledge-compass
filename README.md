@@ -1,12 +1,12 @@
-﻿# Specialization Explorer
-This prototype explores how Large Language Models (LLMs) and Retrieval-Augmented Generation can support undergraduate students in navigating Bachelor of Science specialization choices through an AI-powered conversational experience. By leveraging conversational AI, institutional academic information, and publicly available alumni data, the Specialization Explorer enables students to reflect on their interests, compare specialization options, and discover academic pathways that align with their goals through personalized, open-ended dialogue.
+﻿# Knowledge Compass
+Knowledge Compass is a conversational assistant that uses Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to answer questions from a curated knowledge base. The current deployment helps families find their way through Inclusion Canada's inclusive-education guidance: it asks about their situation, then suggests next steps grounded in the documents, websites and videos an administrator has added. Administrators manage the knowledge base, prompts, settings and analytics from an admin dashboard.
 
 | Index | Description |
 | :---------------------------------------------------- | :------------------------------------------------------ |
 | [High Level Architecture](#high-level-architecture) | High level overview illustrating component interactions |
 | [Deployment](#deployment-guide) | How to deploy the project |
 | [User Guide](#user-guide) | The working solution |
-| [Knowledge Base](#knowledge-base) | How the project uses Bedrock Knowledge Bases |
+| [Knowledge Base](#knowledge-base) | How content is ingested, embedded and retrieved |
 | [Directories](#directories) | General project directory structure |
 | [Additional Documentation](#additional-documentation) | Comprehensive guides and references |
 | [Credits](#credits) | Meet the team behind the solution |
@@ -28,72 +28,33 @@ Please refer to the [Web App User Guide](Docs/USER_GUIDE.md) for instructions on
 
 ## Knowledge Base
 
-Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION.md) as it explains how the project uses Bedrock Knowledges Bases. This includes the data source state machine, S3 and website ingestion phases, scheduler polling, retry behavior, and admin dashboard integration.
+Please refer to the [Knowledge Base Documentation](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md). It explains how uploaded files, websites and videos are chunked, embedded and stored in pgvector, how ingestion runs and retries work, and how the admin dashboard drives them. To change the embedding model, see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md).
 
 ## Directories
 
 ```
 ├── cdk/
 │   ├── bin/
-│   │   └── cdk.ts
-│   ├── containers/
-│   │   ├── common/
-│   │   │   └── db_config.py
-│   │   ├── crawler/
-│   │   │   ├── Dockerfile
-│   │   │   └── crawler.py
-│   │   ├── transcriber/
-│   │   │   ├── Dockerfile
-│   │   │   └── transcrbe.py
-│   │   └── tools/
-│   │       └── compare_retrieval.py
+│   │   └── cdk.ts                    # CDK app: stack wiring and context flags
+│   ├── containers/                   # ECS Fargate images built by CodePipeline
+│   │   ├── common/                   # db_config, embeddings, url_safety
+│   │   ├── crawler/                  # website crawler (Playwright)
+│   │   ├── transcriber/              # video transcriber (Amazon Transcribe)
+│   │   └── tests/
 │   ├── lambda/
-│   │   ├── adminAuthorizerFunction/
-│   │   │   └── adminAuthorizerFunction.js
-│   │   ├── authorization/
-│   │   │   ├── addAdminOnSignUp.js
-│   │   │   ├── initializeConnection.js
-│   │   │   ├── preSignUp.js
-│   │   │   └── userAuthorizerFunction.js
-│   │   ├── db_setup/
-│   │   │   ├── migrations/
-│   │   │   │   └── 000_initial_schema.js
-│   │   │   └── index.js
-│   │   ├── ecrImageWaiter/
-│   │   │   ├── index.js
-│   │   │   └── package.json
-│   │   ├── handlers/
-│   │   │   ├── utils/
-│   │   │   │   ├── cors.js
-│   │   │   │   ├── handlerUtils.js
-│   │   │   │   └── validation.js
-│   │   │   ├── adminHandler.js
-│   │   │   ├── chatSessionHandler.js
-│   │   │   ├── initializeConnection.js
-│   │   │   ├── systemMessagesHandler.js
-│   │   │   └── userHandler.js
-│   │   ├── knowledgeBase/
-│   │   │   ├── helpers/
-│   │   │   └── main.py
-│   │   ├── knowledgeBaseProvisioner/
-│   │   │   └── main.py
-│   │   ├── publicTokenFunction/
-│   │   │   ├── cors.js
-│   │   │   └── publicTokenFunction.js
-│   │   ├── textGeneration/
-│   │   │   ├── helpers/
-│   │   │   ├── main.py
-│   │   │   └── requirements.txt
-│   │   ├── vectorIndexManagerSigV4/
-│   │   │   ├── Dockerfile
-│   │   │   ├── main.py
-│   │   │   ├── requirements.in
-│   │   │   └── requirements.txt
-│   │   └── websocket/
-│   │       ├── connect.js
-│   │       ├── default.js
-│   │       └── disconnect.js
+│   │   ├── adminAuthorizerFunction/  # Cognito admin authorizer
+│   │   ├── authorization/            # user authorizer, Cognito triggers
+│   │   ├── db_setup/                 # node-pg-migrate runner and migrations/
+│   │   ├── ecrImageWaiter/           # waits for container images on first deploy
+│   │   ├── gatewayCorsOrigin/        # copies the SPA origin into API Gateway
+│   │   ├── handlers/                 # REST handlers (admin, users, sessions, ...)
+│   │   ├── knowledgeBase/            # ingestion and embedding admin (Python)
+│   │   ├── lifecycleCheck/           # Bedrock model lifecycle alerts
+│   │   ├── textGeneration/           # chat, routing, retrieval (Python)
+│   │   ├── transcribeRelay/          # forwards Transcribe and ECS task events
+│   │   └── websocket/                # $connect, $default, $disconnect
 │   ├── layers/
+│   │   ├── shared_python/            # kc_shared: code shared by the Python Lambdas
 │   │   ├── aws-jwt-verify.zip
 │   │   ├── node-pg-migrate.zip
 │   │   ├── postgres.zip
@@ -102,14 +63,19 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 │   │   ├── amplify-stack.ts
 │   │   ├── api-stack.ts
 │   │   ├── cicd-stack.ts
+│   │   ├── cost-stack.ts
 │   │   ├── database-stack.ts
 │   │   ├── dbFlow-stack.ts
-│   │   ├── knowledge-base-stack.ts
+│   │   ├── eval-stack.ts
+│   │   ├── ingestion-stack.ts
+│   │   ├── log-retention.ts
 │   │   └── vpc-stack.ts
+│   ├── test/                         # CDK contract tests (Jest)
 │   └── OpenAPI_Swagger_Definition.yaml
 │
 ├── Docs/
 │   ├── media/
+│   ├── runbooks/
 │   ├── user-stories/
 │   ├── API_DOCUMENTATION.md
 │   ├── ARCHITECTURE_DEEP_DIVE.md
@@ -117,12 +83,16 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 │   ├── BEDROCK_GUARDRAILS.md
 │   ├── DATABASE_MIGRATIONS.md
 │   ├── DEPENDENCY_MANAGEMENT.MD
-│   ├── PGVECTOR_MIGRATION_PLAN.md
-│   ├── RETIREMENT_RUNBOOK.md
 │   ├── DEPLOYMENT_GUIDE.md
+│   ├── EVALS.md
+│   ├── KNOWLEDGE_BASE_DOCUMENTATION.md
 │   ├── MODIFICATION_GUIDE.md
+│   ├── PGVECTOR_MIGRATION_PLAN.md    # historical
+│   ├── RETIREMENT_RUNBOOK.md         # historical
 │   ├── SECURITY_OVERVIEW.md
 │   └── USER_GUIDE.md
+│
+├── evals/                            # conversation evaluation harness
 │
 └── frontend/
     └── src/
@@ -163,14 +133,17 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 - **Amazon Bedrock** embedding models for vector embeddings — **Amazon Titan Text Embeddings V2** on new installs (deployments created before migration 049 keep Cohere Embed English v3 until they switch); the active model is chosen from the admin console (see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md))
 - **pgvector** on PostgreSQL for vector storage and similarity search
 - **PostgreSQL** (RDS) for relational data storage
-- **Amazon S3** for knowledge base document storage
+- **Amazon S3** for uploaded documents and transcription outputs
+- **Amazon ECS on Fargate** for the website crawler and video transcriber
+- **Amazon Transcribe** and **Amazon Textract** for video transcripts and scanned PDFs
+- **Amazon Bedrock Guardrails** on user input and model output
 - **API Gateway** (REST and WebSocket) for APIs
 - **AWS Cognito** for authentication and authorization
 
 ### Infrastructure
 
 - **AWS CDK** (TypeScript) for infrastructure as code
-- **AWS CodePipeline** for CI/CD (Docker image builds)
+- **AWS CodePipeline** for CI/CD (unit tests, container image builds and scans)
 - **Amazon RDS** with RDS Proxy for managed PostgreSQL
 - **Amazon VPC** for network isolation
 
@@ -190,13 +163,15 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 ### Development and Maintenance
 
 - **[Database Migrations](Docs/DATABASE_MIGRATIONS.md)**: Guide to the database migration system and best practices
-- **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Managing Python dependencies in Lambda functions using pip-tools
-- **[Changelog](Docs/CHANGELOG.md)**: Version history and release notes
+- **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Where each component's Python dependencies come from and how to change them
+- **[Knowledge Base](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md)**: Ingestion, embedding and retrieval
+- **[Embedding Model Swap Runbook](Docs/runbooks/embedding-model-swap.md)**: Changing the embedding model with a rebuild and cutover
+- **[Evaluations](Docs/EVALS.md)**: The conversation evaluation harness
 
 ### API and Usage
 
 - **[API Documentation](Docs/API_DOCUMENTATION.md)**: Comprehensive API reference for all REST and WebSocket endpoints
-- **[User Guide](Docs/USER_GUIDE.md)**: Complete guide for end-users on how to interact with Specialization Explorer
+- **[User Guide](Docs/USER_GUIDE.md)**: Complete guide for end-users on how to interact with Knowledge Compass
 
 ## Credits
 

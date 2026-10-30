@@ -77,13 +77,13 @@ Now let's clone the GitHub repository onto your machine. To do this:
 3. Clone the GitHub repository by entering the following command. Be sure to replace `<YOUR-GITHUB-USERNAME>` with your own username.
 
 ```bash
-git clone https://github.com/<YOUR-GITHUB-USERNAME>/specialization-explorer.git
+git clone https://github.com/<YOUR-GITHUB-USERNAME>/knowledge-compass.git
 ```
 
 The code should now be in the folder you created. Navigate into the root folder containing the entire codebase by running the command:
 
 ```bash
-cd specialization-explorer
+cd knowledge-compass
 ```
 
 #### Install Dependencies
@@ -480,12 +480,12 @@ For example, if existing subnets use `172.31.0.0/20` and `172.31.16.0/20`, use `
 ```bash
 cdk synth \
   --profile <YOUR-PROFILE-NAME> \
-  --context githubRepo=specialization-explorer
+  --context githubRepo=knowledge-compass
 
 cdk bootstrap \
   aws://<YOUR_AWS_ACCOUNT_ID>/<YOUR_ACCOUNT_REGION> \
   --profile <YOUR-PROFILE-NAME> \
-  --context githubRepo=specialization-explorer
+  --context githubRepo=knowledge-compass
 ```
 
 **Deploy CDK stack**
@@ -499,7 +499,7 @@ cdk deploy --all \
   --context StackPrefix=<YOUR-STACK-PREFIX> \
   --context environment=dev \
   --context version=1.0.0 \
-  --context githubRepo=specialization-explorer \
+  --context githubRepo=knowledge-compass \
   --profile <YOUR-PROFILE-NAME>
 ```
 
@@ -510,7 +510,7 @@ cdk deploy --all \
   --context StackPrefix=<YOUR-STACK-PREFIX> \
   --context environment=dev \
   --context version=1.0.0 \
-  --context githubRepo=specialization-explorer \
+  --context githubRepo=knowledge-compass \
   --profile my-aws-profile
 ```
 
@@ -525,10 +525,15 @@ The CDK deployment creates the following stacks in dependency order:
 | `<PREFIX>-VpcStack` | VPC, subnets, security groups, and VPC endpoints |
 | `<PREFIX>-Database` | RDS PostgreSQL instance and RDS Proxy |
 | `<PREFIX>-DBFlow` | Database migration Lambda and schema setup |
-| `<PREFIX>-CICD` | CodePipeline and ECR repositories for Docker image builds |
-| `<PREFIX>-KnowledgeBase` | Amazon Bedrock Knowledge Base, OpenSearch Serverless collection, and S3 data source bucket |
-| `<PREFIX>-Api` | API Gateway (REST + WebSocket), all Lambda functions, and Cognito User Pool |
+| `<PREFIX>-CICD` | CodePipeline and the ECR repositories for the crawler and transcriber images |
+| `<PREFIX>-Ingestion` | ECS Fargate cluster and task definitions for the crawler and transcriber, the S3 ingest bucket, and the EventBridge relay that reports Transcribe and ECS task results to the knowledge base Lambda |
+| `<PREFIX>-Api` | API Gateway (REST + WebSocket), all Lambda functions, Cognito User Pool, guardrails, and the operational alarm topic |
 | `<PREFIX>-Amplify` | AWS Amplify app connected to your GitHub repository |
+| `<PREFIX>-Cost` | Cost Anomaly Detection alerts, plus a monthly budget when `-c monthlyBudgetUsd=<amount>` is set |
+| `<PREFIX>-Eval` | Evaluation harness resources; deployed only with `-c enableEval=true` |
+| `<PREFIX>-EvalJobs` | Bedrock evaluation job resources in `evalJobRegion`; deployed only with `-c enableEval=true` when that Region differs from the stack Region |
+
+Embeddings and vector search run on pgvector in the RDS database; there is no Bedrock Knowledge Base or OpenSearch collection.
 
 ### Authorize the GitHub Connection (Required After First Deploy)
 
@@ -537,55 +542,43 @@ The CICD stack creates a GitHub connection via AWS CodeConnections to allow Code
 1. After CDK deployment completes, go to **AWS Console → Developer Tools → Settings → Connections** (or search "CodeConnections").
 2. Find the connection named `<STACK-PREFIX>-CICD-github-conn` with status `Pending`.
 3. Click on it, then click **Update pending connection**.
-4. Follow the prompts to authorize access to your GitHub account and the `specialization-explorer` repository.
+4. Follow the prompts to authorize access to your GitHub account and the `knowledge-compass` repository.
 5. Once authorized, the connection status will change to `Available`.
 
 _Note: The CDK output `GitHubConnectionArn` shows the ARN of this connection for reference._
 
 ### CodePipeline & ECR Image Bootstrapping (First-Time Deployment)
 
-The CICD stack builds and pushes the Docker image for the `vectorIndexManagerSigV4` Lambda to ECR via CodePipeline. The KnowledgeBase stack depends on this image being present before it can create the vector index manager Lambda.
+The CICD stack builds the **crawler** and **transcriber** container images (`cdk/containers/`) and pushes them to ECR through CodePipeline. The Ingestion stack needs both images in ECR before it can finish, because its ECS task definitions run them.
 
 **How it works automatically:**
 
-The KnowledgeBase stack includes an `ecrImageWaiter` custom resource that:
-1. Checks ECR for the `latest` image tag on the `vectorIndexManagerSigV4` repository.
+The Ingestion stack includes an `ecrImageWaiter` custom resource for each image that:
+1. Checks ECR for the `latest` image tag on the repository.
 2. If the image is not found, it **automatically triggers the CodePipeline** to start a build.
 3. It then polls ECR every 30 seconds for up to ~14 minutes waiting for the image to appear.
-4. Once the image is available, the KnowledgeBase stack deployment continues.
+4. Once both images are available, the Ingestion stack deployment continues.
 
-This means in most cases you do not need to manually trigger the pipeline — it is triggered automatically during deployment. However, the GitHub connection **must be authorized** (see above) before the pipeline can successfully pull source code and build the image.
+This means in most cases you do not need to manually trigger the pipeline — it is triggered automatically during deployment. However, the GitHub connection **must be authorized** (see above) before the pipeline can successfully pull source code and build the images. Every image is scanned before it is tagged `latest`; a CRITICAL or HIGH finding blocks the build (see `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts`).
 
-**If the KnowledgeBase stack times out waiting for the image:**
+**If the Ingestion stack times out waiting for an image:**
 
 1. Go to **AWS Console → CodePipeline** → select `<STACK-PREFIX>-CICD-DockerImagePipeline`.
-2. Check if the pipeline failed — a common cause is the GitHub connection not being authorized yet.
-3. Authorize the connection (see above), then click **Release change** to re-run the pipeline.
-4. Once the pipeline completes and the image is in ECR, redeploy: `cdk deploy <STACK-PREFIX>-KnowledgeBase --profile <YOUR-PROFILE-NAME>`.
-
-**Notes:**
-
-- Verify the ECR repository names and tags in the AWS Console or CDK outputs to ensure they match the expected values.
-- After the pipeline successfully completes and the images are pushed, the KnowledgeBase stack should deploy successfully.
+2. Check if the pipeline failed — common causes are the GitHub connection not being authorized yet, or the image scan gate blocking a finding.
+3. Fix the cause, then click **Release change** to re-run the pipeline.
+4. Once the pipeline completes and both images are in ECR, redeploy: `cdk deploy <STACK-PREFIX>-Ingestion --profile <YOUR-PROFILE-NAME>`.
 
 **Troubleshooting:**
 
 - Check the CodePipeline and CodeBuild logs for any errors during the build process.
-- Verify that the required images and tags are present in ECR.
+- Verify that `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` each have a `latest` tag in ECR.
 - Ensure that the IAM roles for CodePipeline and CodeBuild have the necessary permissions to push images to ECR.
 
-> **Tip:** The KnowledgeBase stack waits for a Docker image to exist in ECR before it can complete. To avoid a long wait, authorize the GitHub connection and trigger the pipeline **as soon as the CICD stack finishes** — before the KnowledgeBase stack starts deploying. This is only required for the first deployment; subsequent deploys will automatically trigger a new build if the relevant source code has changed.
+> **Tip:** To avoid a long wait, authorize the GitHub connection and trigger the pipeline **as soon as the CICD stack finishes** — before the Ingestion stack starts deploying. This is only required for the first deployment; later pushes that change `cdk/containers/` trigger a new build automatically.
 >
-> **1. Authorize the GitHub connection (first deployment only):**
-> - Follow the same steps as above to authorize the connection.
->
-> **2. Trigger the CodePipeline build:**
 > - Go to AWS Console → **CodePipeline**
 > - Find `<PREFIX>-CICD-DockerImagePipeline`
 > - Click **Release change** to start the pipeline manually
-> - This kicks off CodeBuild, which builds and pushes the Docker image to ECR
->
-> Once the image is in ECR, the KnowledgeBase stack will detect it and continue deploying without waiting.
 
 ---
 
@@ -720,13 +713,13 @@ _Note: Always read the current value first and append your new origin to avoid r
 
 - Solution: Ensure the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters were created before deployment. See [Step 2: Upload Secrets & Parameters](#step-2-upload-secrets--parameters).
 
-**Issue: Knowledge Base ingestion fails or returns no results**
+**Issue: Knowledge base ingestion fails or returns no results**
 
 - Solution:
-  - Verify the `<PREFIX>-KnowledgeBase` stack deployed successfully in CloudFormation.
-  - Check that the S3 bucket for the knowledge base exists and contains your source documents.
-  - The web crawler data source is created with a `.*` exclusion filter by default — nothing is crawled until you add real URLs via the admin dashboard.
-  - Trigger a manual ingestion job from the Bedrock console under Knowledge Bases.
+  - Verify the `<PREFIX>-Ingestion` stack deployed successfully and both container images are in ECR.
+  - Check the data source's status and error message in the admin dashboard, then the `lambdaKnowledgeBase` CloudWatch logs.
+  - For websites and videos, check the crawler or transcriber ECS task logs in CloudWatch.
+  - Confirm an embedding space is active (admin dashboard → **Search index**). See [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
 
 ## Cleanup
 
@@ -745,10 +738,12 @@ To take down the deployed stack for a fresh redeployment in the future, follow t
 
 2. **Delete CloudFormation Stacks:**
    Navigate to AWS CloudFormation console and delete stacks in this order:
+   - `<STACK-PREFIX>-EvalJobs` and `<STACK-PREFIX>-Eval` (only if deployed with `enableEval`)
+   - `<STACK-PREFIX>-Cost`
    - `<STACK-PREFIX>-Amplify`
-   - `<STACK-PREFIX>-CICD`
    - `<STACK-PREFIX>-Api`
-   - `<STACK-PREFIX>-KnowledgeBase`
+   - `<STACK-PREFIX>-Ingestion` (deletes the ingest bucket and its contents)
+   - `<STACK-PREFIX>-CICD`
    - `<STACK-PREFIX>-DBFlow`
    - `<STACK-PREFIX>-Database`
    - `<STACK-PREFIX>-VpcStack`
@@ -769,15 +764,14 @@ To take down the deployed stack for a fresh redeployment in the future, follow t
      - `/KC/LLM/SonnetArn`
      - `/KC/API/AllowedOrigins`
 
-5. **Delete ECR Repositories** (if any were created):
+5. **Delete ECR Repositories:**
+   - The CICD stack keeps its repositories when it is deleted
    - Navigate to Amazon ECR
-   - Delete repositories created by the stack (e.g. `<STACK-PREFIX>-vectorindexmanagersigv4`)
+   - Delete `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` (lowercase)
 
-6. **Delete Knowledge Base Resources** (if not removed by CloudFormation):
-   - Navigate to **Amazon Bedrock** → Knowledge Bases
-   - Delete the knowledge base created by the stack
-   - Navigate to **Amazon OpenSearch Serverless** → Collections
-   - Delete the collection created by the stack
+6. **Delete the Final Database Snapshot** (optional):
+   - RDS takes a final snapshot when the database is deleted
+   - Delete it under **Amazon RDS** → Snapshots once you no longer need the data
 
 7. **Verify Cleanup**:
    - Check CloudWatch Logs for any remaining log groups
@@ -792,5 +786,5 @@ To take down the deployed stack for a fresh redeployment in the future, follow t
 - NAT Gateways
 - Elastic IPs
 - S3 storage
-- OpenSearch Serverless OCUs
+- RDS snapshots
 - CloudWatch Logs retention

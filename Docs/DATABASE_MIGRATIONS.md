@@ -1,6 +1,6 @@
 # Database Migrations
 
-This document provides comprehensive information about the database migration system used in the Specialization Explorer project.
+This document provides comprehensive information about the database migration system used in the Knowledge Compass project.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ This document provides comprehensive information about the database migration sy
 
 ## Overview
 
-The Specialization Explorer project uses a `node-pg-migrate` system to manage database schema changes with numbered JavaScript files. This provides a reliable, trackable, and automated approach to database schema evolution throughout the project lifecycle.
+The Knowledge Compass project uses a `node-pg-migrate` system to manage database schema changes with numbered JavaScript files. This provides a reliable, trackable, and automated approach to database schema evolution throughout the project lifecycle.
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ The Specialization Explorer project uses a `node-pg-migrate` system to manage da
 
    ```bash
    ls cdk/lambda/db_setup/migrations/ | tail -1
-   # Use next sequential number (e.g., if last is 000, use 001)
+   # Use the next three-digit number (e.g., if the last is 049, use 050)
    ```
 
 2. **Create migration file:**
@@ -64,12 +64,17 @@ The migration system is built on `node-pg-migrate` and consists of:
 
 ```
 cdk/lambda/db_setup/
-├── index.js              # Main entry point, runs node-pg-migrate
-├── initializer.py        # Database initialization utilities
-└── migrations/           # Migration files directory
-    ├── 000_initial_schema.js
-    └── ...
+├── index.js              # Main entry point: runs node-pg-migrate, then creates the app DB users
+├── migrations/           # Migration files, applied in file-name order
+│   ├── 000_initial_schema.js
+│   └── ...
+├── deferred/             # Approved-later changes; never applied by a deploy (see its README)
+└── tests/                # node --test migration tests (npm run test:lambda from cdk/)
 ```
+
+Files are applied in file-name order. A few numbers were used twice by parallel work (`032_`, `033_`, `034_`); that is harmless because names differ, but new migrations should take the next unused number.
+
+The runner is a CDK `TriggerFunction` in the DBFlow stack, so it runs on every deploy of that stack. The Api stack depends on DBFlow, so `cdk deploy --all` applies migrations before deploying code that needs them.
 
 ## Migration Files Structure
 
@@ -142,7 +147,7 @@ exports.up = (pgm) => {
 ### Execution Flow
 
 1. **Migration Discovery**: The system scans the `migrations/` directory for `.js` files
-2. **Sorting**: Files are sorted numerically by their prefix (e.g., `001_`, `002_`)
+2. **Sorting**: Files are sorted by file name, so the three-digit prefix sets the order
 3. **Tracking Check**: Each migration is checked against the `pgmigrations` table
 4. **Execution**: Only unapplied migrations are executed in order
 5. **Recording**: Successfully applied migrations are recorded in the tracking table
@@ -457,39 +462,18 @@ CREATE TABLE table_name (...); // Will fail if table exists
 ### 2. Data Integrity
 
 ```javascript
-// Good: Safe column addition with default
+// Good: new column with a default, then backfill, in one migration
 exports.up = (pgm) => {
-  // Insert default system settings row
   pgm.sql(`
-    INSERT INTO system_settings (
-      max_messages_per_day,
-      min_messages_before_suggest,
-      max_chatacters_per_user_message,
-      max_chatacters_per_ai_message,
-      temperature,
-      top_p,
-      specialization_list,
-      updated_by,
-      updated_at
-    )
-    SELECT
-      45,
-      4,
-      2000,
-      5000,
-      0.2,
-      0.9,
-      ARRAY[]::text[],
-      NULL,
-      now()
-    WHERE NOT EXISTS (SELECT 1 FROM system_settings);
+    ALTER TABLE system_settings
+      ADD COLUMN IF NOT EXISTS max_example_per_day integer NOT NULL DEFAULT 100;
   `);
 
-  // Backfill existing users message count if needed
+  // Backfill rows that need a value other than the default
   pgm.sql(`
-    UPDATE users
-    SET messages_sent = 0
-    WHERE messages_sent IS NULL;
+    UPDATE system_settings
+    SET max_example_per_day = 200
+    WHERE max_messages_per_day > 100;
   `);
 };
 
@@ -602,4 +586,4 @@ exports.up = (pgm) => {
 - Ask team for review of complex migrations
 - Check PostgreSQL documentation for advanced SQL features
 
-This comprehensive migration system ensures safe, trackable, and reliable database schema evolution throughout the Specialization Explorer project lifecycle.
+This comprehensive migration system ensures safe, trackable, and reliable database schema evolution throughout the Knowledge Compass project lifecycle.

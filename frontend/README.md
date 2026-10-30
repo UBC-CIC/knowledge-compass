@@ -1,75 +1,39 @@
-# React + TypeScript + Vite
+# Knowledge Compass — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + TypeScript single-page app built with Vite and Tailwind CSS. It serves the public chat (`/`, `/chat`) and the admin dashboard (`/admin`, sign-in at `/admin/login`). AWS Amplify Hosting builds and serves it (`cdk/lib/amplify-stack.ts`).
 
-Currently, two official plugins are available:
+## Environment
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Amplify sets these at build time from the deployed stacks. For local development, put them in `frontend/.env.local` (ignored by git):
 
-## React Compiler
+| Variable | Value |
+|---|---|
+| `VITE_API_ENDPOINT` | REST API base URL |
+| `VITE_WEBSOCKET_URL` | WebSocket URL including the stage |
+| `VITE_COGNITO_USER_POOL_ID` | Admin Cognito user pool |
+| `VITE_COGNITO_USER_POOL_CLIENT_ID` | Admin user pool app client |
+| `VITE_DEMO_MODE` | Optional. `true` shows scripted demo chats and admin data instead of calling the backend (`src/lib/demo.ts`) |
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+The deployed API only accepts requests from origins listed in `/KC/API/AllowedOrigins` (see the [Deployment Guide](../Docs/DEPLOYMENT_GUIDE.md#adding-custom-allowed-origins)).
 
-Note: This will impact Vite dev & build performances.
+## Commands
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev       # Vite dev server
+npm run build     # type-check and production build
+npm run lint      # ESLint
+npm test          # Vitest
+npm run preview   # serve the production build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Layout
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Path | Contents |
+|---|---|
+| `src/pages/` | Route pages: `HomePage`, `Admin/AdminDashboard`, `Admin/AdminLogin` |
+| `src/components/ChatInterface/` | Chat UI |
+| `src/components/Admin/` | Dashboard sections: data sources, search index (embeddings), prompts, guidelines, settings, analytics, feedback |
+| `src/components/ui/` | shadcn/ui components |
+| `src/providers/` | React context (`UserContext`, `ViewContext`, `SidebarContext`) |
+| `src/lib/` | API client, public token handling, demo mode and helpers |
