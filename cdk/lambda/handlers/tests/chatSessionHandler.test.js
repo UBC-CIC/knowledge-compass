@@ -30,6 +30,10 @@ function sessionSql(owner = USER, extra = () => []) {
     if (text.startsWith("SELECT id, user_id FROM chat_sessions")) {
       return owner ? [{ id: SESSION, user_id: owner }] : [];
     }
+    // checkSessionOwnership: the row only when the caller owns it.
+    if (text.startsWith("SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?")) {
+      return owner && values[1] === owner ? [{ id: SESSION }] : [];
+    }
     return extra(text, values);
   });
 }
@@ -164,7 +168,7 @@ test("rename and delete refuse another user's session", async () => {
       queryStringParameters: { user_id: USER },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.equal(mutations(sql).length, 0, `${httpMethod} must not modify data`);
   }
 });
@@ -222,7 +226,8 @@ test("feedback validates the session id and ownership", async () => {
 
   assert.equal((await get(sessionSql(), "bad-id")).statusCode, 400);
   assert.equal((await get(sessionSql(null))).statusCode, 404);
-  assert.equal((await get(sessionSql(OTHER_USER))).statusCode, 403);
+  // A foreign session answers exactly like a missing one (no existence oracle).
+  assert.deepEqual(await get(sessionSql(OTHER_USER)), await get(sessionSql(null)));
   assert.equal((await get(sessionSql(USER))).statusCode, 200);
 });
 
@@ -236,7 +241,7 @@ test("another user's feedback cannot be read or overwritten", async () => {
       pathParameters: { chat_session_id: SESSION },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.ok(!sql.queries().some((q) => q.text.includes("session_feedback")));
   }
 });

@@ -263,20 +263,16 @@ exports.handler = async (event) => {
           break;
         }
 
-        // Validate chat session exists AND belongs to user
+        // The session must belong to the caller. Missing and foreign sessions
+        // get the same 404, so no guest can probe another family's session ids.
         const chatSession = await sqlConnection`
-          SELECT id, user_id
+          SELECT id
           FROM chat_sessions
-          WHERE id = ${chatSessionId}
+          WHERE id = ${chatSessionId} AND user_id = ${userId}
         `;
         if (chatSession.length === 0) {
           response.statusCode = 404;
           response.body = JSON.stringify({ error: "Chat session not found" });
-          break;
-        }
-        if (chatSession[0].user_id !== userId) {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "You can only access your own chat sessions" });
           break;
         }
 

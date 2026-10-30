@@ -84,26 +84,23 @@ const queryUserId = (event) =>
   event.queryStringParameters?.user_id || event.queryStringParameters?.user_session_id;
 
 // Validates the session id and confirms `userId` (the token's user) owns it.
-// Returns null on success, or { statusCode, error } to send back.
-const checkSessionOwnership = async (chatSessionId, userId, forbiddenMessage) => {
+// Returns null on success, or { statusCode, error } to send back. A missing
+// and a foreign session get the same 404, so no guest can tell whether
+// another family's session id exists (as in textGeneration's
+// session_security.py, finding f-c5ba1a1b).
+const SESSION_NOT_FOUND = { statusCode: 404, error: "Chat session not found" };
+
+const checkSessionOwnership = async (chatSessionId, userId) => {
   const sessionCheck = validateUUID(chatSessionId, "chat_session_id");
   if (!sessionCheck.valid) return { statusCode: 400, error: sessionCheck.error };
 
   const chatSession = await sqlConnection`
-    SELECT id, user_id
+    SELECT id
     FROM chat_sessions
-    WHERE id = ${chatSessionId}
+    WHERE id = ${chatSessionId} AND user_id = ${userId}
   `;
 
-  if (chatSession.length === 0) {
-    return { statusCode: 404, error: "Chat session not found" };
-  }
-
-  if (chatSession[0].user_id !== userId) {
-    return { statusCode: 403, error: forbiddenMessage };
-  }
-
-  return null;
+  return chatSession.length === 0 ? SESSION_NOT_FOUND : null;
 };
 
 const reject = (response, failure) => {
@@ -276,9 +273,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only rename your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -313,9 +308,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only delete your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -347,9 +340,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -398,9 +389,7 @@ exports.handler = async (event) => {
         }
         const comment = sanitizeString(body.comment, FEEDBACK_COMMENT_MAX_LENGTH);
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
