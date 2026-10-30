@@ -200,12 +200,6 @@ export class CICDStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal("codebuild.amazonaws.com"),
     });
 
-    codeBuildRole.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName(
-        "AmazonEC2ContainerRegistryPowerUser"
-      )
-    );
-
     const lambdaUpdateArns = props.lambdaFunctions.map(
       (fn) => `arn:aws:lambda:${this.region}:${this.account}:function:${fn.functionName}`
     );
@@ -222,9 +216,11 @@ export class CICDStack extends cdk.Stack {
       })
     );
 
-    // The ECR scan gate reads scan results and retags the scanned candidate as
-    // `latest`. AmazonEC2ContainerRegistryPowerUser currently overlaps these on
-    // `*`; this keeps the gate working, scoped to its own repos, if it is removed.
+    // ECR access is limited to this pipeline's own repositories (finding
+    // f-f3a99fb0: the AmazonEC2ContainerRegistryPowerUser managed policy used
+    // to grant push/overwrite/delete on every repository in the account).
+    // Builds push here and the scan gate reads scan results and retags the
+    // scanned candidate as `latest`. Base images come from public registries.
     const ecrRepoArns = props.lambdaFunctions.map(
       (fn) => `arn:aws:ecr:${this.region}:${this.account}:repository/${id.toLowerCase()}-${fn.name.toLowerCase()}`
     );
@@ -233,12 +229,27 @@ export class CICDStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: [
+          // docker push
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:GetDownloadUrlForLayer",
+          // scan gate
           "ecr:DescribeImages",
           "ecr:DescribeImageScanFindings",
           "ecr:BatchGetImage",
           "ecr:PutImage",
         ],
         resources: ecrRepoArns,
+      })
+    );
+    // `docker login`: GetAuthorizationToken has no resource-level permissions.
+    codeBuildRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["ecr:GetAuthorizationToken"],
+        resources: ["*"],
       })
     );
 

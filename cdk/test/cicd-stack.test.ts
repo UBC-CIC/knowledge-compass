@@ -142,6 +142,24 @@ describe("CICDStack", () => {
     expect(resources).toContain("arn:aws:ecr:ca-central-1:111111111111:repository/kc-cicd-crawler");
     expect(resources).not.toContain("*");
   });
+
+  test("the build role has no account-wide ECR write (f-f3a99fb0)", () => {
+    const roles = Object.values(template.findResources("AWS::IAM::Role"));
+    expect(JSON.stringify(roles)).not.toContain("AmazonEC2ContainerRegistryPowerUser");
+    const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement as { Action: string | string[]; Resource: unknown }[]
+    );
+    for (const s of statements) {
+      const actions = ([] as string[]).concat(s.Action);
+      const ecrActions = actions.filter((a) => a.startsWith("ecr:"));
+      if (ecrActions.length === 0) continue;
+      if (([] as unknown[]).concat(s.Resource).includes("*")) {
+        expect(ecrActions).toEqual(["ecr:GetAuthorizationToken"]);
+      }
+    }
+    const push = statements.find((s) => ([] as string[]).concat(s.Action).includes("ecr:CompleteLayerUpload"));
+    expect(([] as unknown[]).concat(push!.Resource)).not.toContain("*");
+  });
 });
 
 // Runs the exact shipped gate script against stubbed `aws`/`docker` shell
