@@ -102,14 +102,8 @@ Each chunk → one `chunks` row with:
 
 ## How to Generate the Transcribe JSON
 
-```
-Admin uploads video file (mp4, mov, webm, etc.) to S3
-    → AWS Console or CLI: start a Transcribe job pointing at the S3 file
-    → Transcribe outputs JSON to a specified S3 output bucket
-    → Download the JSON and pass it to transcrbe.py
-```
+Local testing only: production starts Transcribe automatically (see [Production Flow](#production-flow)). To get a JSON to pass to `transcrbe.py`:
 
-AWS CLI example:
 ```bash
 # Start job
 aws transcribe start-transcription-job \

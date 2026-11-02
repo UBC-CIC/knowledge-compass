@@ -4,11 +4,6 @@ Container image sources for the pgvector ingestion pipeline. These are built by
 the CICD pipeline (`cdk/lib/cicd-stack.ts`, wired from `cdk/bin/cdk.ts`) into
 ECR images and run as ECS Fargate tasks (`cdk/lib/ingestion-stack.ts`).
 
-Knowledge Compass is a RAG-powered conversational assistant for Inclusion
-Canada, helping families navigate inclusive education in Canada. Retrieval is
-backed by a unified `sources` + `chunks` pgvector schema, so a single query
-covers both web content and video transcripts.
-
 ---
 
 ## Directory Structure
@@ -96,22 +91,7 @@ through RDS Proxy with the database secret (`DB_AUTH=secret`, set on every
 
 ## Database Schema
 
-Migrations live in `cdk/lambda/db_setup/migrations/`. The relevant ones for
-this pipeline:
-
-| Migration | Tables Added / Changed | Purpose |
-|---|---|---|
-| `000_initial_schema.js` | users, chat_*, system_*, data_sources, ingestion_runs | Base app schema (+ `vector` extension) |
-| `001_unified_chunks.js` | `sources`, `chunks`; extends `ingestion_runs` | Unified pgvector retrieval corpus + unified ingestion-run model |
-
-**`sources` table:** one row per ingested source.
-- `source_type`: `'web'` or `'video'` from these pipelines (`'document'`, `'csv_link'` and `'csv_row'` come from the knowledge base Lambda)
-- `url`: canonical URL (web page URL or YouTube link)
-
-**`chunks` table:** one row per embedded text chunk.
-- `embedding vector(1024)`: legacy column, no longer written by the ingestion containers (kept until the cleanup migration). Vectors live in `chunk_embeddings`, one row per (chunk, embedding space), written by the crawler and transcriber for the ACTIVE space only. The model, dimension, batch size and `split_threshold` come from the database (`embedding_active_space` / `embedding_spaces`), not from the ECS task definition; `EMBED_MODEL_ID` / `EMBED_BATCH_SIZE` are deprecated fallbacks for standalone crawl-only runs without database access
-- `metadata jsonb`: type-specific fields — web: `{"heading_path": "..."}`, video: `{"chunk_start": "HH:MM:SS", "chunk_end": "HH:MM:SS"}`
-- `content_hash`: sha256 first 16 hex chars of body — used for change detection on re-ingest
+The tasks write `sources` (`source_type` `'web'` or `'video'`), `chunks` and `chunk_embeddings` (active space only; the model, dimension and batch size come from `embedding_active_space` / `embedding_spaces`, not the task definition). See [Components](../../Docs/KNOWLEDGE_BASE_DOCUMENTATION.md#components) and [Ingestion Paths](../../Docs/KNOWLEDGE_BASE_DOCUMENTATION.md#ingestion-paths).
 
 ---
 

@@ -2,8 +2,6 @@
 
 ## Table of Contents
 
-- [Deployment Guide](#deployment-guide)
-- [Table of Contents](#table-of-contents)
 - [Requirements](#requirements)
   - [Request Higher Bedrock LLM Invocation Quotas](#request-higher-bedrock-llm-invocation-quotas)
 - [Pre-Deployment](#pre-deployment)
@@ -12,112 +10,61 @@
   - [Step 1: Fork \& Clone The Repository](#step-1-fork--clone-the-repository)
   - [Step 2: Upload Secrets \& Parameters](#step-2-upload-secrets--parameters)
   - [Step 3: CDK Deployment](#step-3-cdk-deployment)
+    - [CDK Deployment with an Existing VPC (Optional)](#cdk-deployment-with-an-existing-vpc-optional)
+    - [Initialize the CDK stack](#initialize-the-cdk-stack)
+    - [Deploy the stacks](#deploy-the-stacks)
+    - [Optional context flags](#optional-context-flags)
+    - [Stacks Deployed](#stacks-deployed)
+  - [Step 4: Authorize the GitHub Connection and Build the Images](#step-4-authorize-the-github-connection-and-build-the-images)
 - [Post-Deployment](#post-deployment)
   - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
   - [Step 2: Configure Admin User](#step-2-configure-admin-user)
   - [Step 3: Visit Web App](#step-3-visit-web-app)
+  - [Adding Custom Allowed Origins](#adding-custom-allowed-origins)
 - [Troubleshooting](#troubleshooting)
-  - [Common Issues](#common-issues)
 - [Cleanup](#cleanup)
-  - [Taking down the deployed stack](#taking-down-the-deployed-stack)
 
 ## Requirements
 
-Before you deploy, you must have the following installed on your device:
+Accounts: [AWS](https://aws.amazon.com/account/) and [GitHub](https://github.com/).
+
+Tools:
 
 - [git](https://git-scm.com/downloads)
-- [AWS Account](https://aws.amazon.com/account/)
-- [GitHub Account](https://github.com/)
-- [AWS CLI](https://aws.amazon.com/cli/) _(v2.0.0+ required)_
-- [AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/cli.html) _(v2.1022.0+ required)_
-- [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) _(v10.0.0+ required)_
-- [node](https://nodejs.org/en/learn/getting-started/how-to-install-nodejs) _(v22.7.9+ required)_
-- [Python](https://www.python.org/downloads/) _(v3.12+ required)_
+- [AWS CLI](https://aws.amazon.com/cli/) v2
+- [Node.js](https://nodejs.org/en/download) 22 LTS with npm 10+
+- [Python](https://www.python.org/downloads/) 3.12
+- AWS CDK CLI: installed by `npm ci` in `cdk/`; run it as `npx cdk`
 
 ### Request Higher Bedrock LLM Invocation Quotas
 
-For optimal performance, it is recommended to request higher invocation quotas for Bedrock LLM models before deployment. The default quotas may be insufficient for processing concurrent requests or high-volume usage.
-
-For detailed information about Bedrock service quotas, see the [AWS Bedrock Service Quotas documentation](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
-
-To request quota increases:
-
-1. Navigate to the **AWS Service Quotas** console in your AWS account
-2. Search for "Bedrock" in the service quotas
-3. Select the relevant LLM models you plan to use:
-   - Anthropic Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`)
-   - Amazon Titan Text Embeddings V2 (the embedding model of a new install; deployments created before migration 049 use Cohere Embed V3 until they switch)
-4. Request quota increases for "Requests per minute" based on your expected usage
-5. Submit the quota increase request and wait for AWS approval (this can take 24-48 hours)
-
-_Note: Consider your expected concurrent users and document processing volume when requesting quota increases. Higher quotas ensure smoother operations without throttling._
+Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and your embedding model (Amazon Titan Text Embeddings V2 on a new install; Cohere Embed V3 on deployments created before migration 049). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
 
 ## Pre-Deployment
 
 ### Create GitHub Personal Access Token
 
-To deploy this solution, you will need to generate a GitHub personal access token. Please visit [here](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) for detailed instruction to create a personal access token.
-
-_Note: Make sure to give access to only the KC repository. Enable Read-only for Contents, and Metadata. For webhooks and Commit statuses enable read and write permissions._
-
-**Once you create a token, please note down its value as you will use it later in the deployment process.**
+Create a [fine-grained personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) with access to the KC repository only: read-only for Contents and Metadata, read and write for Webhooks and Commit statuses. Keep its value for Step 2.
 
 ## Deployment
 
 ### Step 1: Fork & Clone The Repository
 
-First, you need to fork the repository. To create a fork, navigate to the main branch of this repository. Then, in the top-right corner, click `Fork`.
-
-You will be directed to the page where you can customize owner, repository name, etc, but you do not have to change any option. Simply click `Create fork` in the bottom right corner.
-
-Now let's clone the GitHub repository onto your machine. To do this:
-
-1. Create a folder on your computer to contain the project code.
-2. For an Apple computer, open Terminal. If on a Windows machine, open Command Prompt or Windows Terminal. Enter into the folder you made using the command `cd path/to/folder`. To find the path to a folder on a Mac, right click on the folder and press `Get Info`, then select the whole text found under `Where:` and copy with ⌘C. On Windows (not WSL), enter into the folder on File Explorer and click on the path box (located to the left of the search bar), then copy the whole text that shows up.
-3. Clone the GitHub repository by entering the following command. Be sure to replace `<YOUR-GITHUB-USERNAME>` with your own username.
+Fork this repository on GitHub (**Fork**, then **Create fork**), then clone your fork and install dependencies:
 
 ```bash
 git clone https://github.com/<YOUR-GITHUB-USERNAME>/knowledge-compass.git
-```
-
-The code should now be in the folder you created. Navigate into the root folder containing the entire codebase by running the command:
-
-```bash
-cd knowledge-compass
-```
-
-#### Install Dependencies
-
-Go into the cdk folder which can be done with the following command:
-
-```bash
-cd cdk
-```
-
-Now that you are in the cdk directory, install the core dependencies with the following command:
-
-```bash
-npm install
-```
-
-Go into the frontend folder which can be done with the following command:
-
-```bash
-cd ../frontend
-```
-
-Now that you are in the frontend directory, install the core dependencies with the following command:
-
-```bash
-npm install
+cd knowledge-compass/cdk && npm ci
+cd ../frontend && npm ci
 ```
 
 ### Step 2: Upload Secrets & Parameters
 
-You would have to supply your GitHub personal access token you created earlier when deploying the solution. Run the following command and ensure you replace `<YOUR-GITHUB-TOKEN>` and `<YOUR-PROFILE-NAME>` with your actual GitHub token and the appropriate AWS profile name.
+Commands in this guide use bash. On Windows, use Git Bash or WSL. In PowerShell, replace the line-continuation `\` with a backtick and escape the inner JSON double quotes as `\"` (see the example after the two secrets).
 
-<details>
-<summary>macOS/Linux</summary>
+Replace `<YOUR-PROFILE-NAME>` with your AWS CLI profile in every command.
+
+GitHub personal access token:
 
 ```bash
 aws secretsmanager create-secret \
@@ -126,38 +73,7 @@ aws secretsmanager create-secret \
   --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
-
-<details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws secretsmanager create-secret ^
-  --name github-personal-access-token ^
-  --secret-string "{\"my-github-token\": \"<YOUR-GITHUB-TOKEN>\"}" ^
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-aws secretsmanager create-secret `
-  --name github-personal-access-token `
-  --secret-string '{\"my-github-token\": \"<YOUR-GITHUB-TOKEN>\"}' `
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-You will need to upload your GitHub username to Amazon SSM Parameter Store. Replace `<YOUR-GITHUB-USERNAME>` and `<YOUR-PROFILE-NAME>` accordingly.
-
-<details>
-<summary>macOS/Linux</summary>
+GitHub username (the owner of your fork):
 
 ```bash
 aws ssm put-parameter \
@@ -167,66 +83,24 @@ aws ssm put-parameter \
   --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
-
-<details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws ssm put-parameter ^
-  --name "KC-owner-name" ^
-  --value "<YOUR-GITHUB-USERNAME>" ^
-  --type String ^
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-aws ssm put-parameter `
-  --name "KC-owner-name" `
-  --value "<YOUR-GITHUB-USERNAME>" `
-  --type String `
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-You would have to supply a custom database username when deploying the solution to increase security. Run the following command and ensure you replace `<YOUR-DB-USERNAME>` with the custom name of your choice.
-
-<details>
-<summary>macOS/Linux</summary>
+Database username of your choice (for example `KCDatabaseUser`):
 
 ```bash
 aws secretsmanager create-secret \
   --name KCSecrets \
-  --secret-string "{\"DB_Username\":\"<YOUR-DB-USERNAME>\"}" \
+  --secret-string '{"DB_Username":"<YOUR-DB-USERNAME>"}' \
   --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
-
 <details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws secretsmanager create-secret ^
-  --name KCSecrets ^
-  --secret-string "{\"DB_Username\":\"<YOUR-DB-USERNAME>\"}" ^
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
+<summary>PowerShell version of the two secrets</summary>
 
 ```powershell
+aws secretsmanager create-secret `
+  --name github-personal-access-token `
+  --secret-string '{\"my-github-token\": \"<YOUR-GITHUB-TOKEN>\"}' `
+  --profile <YOUR-PROFILE-NAME>
+
 aws secretsmanager create-secret `
   --name KCSecrets `
   --secret-string '{\"DB_Username\": \"<YOUR-DB-USERNAME>\"}' `
@@ -235,76 +109,20 @@ aws secretsmanager create-secret `
 
 </details>
 
-&nbsp;
-
-For example:
-
-```bash
-aws secretsmanager create-secret \
-  --name KCSecrets \
-  --secret-string '{"DB_Username":"KCDatabaseUser"}' \
-  --profile <YOUR-PROFILE-NAME>
-```
-
-In order to restrict user sign up to specific email domains, upload a comma-separated list of allowed email domains to Amazon SSM Parameter Store. Replace `<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>` and `<YOUR-PROFILE-NAME>` accordingly.
-
-<details>
-<summary>macOS/Linux</summary>
+Allowed email domains for **admin** sign-up, as a comma-separated list. The Cognito pre-sign-up trigger rejects any other domain. Public users never sign up, so this list does not affect them.
 
 ```bash
 aws ssm put-parameter \
     --name "/KC/AllowedEmailDomains" \
-    --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" \
+    --value "inclusioncanada.ca" \
     --type SecureString \
     --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
+The application uses Claude Haiku 5.5 for all text generation. It reads the model from two SSM parameters (one per role); set both to the same Haiku 5.5 ID. You must create both before deploying.
 
-<details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws ssm put-parameter ^
-    --name "/KC/AllowedEmailDomains" ^
-    --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" ^
-    --type SecureString ^
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-aws ssm put-parameter `
-    --name "/KC/AllowedEmailDomains" `
-    --value "<YOUR-ALLOWED-EMAIL-DOMAIN-LIST>" `
-    --type SecureString `
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-For example:
-
-```bash
-aws ssm put-parameter \
-    --name "/KC/AllowedEmailDomains" \
-    --value "gmail.com,ubc.ca,student.ubc.ca" \
-    --type SecureString \
-    --profile <YOUR-PROFILE-NAME>
-```
-
-The application uses Claude Haiku 5.5 for all text generation. It reads the model from two SSM parameters (one per role); set both to the same Haiku 5.5 ID. You must create both parameters before deploying.
-
-**HaikuArn** (router, detective replies, grounding check, titles, guideline labelling):
-
-<details>
-<summary>macOS/Linux</summary>
+- `/KC/LLM/HaikuArn`: router, detective replies, grounding check, titles, guideline labelling.
+- `/KC/LLM/SonnetArn`: partial and suggestion replies (the name is historical).
 
 ```bash
 aws ssm put-parameter \
@@ -312,44 +130,7 @@ aws ssm put-parameter \
     --value "us.anthropic.claude-haiku-5-5" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
-```
 
-</details>
-
-<details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws ssm put-parameter ^
-    --name "/KC/LLM/HaikuArn" ^
-    --value "us.anthropic.claude-haiku-5-5" ^
-    --type String ^
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-aws ssm put-parameter `
-    --name "/KC/LLM/HaikuArn" `
-    --value "us.anthropic.claude-haiku-5-5" `
-    --type String `
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-**SonnetArn** (partial and suggestion replies; the name is historical):
-
-<details>
-<summary>macOS/Linux</summary>
-
-```bash
 aws ssm put-parameter \
     --name "/KC/LLM/SonnetArn" \
     --value "us.anthropic.claude-haiku-5-5" \
@@ -357,49 +138,11 @@ aws ssm put-parameter \
     --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
-
-<details>
-<summary>Windows CMD</summary>
-
-```cmd
-aws ssm put-parameter ^
-    --name "/KC/LLM/SonnetArn" ^
-    --value "us.anthropic.claude-haiku-5-5" ^
-    --type String ^
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-aws ssm put-parameter `
-    --name "/KC/LLM/SonnetArn" `
-    --value "us.anthropic.claude-haiku-5-5" `
-    --type String `
-    --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-
-
-
-
 ### Step 3: CDK Deployment
 
-It's time to set up everything that goes on behind the scenes! For more information on how the backend works, feel free to refer to the Architecture documentation, but an understanding of the backend is not necessary for deployment.
+The CDK deployment also creates the Bedrock guardrail; see [`BEDROCK_GUARDRAILS.md`](./BEDROCK_GUARDRAILS.md) to customize it.
 
-If you are new to CDK, note that the AWS Cloud Development Kit (CDK) lets you define cloud infrastructure using code. Review the [AWS CDK Documentation](https://docs.aws.amazon.com/cdk/) for a quick primer before proceeding.
-
-Note: Guardrails (Bedrock) are created as part of the CDK deployment. For operational guidance and advanced customization of guardrails and Bedrock configuration, see `Docs/BEDROCK_GUARDRAILS.md`.
-
-Open a terminal in the `/cdk` directory.
+Run the commands below from the `cdk/` directory.
 
 #### CDK Deployment with an Existing VPC (Optional)
 
@@ -433,7 +176,7 @@ You can find this in the **CloudFormation** console under **Stacks**. Look for a
 
 ![AWS Control Tower Stack Set](media/AWSControlTowerStack.png)
 
-The stack set name is used to import the private subnet IDs, route table IDs, and subnet CIDR ranges via CloudFormation exports — so it must match exactly.
+The stack set name is used to import the private subnet IDs, route table IDs, and subnet CIDR ranges via CloudFormation exports, so it must match exactly.
 
 ---
 
@@ -475,46 +218,44 @@ For example, if existing subnets use `172.31.0.0/20` and `172.31.16.0/20`, use `
 
 #### Initialize the CDK stack
 
-**Initialize the CDK stack** (required only if you have not deployed any resources with CDK in this region before). Please replace `<YOUR-PROFILE-NAME>` with the appropriate AWS profile used earlier.
+Bootstrap once per account and Region (skip if CDK has already been bootstrapped there):
 
 ```bash
-cdk synth \
-  --profile <YOUR-PROFILE-NAME> \
-  --context githubRepo=knowledge-compass
-
-cdk bootstrap \
-  aws://<YOUR_AWS_ACCOUNT_ID>/<YOUR_ACCOUNT_REGION> \
-  --profile <YOUR-PROFILE-NAME> \
-  --context githubRepo=knowledge-compass
+npx cdk bootstrap aws://<YOUR_AWS_ACCOUNT_ID>/<YOUR_ACCOUNT_REGION> --profile <YOUR-PROFILE-NAME>
 ```
 
-**Deploy CDK stack**
-
-You may run the following command to deploy the stacks all at once. Again, replace `<YOUR-PROFILE-NAME>` with the appropriate AWS profile used earlier. Also replace `<YOUR-STACK-PREFIX>` with the appropriate stack prefix.
-
-The stack prefix will be prefixed onto the physical names of the resources created during deployment. The `environment` parameter specifies the deployment environment (dev, test, prod), the `version` parameter indicates the application version being deployed, and the `githubRepo` parameter should match your forked repository name.
+#### Deploy the stacks
 
 ```bash
-cdk deploy --all \
+npx cdk deploy --all \
   --context StackPrefix=<YOUR-STACK-PREFIX> \
   --context environment=dev \
-  --context version=1.0.0 \
+  --context versionNumber=1.0.0 \
   --context githubRepo=knowledge-compass \
   --profile <YOUR-PROFILE-NAME>
 ```
 
-For example:
+- `StackPrefix` is prefixed onto the stack names and the physical names of their resources.
+- `environment` (`dev`, `test`, `prod`) sets the `Environment` tag and the CICD environment name; it defaults to `dev`.
+- `versionNumber` is informational only; no stack uses it.
+- `githubRepo` must match your fork's repository name.
 
-```bash
-cdk deploy --all \
-  --context StackPrefix=<YOUR-STACK-PREFIX> \
-  --context environment=dev \
-  --context version=1.0.0 \
-  --context githubRepo=knowledge-compass \
-  --profile my-aws-profile
-```
+Deployment takes 15–30 minutes. You will be asked to approve IAM and security group changes. During the deploy, complete [Step 4](#step-4-authorize-the-github-connection-and-build-the-images) as soon as the CICD stack finishes.
 
-**Note:** The deployment process may take 15-30 minutes to complete. You will be prompted to approve IAM changes and security group modifications during deployment.
+#### Optional context flags
+
+Add any of these as `--context <flag>=<value>` to the deploy command. For any shared environment, set `alarmEmail` and `lifecycleAlertEmail`; without them, alarms and model lifecycle alerts have no subscriber.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `githubBranch` | `main` | Adds an Amplify branch (when not `main`), sets the CICD source branch, and sets the origin written to AllowedOrigins (`https://<githubBranch>.<app-id>.amplifyapp.com`) |
+| `alarmEmail` | none | Subscribes the address to the operational alarm topic |
+| `lifecycleAlertEmail` / `lifecycleAlertEmailParam` | none | Subscribes to the model lifecycle alert topic. `lifecycleAlertEmailParam` is the name of an SSM String parameter holding the address; `lifecycleAlertEmail` wins if both are set |
+| `monthlyBudgetUsd` | none | Creates a monthly AWS Budget in `<PREFIX>-Cost` with 50/80/100 % alerts to the alarm topic |
+| `enableReservedConcurrency` | `false` | Reserves concurrency for the public Lambdas. The deploy fails unless the account Lambda concurrency quota is at least 350 |
+| `enableEval` | `false` | Adds the `<PREFIX>-Eval` stack ([EVALS.md](./EVALS.md)) |
+| `evalJobRegion` | stack Region | Region for Bedrock evaluation jobs; adds `<PREFIX>-EvalJobs` when it differs from the stack Region |
+| `evalJudgeModels` | `us.anthropic.claude-opus-4-6-v1` | Comma-separated judge model or inference profile IDs |
 
 #### Stacks Deployed
 
@@ -533,109 +274,65 @@ The CDK deployment creates the following stacks in dependency order:
 | `<PREFIX>-Eval` | Evaluation harness resources; deployed only with `-c enableEval=true` |
 | `<PREFIX>-EvalJobs` | Bedrock evaluation job resources in `evalJobRegion`; deployed only with `-c enableEval=true` when that Region differs from the stack Region |
 
-Embeddings and vector search run on pgvector in the RDS database; there is no Bedrock Knowledge Base or OpenSearch collection.
+Embeddings and vector search run on pgvector in the RDS database.
 
-### Authorize the GitHub Connection (Required After First Deploy)
+### Step 4: Authorize the GitHub Connection and Build the Images
 
-The CICD stack creates a GitHub connection via AWS CodeConnections to allow CodePipeline to pull source code. This connection must be **manually authorized** in the AWS Console before the pipeline can run — it will remain in a `PENDING` state until you do this.
+The CICD stack creates a CodeConnections GitHub connection that stays `PENDING` until you authorize it. The Ingestion stack cannot finish until CodePipeline has pushed the crawler and transcriber images to ECR.
 
-1. After CDK deployment completes, go to **AWS Console → Developer Tools → Settings → Connections** (or search "CodeConnections").
-2. Find the connection named `<STACK-PREFIX>-CICD-github-conn` with status `Pending`.
-3. Click on it, then click **Update pending connection**.
-4. Follow the prompts to authorize access to your GitHub account and the `knowledge-compass` repository.
-5. Once authorized, the connection status will change to `Available`.
+1. When `<STACK-PREFIX>-CICD` finishes, open **Developer Tools → Settings → Connections**, select `<STACK-PREFIX>-CICD-github-conn`, click **Update pending connection** and authorize your GitHub account and the `knowledge-compass` repository. The status changes to `Available`. (The CDK output `GitHubConnectionArn` names this connection.)
+2. The Ingestion stack's `ecrImageWaiter` custom resource starts `<STACK-PREFIX>-CICD-DockerImagePipeline` if an image is missing, then waits up to about 14 minutes for both `latest` tags. Every image is scanned before it is tagged `latest`; a CRITICAL or HIGH finding blocks the build (see `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts`).
+3. If the Ingestion stack times out, open the pipeline in **CodePipeline**, fix the failure (usually an unauthorized connection or a blocked scan finding), click **Release change**, and when `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` both have a `latest` tag in ECR, redeploy:
 
-_Note: The CDK output `GitHubConnectionArn` shows the ARN of this connection for reference._
+   ```bash
+   npx cdk deploy <YOUR-STACK-PREFIX>-Ingestion \
+     --context StackPrefix=<YOUR-STACK-PREFIX> \
+     --context environment=dev \
+     --context versionNumber=1.0.0 \
+     --context githubRepo=knowledge-compass \
+     --profile <YOUR-PROFILE-NAME>
+   ```
 
-### CodePipeline & ECR Image Bootstrapping (First-Time Deployment)
+   Use the same `--context` values as your `--all` deploy, including any optional flags you set.
 
-The CICD stack builds the **crawler** and **transcriber** container images (`cdk/containers/`) and pushes them to ECR through CodePipeline. The Ingestion stack needs both images in ECR before it can finish, because its ECS task definitions run them.
-
-**How it works automatically:**
-
-The Ingestion stack includes an `ecrImageWaiter` custom resource for each image that:
-1. Checks ECR for the `latest` image tag on the repository.
-2. If the image is not found, it **automatically triggers the CodePipeline** to start a build.
-3. It then polls ECR every 30 seconds for up to ~14 minutes waiting for the image to appear.
-4. Once both images are available, the Ingestion stack deployment continues.
-
-This means in most cases you do not need to manually trigger the pipeline — it is triggered automatically during deployment. However, the GitHub connection **must be authorized** (see above) before the pipeline can successfully pull source code and build the images. Every image is scanned before it is tagged `latest`; a CRITICAL or HIGH finding blocks the build (see `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts`).
-
-**If the Ingestion stack times out waiting for an image:**
-
-1. Go to **AWS Console → CodePipeline** → select `<STACK-PREFIX>-CICD-DockerImagePipeline`.
-2. Check if the pipeline failed — common causes are the GitHub connection not being authorized yet, or the image scan gate blocking a finding.
-3. Fix the cause, then click **Release change** to re-run the pipeline.
-4. Once the pipeline completes and both images are in ECR, redeploy: `cdk deploy <STACK-PREFIX>-Ingestion --profile <YOUR-PROFILE-NAME>`.
-
-**Troubleshooting:**
-
-- Check the CodePipeline and CodeBuild logs for any errors during the build process.
-- Verify that `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` each have a `latest` tag in ECR.
-- Ensure that the IAM roles for CodePipeline and CodeBuild have the necessary permissions to push images to ECR.
-
-> **Tip:** To avoid a long wait, authorize the GitHub connection and trigger the pipeline **as soon as the CICD stack finishes** — before the Ingestion stack starts deploying. This is only required for the first deployment; later pushes that change `cdk/containers/` trigger a new build automatically.
->
-> - Go to AWS Console → **CodePipeline**
-> - Find `<PREFIX>-CICD-DockerImagePipeline`
-> - Click **Release change** to start the pipeline manually
-
----
-
-
+This is needed only on the first deployment. Later pushes that change `cdk/containers/` start a new build automatically.
 
 ## Post-Deployment
 
 ### Step 1: Build AWS Amplify App
 
-1. Log in to AWS console, and navigate to **AWS Amplify**. You can do so by typing `Amplify` in the search bar at the top.
-2. From `All apps`, click `<STACK-PREFIX>-amplify`.
-3. You will see multiple branches listed (`main`, `dev`, `api_endpoint_setup`). Click on the branch that corresponds to your GitHub repository's default branch (typically `main`).
-4. Click `Redeploy this version` to trigger a build
-5. Wait for the build to complete (this may take 5-10 minutes)
-6. You now have access to the `Amplify App ID` and the public domain name to use the web app.
+1. In the AWS console, open **AWS Amplify** and select `<STACK-PREFIX>-Amplify-amplify` under **All apps**.
+2. Select the `main` branch (or your `githubBranch` if you set one).
+3. Click **Redeploy this version** and wait for the build (5–10 minutes).
+4. The app page shows the `Amplify App ID` and the web app domain.
 
 ### Step 2: Configure Admin User
 
-To create an admin user for accessing the admin dashboard:
+To create the first admin user:
 
-1. Navigate to **AWS Cognito** in the AWS Console
-2. Find the User Pool named `<STACK-PREFIX>-UserPool`
-3. Click on "Users" in the left sidebar
-4. Click "Create user"
-5. Fill in the required information:
-   - Username: your email address
-   - Email: same as username
-   - Temporary password: create a secure password
-6. Click "Don't send an email invitation"
-7. Click "Create user"
-8. After creation, select the user and click "Add user to group"
-9. Select the "admin" group
-10. On first login, you'll be prompted to change your password
+1. Open **Amazon Cognito** and select the user pool `<STACK-PREFIX>-Api-UserPool`.
+2. Click **Users**, then **Create user**.
+3. Enter your email address as the username and email, and a temporary password.
+4. Choose **Don't send an email invitation**, then **Create user**.
+5. Select the user, click **Add user to group**, and choose `admin`.
+6. At first sign-in you set a new password and an authenticator app (TOTP MFA is required).
 
-Once one admin exists, further admins can be added through the API instead of the console: `POST /admin/users` with `{ "display_name": "...", "email": "..." }` (admin ID token in `Authorization`). It creates the Cognito user, adds it to the `admin` group and records the admin in the database. Cognito emails the new admin a temporary password, and they set up an authenticator app at first sign-in. The email must be in an allowed sign-up domain (`ALLOWED_EMAIL_DOMAINS`). If the email already has a Cognito account, it is added to the `admin` group instead (response `200` rather than `201`).
+Once one admin exists, add further admins through the API: `POST /admin/users` with `{ "display_name": "...", "email": "..." }` (admin ID token in `Authorization`). It creates the Cognito user, adds it to the `admin` group and records the admin in the database. Cognito emails the new admin a temporary password. The email must be in an allowed sign-up domain (`/KC/AllowedEmailDomains`). If the email already has a Cognito account, it is added to the `admin` group instead (response `200` rather than `201`).
 
 ### Step 3: Visit Web App
 
-You can now navigate to the web app URL (found in the Amplify console) to see your application in action.
-
-**Default URL format:** `https://main.<app-id>.amplifyapp.com`
+Open the web app URL shown in the Amplify console: `https://<githubBranch>.<app-id>.amplifyapp.com` (`main` by default).
 
 ### Adding Custom Allowed Origins
 
-The application stores allowed CORS origins in an SSM parameter (`/<STACK-PREFIX>-Api/API/AllowedOrigins`). The Amplify URL is added automatically during deployment. If you need to allow additional origins (e.g., a custom domain or localhost for development), update the parameter manually:
-
-<details>
-<summary>macOS/Linux</summary>
+Allowed CORS origins live in the SSM parameter `/<STACK-PREFIX>-Api/API/AllowedOrigins`. The Amplify URL is written on the first deployment. To allow another origin (a custom domain, or `http://localhost:5173` for development), read the current value and write it back with the new origin appended (comma-separated, no trailing slashes):
 
 ```bash
-# First, read the current value
 aws ssm get-parameter \
   --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" \
   --profile <YOUR-PROFILE-NAME> \
   --query Parameter.Value --output text
 
-# Then update with the new origin appended (comma-separated, no trailing slashes)
 aws ssm put-parameter \
   --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" \
   --value "https://main.abc123.amplifyapp.com,https://your-custom-domain.com" \
@@ -644,100 +341,42 @@ aws ssm put-parameter \
   --profile <YOUR-PROFILE-NAME>
 ```
 
-</details>
-
-<details>
-<summary>PowerShell</summary>
-
-```powershell
-# First, read the current value
-aws ssm get-parameter `
-  --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" `
-  --profile <YOUR-PROFILE-NAME> `
-  --query Parameter.Value --output text
-
-# Then update with the new origin appended (comma-separated, no trailing slashes)
-aws ssm put-parameter `
-  --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" `
-  --value "https://main.abc123.amplifyapp.com,https://your-custom-domain.com" `
-  --type String `
-  --overwrite `
-  --profile <YOUR-PROFILE-NAME>
-```
-
-</details>
-
-&nbsp;
-
-_Note: Always read the current value first and append your new origin to avoid removing existing ones. Origins should not have trailing slashes. Subsequent CDK deployments will not duplicate existing origins._
+Later CDK deployments do not overwrite origins you added.
 
 ## Troubleshooting
 
-### Common Issues
+**CDK deployment fails with "Resource already exists"**
 
-**Issue: CDK deployment fails with "Resource already exists"**
+Another deployment uses the same names. Delete those resources or use a different stack prefix.
 
-- Solution: Check if you have existing resources with the same names. Either delete them or use a different stack prefix.
+**CloudFormation validation error during ResourceExistenceCheck referencing CICD ARNs**
 
-**Issue: CloudFormation validation error during ResourceExistenceCheck referencing DataPipeline or CICD ARNs**
+On a first deployment, IAM policy statements can reference the pipeline and ECR resources before they exist. Authorize the GitHub connection, run the pipeline and redeploy, as in [Step 4](#step-4-authorize-the-github-connection-and-build-the-images).
 
-- Symptoms: CloudFormation throws a validation error during the change set or deployment phase, related to a `ResourceExistenceCheck` for an ARN that appears to reference the `DataPipeline` or `CICD` resources.
-- Solution: This commonly occurs on first-time deployments when the pipeline and ECR resources are created by the deployment but are referenced in IAM policy statements before they exist. Authorize the GitHub connection and follow the [CodePipeline & ECR Image Bootstrapping](#codepipeline--ecr-image-bootstrapping-first-time-deployment) steps to manually trigger the pipeline build and redeploy.
+**CORS errors in the browser**
 
-**Issue: Amplify build fails**
+Add the page's origin to `/<STACK-PREFIX>-Api/API/AllowedOrigins` ([Adding Custom Allowed Origins](#adding-custom-allowed-origins)).
 
-- Solution: Check the build logs in Amplify console. Common causes:
-  - Missing environment variables
-  - Node version mismatch
-  - Dependency installation failures
+**Text generation Lambda fails with a parameter not found error**
 
-**Issue: Database connection errors**
+Create the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters ([Step 2](#step-2-upload-secrets--parameters)).
 
-- Solution: Verify that:
-  - RDS instance is running
-  - Security groups allow Lambda to access RDS
-  - Database credentials are correct in Secrets Manager
+**Knowledge base ingestion fails or returns no results**
 
-**Issue: CORS errors in browser**
-
-- Solution: Verify that the API Gateway CORS configuration includes your Amplify domain
-
-**Issue: WebSocket connection fails**
-
-- Solution: Check that:
-  - WebSocket API is deployed
-  - Lambda functions have correct permissions
-  - Frontend is using the correct WebSocket URL
-
-**Issue: Text generation Lambda fails with parameter not found error**
-
-- Solution: Ensure the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters were created before deployment. See [Step 2: Upload Secrets & Parameters](#step-2-upload-secrets--parameters).
-
-**Issue: Knowledge base ingestion fails or returns no results**
-
-- Solution:
-  - Verify the `<PREFIX>-Ingestion` stack deployed successfully and both container images are in ECR.
-  - Check the data source's status and error message in the admin dashboard, then the `lambdaKnowledgeBase` CloudWatch logs.
-  - For websites and videos, check the crawler or transcriber ECS task logs in CloudWatch.
-  - Confirm an embedding space is active (admin dashboard → **Search index**). See [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
+- Verify the `<PREFIX>-Ingestion` stack deployed successfully and both container images are in ECR.
+- Check the data source's status and error message in the admin dashboard, then the `lambdaKnowledgeBase` CloudWatch logs.
+- For websites and videos, check the crawler or transcriber ECS task logs in CloudWatch.
+- Confirm an embedding space is active (admin dashboard → **Search index**). See [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
 
 ## Cleanup
 
 ### Taking down the deployed stack
 
-To take down the deployed stack for a fresh redeployment in the future, follow these steps in order:
+Follow these steps in order, and wait for each stack to finish deleting before starting the next.
 
-1. **Disable RDS Deletion Protection:**
-   - Navigate to **Amazon RDS** in the AWS Console
-   - Click on "Databases" in the left sidebar
-   - Select the database instance named `<STACK-PREFIX>-database`
-   - Click "Modify"
-   - Scroll down to "Deletion protection" and uncheck the box
-   - Click "Continue" and then "Modify DB instance"
-   - Wait for the modification to complete before proceeding
+1. **Disable RDS deletion protection:** in **Amazon RDS → Databases**, select the stack's database instance, click **Modify**, clear **Deletion protection**, then **Continue** and **Modify DB instance**. Wait for the change to finish.
 
-2. **Delete CloudFormation Stacks:**
-   Navigate to AWS CloudFormation console and delete stacks in this order:
+2. **Delete the CloudFormation stacks** in this order:
    - `<STACK-PREFIX>-EvalJobs` and `<STACK-PREFIX>-Eval` (only if deployed with `enableEval`)
    - `<STACK-PREFIX>-Cost`
    - `<STACK-PREFIX>-Amplify`
@@ -748,43 +387,15 @@ To take down the deployed stack for a fresh redeployment in the future, follow t
    - `<STACK-PREFIX>-Database`
    - `<STACK-PREFIX>-VpcStack`
 
-3. **Delete Secrets:**
-   - Navigate to AWS Secrets Manager
-   - Delete the following secrets:
-     - `github-personal-access-token`
-     - `KCSecrets`
-     - Any database credentials created by the stack
+3. **Delete the secrets** in Secrets Manager: `github-personal-access-token`, `KCSecrets`, and any database credentials the stack created.
 
-4. **Delete SSM Parameters:**
-   - Navigate to AWS Systems Manager → Parameter Store
-   - Delete the following parameters:
-     - `KC-owner-name`
-     - `/KC/AllowedEmailDomains`
-     - `/KC/LLM/HaikuArn`
-     - `/KC/LLM/SonnetArn`
-     - `/KC/API/AllowedOrigins`
+4. **Delete the SSM parameters:** `KC-owner-name`, `/KC/AllowedEmailDomains`, `/KC/LLM/HaikuArn`, `/KC/LLM/SonnetArn`, `/<STACK-PREFIX>-Api/API/AllowedOrigins`.
 
-5. **Delete ECR Repositories:**
-   - The CICD stack keeps its repositories when it is deleted
-   - Navigate to Amazon ECR
-   - Delete `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` (lowercase)
+5. **Delete the retained resources.** These survive stack deletion by design:
+   - Cognito user pool `<STACK-PREFIX>-Api-UserPool`: turn off its deletion protection, then delete it.
+   - KMS key described as `<STACK-PREFIX>-Api API Gateway and WAF log encryption`: schedule its deletion after the log groups below are gone.
+   - CloudWatch log groups for REST API access logs, WebSocket access logs, and `aws-waf-logs-<STACK-PREFIX>-Api`.
+   - ECR repositories `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` (lowercase).
+   - The final RDS snapshot taken when the database was deleted (**Amazon RDS → Snapshots**), once you no longer need the data.
 
-6. **Delete the Final Database Snapshot** (optional):
-   - RDS takes a final snapshot when the database is deleted
-   - Delete it under **Amazon RDS** → Snapshots once you no longer need the data
-
-7. **Verify Cleanup**:
-   - Check CloudWatch Logs for any remaining log groups
-   - Check Lambda functions for any remaining functions
-   - Check API Gateway for any remaining APIs
-
-**Note:** Please wait for each stack to be properly deleted before deleting the next stack. Some resources have dependencies that must be removed first.
-
-**Cost Warning:** Ensure all resources are deleted to avoid ongoing charges. Pay special attention to:
-
-- RDS instances
-- NAT Gateways
-- Elastic IPs
-- S3 storage
-- RDS snapshots
-- CloudWatch Logs retention
+6. **Check for leftovers that still cost money:** RDS instances and snapshots, NAT gateways, Elastic IPs, S3 storage, and CloudWatch log groups (including the `/aws/lambda/*` groups, which keep their 90-day retention after deletion).

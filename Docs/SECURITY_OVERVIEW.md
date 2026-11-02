@@ -23,17 +23,7 @@
 
 ## 1. Introduction
 
-Knowledge Compass is an AI-powered conversational application that answers questions from a curated knowledge base. This document provides an overview of the security measures implemented to protect user data, ensure system integrity, and maintain service availability.
-
-### 1.1 Security Principles
-
-| Principle | Description |
-|-----------|-------------|
-| **Defense in Depth** | Multiple layers of security controls |
-| **Least Privilege** | Minimal permissions for all components |
-| **Encryption Everywhere** | Data protected at rest and in transit |
-| **Zero Trust** | Verify every request, trust nothing by default |
-| **Privacy by Design** | PII protection built into the architecture |
+Knowledge Compass is a conversational assistant that answers questions from a curated knowledge base. This page summarizes its security controls.
 
 ---
 
@@ -42,66 +32,22 @@ Knowledge Compass is an AI-powered conversational application that answers quest
 ### 2.1 High-Level Architecture
 
 ```
-╔═════════════════════════════════════════════════════════════════╗
-║                          INTERNET                               ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                      EDGE SECURITY LAYER                        ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   CloudFront    │  │    AWS WAF      │  │  AWS Shield   │   ║
-║   │   CDN + TLS     │  │   Firewall      │  │    DDoS       │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                      APPLICATION LAYER                          ║
-║                                                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │            API Gateway  (REST + WebSocket)              │   ║
-║   │   Request validation · Rate limiting · Access logging   │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                  Lambda Authorizers                     │   ║
-║   │   JWT validation · Role-based access · Session verify   │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │               Lambda Functions  (VPC)                   │   ║
-║   │   Input validation · Business logic · Param. queries    │   ║
-║   └─────────────────────────────────────────────────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                         DATA LAYER                              ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   RDS Proxy     │  │   PostgreSQL    │  │  S3 Bucket    │   ║
-║   │     TLS         │  │   Encrypted     │  │  Encrypted    │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                         AI / ML LAYER                           ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │    Bedrock      │  │   pgvector      │  │   Bedrock     │   ║
-║   │   Guardrails    │  │   retrieval     │  │   models      │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚═════════════════════════════════════════════════════════════════╝
+  Browser ──▶ Amplify Hosting (CloudFront managed by Amplify) ──▶ SPA (static files)
+  Browser ──▶ AWS WAF ──▶ API Gateway REST ──▶ Lambda authorizers ──▶ Lambda (VPC)
+  Browser ──▶ API Gateway WebSocket (no WAF, see §9) ──▶ Lambda (VPC)
+
+  Lambda (VPC) ──▶ RDS Proxy (TLS) ──▶ PostgreSQL + pgvector (encrypted, isolated subnets)
+               ──▶ S3 ingest bucket (encrypted, no public access)
+               ──▶ Amazon Bedrock models and guardrails
 ```
+
+AWS Shield Standard applies automatically to AWS edge and API endpoints; the stacks do not deploy it.
 
 ### 2.2 Security Layers Summary
 
 | Layer | Components | Security Controls |
 |-------|------------|-------------------|
-| **Edge** | CloudFront, WAF, Shield | DDoS protection, TLS termination, rate limiting |
+| **Edge** | Amplify Hosting (managed CloudFront), AWS WAF on the REST API | TLS, managed rule groups and per-IP rate limits on REST only |
 | **Application** | API Gateway, Lambda | Authentication, authorization, input validation |
 | **Data** | RDS, S3, Secrets Manager | Encryption, access control, credential rotation |
 | **AI/ML** | Bedrock models and guardrails, pgvector retrieval | PII protection, prompt security, output validation |
@@ -112,28 +58,12 @@ Knowledge Compass is an AI-powered conversational application that answers quest
 
 ### 3.1 Dual Authentication Model
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                     AUTHENTICATION FLOW                         ║
-╠══════════════════════════════╦══════════════════════════════════╣
-║        ADMIN USERS           ║          PUBLIC USERS            ║
-║                              ║                                  ║
-║   ┌──────────────────────┐   ║   ┌──────────────────────┐       ║
-║   │     AWS Cognito      │   ║   │     Custom JWT       │       ║
-║   │                      │   ║   │                      │       ║
-║   │  · Email / password  │   ║   │  · Anonymous access  │       ║
-║   │  · MFA support       │   ║   │  · Short-lived token │       ║
-║   │  · Email verify      │   ║   │  · Auto-refresh      │       ║
-║   │  · Group membership  │   ║   │                      │       ║
-║   └──────────┬───────────┘   ║   └──────────┬───────────┘       ║
-║              │               ║              │                   ║
-║              ▼               ║              ▼                   ║
-║   ┌──────────────────────┐   ║   ┌──────────────────────┐       ║
-║   │   Admin Authorizer   │   ║   │   User Authorizer    │       ║
-║   │    (Cognito JWT)     │   ║   │    (Custom JWT)      │       ║
-║   └──────────────────────┘   ║   └──────────────────────┘       ║
-╚══════════════════════════════╩══════════════════════════════════╝
-```
+| | Admin users | Public users |
+|---|---|---|
+| **Identity** | Amazon Cognito: email and password, verified email, `admin` group | Anonymous; no account or email |
+| **MFA** | TOTP MFA required | None |
+| **Token** | Cognito ID token (1 hour) | Custom JWT access token (15 minutes), minted from a 30-day credential and refreshed automatically |
+| **Authorizer** | Admin authorizer (Cognito JWT and `admin` group) | User authorizer (custom JWT bound to one user) |
 
 ### 3.2 Authorization Controls
 
@@ -156,18 +86,7 @@ Knowledge Compass is an AI-powered conversational application that answers quest
 
 ### 4.1 Request Security Pipeline
 
-```
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │   WAF    │───▶ │  Rate    │────▶│  Schema  │────▶│ Auth    │
-  │  Rules   │     │  Limit   │     │  Valid.  │     │  Check   │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘
-       │                │                │                │
-       ▼                ▼                ▼                ▼
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │  Block   │     │ Throttle │     │  Reject  │     │   Deny   │
-  │ Attacks  │     │  Excess  │     │ Invalid  │     │  Unauth  │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘
-```
+A REST request passes WAF rules (block attacks), stage throttling (throttle excess), OpenAPI request validation (reject invalid requests) and a Lambda authorizer (deny unauthorized callers), in that order.
 
 ### 4.2 WAF Rules
 
@@ -189,11 +108,10 @@ The web ACL covers the REST API only. The chat WebSocket API and the Amplify-hos
 
 ### 4.4 CORS Configuration
 
-- Dynamic origin validation from configuration
-- Restricted to known application domains
+- Allowed origins come from the SSM parameter `/<STACK-PREFIX>-Api/API/AllowedOrigins`; a response echoes the request `Origin` only if it is listed
+- OPTIONS preflight and gateway error responses use the deployed SPA origin (stage variable `allowedOrigin`)
 - Fails closed: a missing `ALLOWED_ORIGIN_PARAM`, an SSM read failure, or a `*` entry in the parameter never yields a wildcard origin (failures are not cached)
 - `Access-Control-Allow-Methods` lists only the methods each function serves
-- Proper headers enforced on all error responses
 
 ### 4.5 Frontend Security Headers
 
@@ -212,33 +130,11 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 
 ### 5.1 VPC Architecture
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                       VPC ARCHITECTURE                          ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                    PUBLIC SUBNETS                       │   ║
-║   │   · NAT Gateway  (outbound internet access)             │   ║
-║   │   · Internet Gateway                                    │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║                               ▼                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                   PRIVATE SUBNETS                       │   ║
-║   │   · Lambda functions  (VPC-connected)                   │   ║
-║   │   · Outbound access via NAT                             │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║                               ▼                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                   ISOLATED SUBNETS                      │   ║
-║   │   · RDS PostgreSQL  (no internet access)                │   ║
-║   │   · RDS Proxy                                           │   ║
-║   │   · VPC Endpoints  (AWS services)                       │   ║
-║   └─────────────────────────────────────────────────────────┘   ║
-╚═════════════════════════════════════════════════════════════════╝
-```
+| Subnet | Runs | Internet access |
+|---|---|---|
+| Public | NAT gateway, internet gateway | Yes |
+| Private | Lambda functions | Outbound only, through NAT |
+| Isolated | RDS PostgreSQL, RDS Proxy, VPC endpoints for AWS services | None |
 
 ### 5.2 Network Controls
 
@@ -274,29 +170,14 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 
 ### 6.2 Encryption at Rest
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                      ENCRYPTION AT REST                         ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │  RDS + vectors  │  │       S3        │  │   Secrets     │   ║
-║   │    AES-256      │  │     SSE-S3      │  │ AWS-managed   │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-║                                                                 ║
-╠═════════════════════════════════════════════════════════════════╣
-║                      ENCRYPTION IN TRANSIT                      ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   API Gateway   │  │   RDS Proxy     │  │   Bedrock     │   ║
-║   │    TLS 1.2+     │  │  TLS Required   │  │     TLS       │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-║                                                                 ║
-╚═════════════════════════════════════════════════════════════════╝
-```
+| Resource | Encryption |
+|---|---|
+| RDS PostgreSQL (including vectors) | AES-256 storage encryption, AWS managed key |
+| S3 buckets | SSE-S3 (S3-managed keys) |
+| Secrets Manager secrets | AWS managed key |
+| API Gateway (REST and WebSocket) and WAF log groups | Customer-managed KMS key (`apiLogsKey`, rotation on) |
 
-> Encrypted resources use AWS managed keys, except the API Gateway and WAF log groups, which use a customer-managed key. For details on which resources are affected and how to switch to customer-managed KMS keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
+Encryption in transit is listed in [§5.3](#53-encryption-in-transit); Bedrock calls also use TLS. To switch other resources to customer-managed keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
 
 ### 6.3 Credential Management
 
@@ -305,7 +186,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 | Database credentials (admin) | AWS Secrets Manager | 30-day automatic |
 | Database credentials (app users) | AWS Secrets Manager | 30-day automatic |
 | JWT signing key | AWS Secrets Manager | Manual |
-| Cognito secrets | AWS Secrets Manager | N/A (static IDs) |
+| Cognito pool, client and identity pool IDs (identifiers, not secrets; read by the frontend build) | AWS Secrets Manager | N/A (static IDs) |
 
 ### 6.4 S3 Bucket Security
 
@@ -338,7 +219,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
       ▼
   ┌─────────────────────────────────────────────────────────────┐
   │  1 · INPUT VALIDATION                                       │
-  │      · Length limits (2 000 characters)                     │
+  │      · Length limit (admin setting, default 2,000 chars)    │
   │      · Format validation                                    │
   └───────────────────────────┬─────────────────────────────────┘
                               │
@@ -353,7 +234,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
                               ▼
   ┌─────────────────────────────────────────────────────────────┐
   │  3 · RAG RETRIEVAL                                          │
-  │      · Knowledge Base query                                 │
+  │      · pgvector similarity search                           │
   │      · Source document retrieval                            │
   │      · Retrieved text marked as data, tags escaped          │
   └───────────────────────────┬─────────────────────────────────┘
@@ -376,9 +257,8 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
                               ▼
   ┌─────────────────────────────────────────────────────────────┐
   │  6 · OUTPUT VALIDATION                                      │
-  │      · Hallucination detection                              │
-  │      · Source grounding verification                        │
-  │      · Warning injected if response is ungrounded           │
+  │      · LLM grounding check against the cited sources        │
+  │      · Warning added if the response is not grounded        │
   └───────────────────────────┬─────────────────────────────────┘
                               │
                               ▼
@@ -403,7 +283,7 @@ Coarse location (province/territory, city, school board) is intentionally not ma
 |---------|-------------|
 | **Prompt Attack Detection** | Identifies and blocks injection attempts |
 | **Untrusted Context** | Retrieved documents are wrapped as data with an instruction not to follow anything inside them; tag-like text is escaped so a crawled page cannot close the block |
-| **Scope Enforcement** | System prompts restrict topic to academic advising |
+| **Scope Enforcement** | System prompts restrict scope to inclusive education in Canada |
 | **Guardrails** | Strict boundaries on acceptable responses |
 
 For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROCK_GUARDRAILS.md).
@@ -413,51 +293,29 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 | Control | Description |
 |---------|-------------|
 | **Output Guardrail** | Every final answer is screened before it is saved or sent: content filters replace a flagged answer with a safe message, and passwords, PINs, card, bank, health and SIN numbers are masked. A guardrail error fails closed. Streamed tokens are replaced by the screened answer when generation completes. |
-| **Grounding Verification** | Responses checked against source documents |
-| **Hallucination Detection** | LLM-based verification of claims |
-| **Warning System** | Users notified when responses may be ungrounded |
+| **Grounding Check** | A separate model call (`textGeneration/helpers/intervention.py`) checks the answer against its cited sources; answers that are not grounded carry a warning to the user |
 
 ---
 
 ## 8. Monitoring & Compliance
 
-### 8.1 Logging Architecture
+### 8.1 Security Logging
 
-```
-  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-  │   API Gateway   │   │     Lambda      │   │   VPC Flow      │
-  │   Access Logs   │   │      Logs       │   │     Logs        │
-  └────────┬────────┘   └────────┬────────┘   └────────┬────────┘
-           │                     │                     │
-           └─────────────────────┼─────────────────────┘
-                                 │
-                                 ▼
-                     ┌───────────────────────┐
-                     │  CloudWatch Logs      │
-                     │  & Metrics            │
-                     └───────────┬───────────┘
-                                 │
-                                 ▼
-                     ┌───────────────────────┐
-                     │  CloudWatch Alarms    │
-                     │  (concurrency, errors,│
-                     │   WAF block rate)     │
-                     └───────────────────────┘
-```
-
-### 8.2 Security Logging
+All logs go to CloudWatch Logs; the alarms in [§8.2](#82-alerting) read CloudWatch metrics.
 
 | Log Type | Content | Retention |
 |----------|---------|-----------|
 | **API Access Logs** | Request metadata, source IP, status, request id, and the authorizer identity: principal id, user id (admin Cognito sub or bound guest id), role, admin email (masked by the data-protection policy), access-token id (`jti`) | 1 year (retained on stack deletion; `apiLogRetention` in `api-stack.ts`) |
-| **Lambda Logs** | Function execution, errors (body excluded) | 2 years (CDK-managed log groups, retained on stack deletion) |
+| **Lambda Logs** | Function execution, errors (body excluded) | 90 days for Lambda and CodeBuild (`SERVICE_LOG_RETENTION` in `cdk/lib/log-retention.ts`) |
+| **ECS Task Logs** | Crawler and transcriber output | 30 days |
 | **VPC Flow Logs** | Network traffic metadata | Configurable |
 | **WebSocket Logs** | Connection events, route keys (no authorizer fields: the WebSocket API has no API Gateway authorizer) | 1 year (retained on stack deletion) |
+| **WAF Logs** (`aws-waf-logs-<STACK-PREFIX>-Api`) | Blocked requests only, `Authorization` header redacted | 1 year, customer-managed key (retained on stack deletion) |
 | **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for promote_user, admin user creation, system-message create/activate/delete, system-settings updates and data-source deletion; written in the same transaction as the change; append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
 | **Token issuance log** | One line per access token from `GET /user/publicToken`: token id (`jti`), bound guest id or null, source IP, user agent, request id (never the token or credential) | Lambda log retention |
 | **Worker task log** | One line per self-invoked ingestion/embedding task with the originating admin (sub/email/request id, null for scheduler/ECS paths) | Lambda log retention |
 
-### 8.3 Alerting
+### 8.2 Alerting
 
 | Alert | Trigger | Purpose |
 |-------|---------|---------|
@@ -466,7 +324,7 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 | **WAF Block Alarm** | High block rate | Detect attack patterns |
 | **Dropped Worker Event Alarm** | A knowledge base ingestion or embedding self-invocation is dropped by Lambda | Surface a lost batch (no dead-letter queue: the payload carries the worker invoke token) |
 
-### 8.4 Compliance Summary
+### 8.3 Compliance Summary
 
 | Control Area | Status | Notes |
 |--------------|--------|-------|
@@ -513,8 +371,4 @@ The identity pool issues no unauthenticated identities and maps roles from the t
 
 ## 10. Security Contact
 
-For security concerns or to report vulnerabilities, please contact the project maintainers through the repository's security policy.
-
----
-
-*This document provides a high-level overview of security controls. Implementation details are maintained in internal documentation.*
+Report suspected vulnerabilities privately to the project maintainers. Do not open a public issue.

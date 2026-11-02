@@ -1,6 +1,6 @@
 # AWS Managed Keys Usage
 
-This document lists every place in the CDK infrastructure where an AWS managed key (rather than a customer-managed KMS key) is used for encryption, and describes exactly what code changes are required if you want to bring your own key (CMK).
+This document lists every place in the CDK infrastructure where an AWS managed key or an S3-managed key (SSE-S3), rather than a customer-managed KMS key, is used for encryption, and the code changes required to bring your own key (CMK).
 
 ---
 
@@ -50,17 +50,17 @@ this.dbInstance = new rds.DatabaseInstance(this, `${id}-database`, {
 
 **Current behaviour**
 
-The ingest bucket (`${id}-IngestBucket`: uploaded files, Amazon Transcribe outputs, Textract staging copies) and its access-log bucket (`${id}-IngestAccessLogs`) are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`), which uses the AWS managed key for S3 (`aws/s3`).
+The ingest bucket (`${id}-IngestBucket`: uploaded files, Amazon Transcribe outputs, Textract staging copies) and its access-log bucket (`${id}-IngestAccessLogs`) are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`, S3-managed keys; no KMS key is involved).
 
 ```ts
 // cdk/lib/ingestion-stack.ts
 const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 
 this.ingestBucket = new s3.Bucket(this, `${id}-IngestBucket`, {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 ```
@@ -92,17 +92,17 @@ this.ingestBucket = new s3.Bucket(this, `${id}-IngestBucket`, {
 
 **Current behaviour**
 
-Both `PipelineArtifactBucket` and `ArtifactAccessLogs` are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`), which uses the AWS managed key for S3 (`aws/s3`).
+Both `PipelineArtifactBucket` and `ArtifactAccessLogs` are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`, S3-managed keys; no KMS key is involved).
 
 ```ts
 // cdk/lib/cicd-stack.ts
 const artifactAccessLogsBucket = new s3.Bucket(this, "ArtifactAccessLogs", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 
 const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 ```
@@ -118,14 +118,8 @@ const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
      description: "CMK for CodePipeline artifact buckets",
    });
    ```
-2. Add `encryption` and `encryptionKey` to both bucket definitions:
+2. Add `encryption` and `encryptionKey` to the artifact bucket. `ArtifactAccessLogs` is the artifact bucket's server access-log target, which the S3 logging service cannot write to under a CMK, so keep it on SSE-S3 (as in section 2):
    ```ts
-   const artifactAccessLogsBucket = new s3.Bucket(this, "ArtifactAccessLogs", {
-     ...
-     encryption: s3.BucketEncryption.KMS,
-     encryptionKey: pipelineKey,
-   });
-
    const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
      ...
      encryption: s3.BucketEncryption.KMS,
@@ -211,10 +205,10 @@ Already on a customer-managed key: the API Gateway access-log, WebSocket access-
 
 ## Summary
 
-| Resource | Stack file | AWS managed key used | Property to add for CMK |
+| Resource | Stack file | Key used today | Property to add for CMK |
 |---|---|---|---|
 | RDS instance storage | `database-stack.ts` | `aws/rds` | `storageEncryptionKey` on `DatabaseInstance` |
-| S3 ingest buckets (×2) | `ingestion-stack.ts` | `aws/s3` (SSE-S3) | `encryption: BucketEncryption.KMS` + `encryptionKey` on the ingest bucket |
-| S3 pipeline artifact buckets (×2) | `cicd-stack.ts` | `aws/s3` (SSE-S3) | `encryption: BucketEncryption.KMS` + `encryptionKey` on each `Bucket` |
+| S3 ingest buckets (×2) | `ingestion-stack.ts` | SSE-S3 (S3-managed) | `encryption: BucketEncryption.KMS` + `encryptionKey` on the ingest bucket |
+| S3 pipeline artifact buckets (×2) | `cicd-stack.ts` | SSE-S3 (S3-managed) | `encryption: BucketEncryption.KMS` + `encryptionKey` on the artifact bucket |
 | Secrets Manager secrets (×6, ×7 with evals) | `api-stack.ts`, `database-stack.ts`, `eval-stack.ts` | `aws/secretsmanager` | `encryptionKey` on each `Secret` |
 | DynamoDB, eval buckets, ECR, SNS | see [section 5](#5-other-resources-on-aws-managed-or-default-keys) | AWS managed or service default | see section 5 |

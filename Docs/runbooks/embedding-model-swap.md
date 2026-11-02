@@ -4,7 +4,7 @@ Knowledge Compass finds answers by comparing a family's question with stored pas
 
 Everything below is done from the admin console page **Search index**. No deploy is needed to swap a model.
 
-> **What this document does not claim.** It does not say which models exist, what they cost, or when any model reaches end of life. Selecting a model on **Search index** looks up its model id and call target in Amazon Bedrock for this account. Prices and end-of-life dates are still **configuration you enter**. Check those against AWS before you rely on them.
+> Prices and end-of-life dates are values you enter; verify them with AWS.
 
 ## Placeholders to fill in
 
@@ -27,7 +27,7 @@ How it works, in one paragraph. A new index (a "space": one model, one vector si
 
 ## 2. Prerequisites
 
-- [ ] Database migrations 032, 033 and 034 are applied (`cdk/lambda/db_setup/migrations/`). 034 adds the banner and read-only switch.
+- [ ] Database migrations `032_embedding_spaces`, `033_embedding_jobs` and `034_service_status` are applied (`cdk/lambda/db_setup/migrations/`). `034_service_status` adds the banner and read-only switch.
 - [ ] Access to the candidate model is enabled in Amazon Bedrock for the region you will call.
 - [ ] The IAM grants for the candidate models are deployed (`cdk/lib/ingestion-stack.ts` and `cdk/lib/api-stack.ts` list Titan Text Embeddings V2 and Cohere Embed v4 next to the current Cohere v3). Registering an index reads the model id and inference-profile ARN from Amazon Bedrock; these grants enable the candidates and do not assert availability in any region.
 - [ ] The golden question set is present: `cdk/layers/shared_python/python/kc_shared/golden_queries.json` (71 synthetic questions, in the shared layer both Lambdas load). Never replace it with real chat messages.
@@ -112,7 +112,7 @@ Where: admin console > **Assistant settings** > **Service status**. No deploy is
 
 A message is required for the banner and read-only. Keep it short, in plain language, and free of private details.
 
-> **Security note: public endpoint.** The chat page reads the setting from `GET /system-settings/service-status`. Although it is guarded by the anonymous public-session token, **any visitor can read it**. It deliberately returns only the status and the message, nothing else, and its response may be cached for 30 seconds. Never put anything private in the message, and do not add fields to that endpoint. The chat polls at most once a minute using the token it already holds, so the request counts under the web firewall's authenticated limit rather than the stricter anonymous one.
+Never put private details in the message; any visitor can read it (`GET /system-settings/service-status`).
 
 ## 9. Lifecycle alerts
 
@@ -127,7 +127,7 @@ On an alert: open the runbook at step 1, compare candidates, and plan a swap bef
 
 ### Alert channel
 
-`TODO(alert channel/endpoint)`. The topic exists but has no subscriber until you provide one at deploy time:
+`TODO(alert channel/endpoint)`. The topic exists but has no subscriber until you provide one at deploy time (see [Optional context flags](../DEPLOYMENT_GUIDE.md#optional-context-flags)):
 
 - `cdk deploy --all -c lifecycleAlertEmail=<address>`, or
 - `cdk deploy --all -c lifecycleAlertEmailParam=<name of an SSM String parameter that holds the address>` to keep the address off the command line.
@@ -156,21 +156,6 @@ Both are CloudWatch alarms on the `KnowledgeCompass/Embeddings` namespace, writt
 | Purge is refused | The message names the reason: not retired, active, retired less than 30 days ago, a job is running, locked, or the typed name does not match. |
 | Banner or read-only will not clear | Set Service status back to Normal and save. Allow about a minute (the status is cached for up to 30 seconds and polled every minute). |
 
-## 11. How this was verified
+## 11. Validation status
 
-Recorded when the feature was implemented, so you know what the evidence covers.
-
-**Ran, and passed:**
-
-- Frontend: `npm run lint` clean; `npm test` 6 files, 64 tests; `npm run build`.
-- CDK: `npm run build`; `npm run test:lambda` 99 tests; `npx jest test/openapi-contract.test.ts test/legacy-copy.test.ts` 2 suites, 10 tests; `npx cdk synth` succeeds (including with and without `lifecycleAlertEmail`).
-- Python (`unittest`): textGeneration 314 tests; knowledgeBase 325 tests with only the 3 import errors that existed before this work (the local interpreter lacks `lxml`); containers 49; lifecycleCheck 29.
-- Database, in a throwaway Docker PostgreSQL 16 with pgvector: migrations 032, 033 and 034 up and down, the real SQL of the writers, retrieval, cutover and validation, and the deferred cleanup (up refusal, data-loss guard, down restoring column, index, function and trigger): 56 checks passed.
-
-**Could not be run, and why:**
-
-- Anything against **live Bedrock** (embedding calls, `list_foundation_models`): no AWS access was used. No model availability, price or end-of-life date was checked, by the owner's decision.
-- A **real deployment**: the Lambdas in the VPC reaching the Bedrock control plane through the NAT gateway, SNS delivery, the weekly schedule, the alarms, API Gateway and the web firewall behaviour.
-- The real RDS: ownership of the `chunks` table and the production-size timing of the backfill and index builds. The design does not depend on the owner, but this was not confirmed.
-- **Manual accessibility testing** with a screen reader and keyboard on the new screens. The screens use labelled fields, the Radix dialog (focus trap, Escape), text progress in a polite live region and plain tables, but full validation needs manual testing with assistive technologies and expert review.
-- No browser-level test of the chat banner or the read-only composer.
+Not validated against live Bedrock or a real deployment at authoring time; the screens have not had manual accessibility testing.

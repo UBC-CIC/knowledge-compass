@@ -1,6 +1,6 @@
 # Knowledge Base
 
-This document explains how content gets into the Knowledge Compass knowledge base and how it is searched. It covers the admin routes, how each kind of data source is staged and ingested, the ingestion-run state machine, embedding spaces, and how to debug a source that will not ingest.
+How content gets into the Knowledge Compass knowledge base and how it is searched: the admin routes, how each kind of data source is staged and ingested, the ingestion-run state machine, embedding spaces, and how to debug a source that will not ingest.
 
 Everything is stored in PostgreSQL with **pgvector**: source text, chunks, and one vector per chunk per embedding space. There is no Bedrock Knowledge Base or OpenSearch collection; those were retired (see the historical [migration plan](./PGVECTOR_MIGRATION_PLAN.md)).
 
@@ -84,32 +84,7 @@ Main helper modules (`cdk/lambda/knowledgeBase/helpers/`):
 
 ## Admin Routes
 
-Every route is under `/admin` behind the admin authorizer, and `main.py` refuses any request whose authorizer role is not `admin`. `GET /admin/data_sources` is served by `adminHandler.js`; the rest by this Lambda.
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `GET` | `/admin/data_sources` | List data sources with their latest run (`adminHandler.js`) |
-| `GET` | `/admin/generate-presigned-url` | Presigned PUT URL for one upload |
-| `POST` | `/admin/generate-presigned-urls/batch` | Presigned PUT URLs for several uploads |
-| `POST` | `/admin/data_sources` | Stage one data source |
-| `POST` | `/admin/data_sources/batch` | Stage several CSV/Markdown + metadata JSON pairs |
-| `POST` | `/admin/data_sources/sync` | Sync now: queue and start all pending runs |
-| `POST` | `/admin/data_sources/{id}/retry` | Add a pending run for a source whose latest run failed |
-| `GET` | `/admin/data_sources/{id}/links` | Per-row link status for a CSV with a URL column |
-| `DELETE` | `/admin/data_sources/{id}` | Delete a source, its chunks and vectors, and its S3 objects |
-| `GET` | `/admin/embedding-models` | Embedding models that can back a new space |
-| `GET`, `POST` | `/admin/embedding-spaces` | List or create embedding spaces |
-| `POST` | `/admin/embedding-spaces/{id}/jobs` | Start a dry run, rebuild or delta job |
-| `POST` | `/admin/embedding-spaces/{id}/validate` | Validate a space (coverage and golden-question quality) |
-| `POST` | `/admin/embedding-spaces/{id}/activate` | Cut retrieval over to a space |
-| `POST` | `/admin/embedding-spaces/{id}/rollback` | Cut back to a retired space |
-| `POST` | `/admin/embedding-spaces/{id}/purge` | Delete a retired space's vectors |
-| `GET` | `/admin/embedding-jobs/{id}` | Poll an embedding job |
-| `GET` | `/admin/guideline` | Guideline documents, sections and mode |
-| `POST` | `/admin/guideline/upload-url`, `/admin/guideline/documents` | Upload and register a guideline document |
-| `DELETE` | `/admin/guideline/documents/{id}` | Remove a guideline document |
-| `PATCH` | `/admin/guideline/sections/{id}` | Override a detected section's label |
-| `PUT` | `/admin/guideline/mode` | Switch prompt mode |
+Every route is under `/admin` behind the admin authorizer, and `main.py` refuses any request whose authorizer role is not `admin`. `GET /admin/data_sources` is served by `adminHandler.js`; the rest by this Lambda. The routes are listed in [API_DOCUMENTATION.md, Knowledge Base / Data Sources](./API_DOCUMENTATION.md#knowledge-base--data-sources).
 
 The request identity (`created_by`, audit actor) always comes from the authorizer context, never from the request body. Any route that can start ingestion answers `409 CUTOVER_LOCKED` while an embedding-space cutover runs.
 
@@ -125,6 +100,8 @@ The dashboard asks for a presigned URL, uploads the file directly to the ingest 
 | `uploads/document` | PDF, DOCX, TXT | 3600 s |
 | `uploads/video` | Video and audio (mp4, m4v, webm, mp3, m4a, wav, flac, ogg, amr) | 3600 s |
 | `uploads/files` | Anything else | 300 s |
+
+Batch URLs (`POST /admin/generate-presigned-urls/batch`) last 600 s and accept CSV, Markdown, JSON and `application/octet-stream` only.
 
 Keys have the form `{prefix}/{timestamp}_{random}_{file_name}`. Uploading a file again under the same name replaces that data source in place, and only chunks whose text changed are re-embedded.
 
@@ -204,13 +181,11 @@ All configured roles require `url_column` and are resolved against the CSV heade
 
 #### Storage and chunk layout
 
-Three layers intentionally coexist:
+- The uploaded CSV stays a `document` source with its grouped whole-row chunks.
+- Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source, fetched once per CSV and sync, and hidden from answer retrieval once row variants exist.
+- Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` holds the row's descriptive columns (not the fetch URL, citation URL or stable ID); chunks `1+` are the canonical fetched chunks with the row description prepended. Row-only chunks may be shorter than the normal 20-word minimum.
 
-1. The uploaded CSV remains a `document` source with its existing grouped whole-row chunks.
-2. Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source. It is fetched once per CSV/session, preserves SSRF and robots protections, supports unchanged-content reuse, and is hidden from answer retrieval after row variants are available.
-3. Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` contains all non-empty descriptive columns except the fetch URL, citation URL, and stable ID. Chunks `1+` contain canonical fetched chunks with the row description prepended. Short row-only chunks are intentionally allowed below the normal 20-word document minimum.
-
-The row source stores the mapped title, description, columns, normalized fetch URL, resolved citation, CSV identity, and canonical chunk identity in source/chunk metadata. Multiple rows can therefore share one network fetch while remaining independently searchable and citeable. This duplicates row-specific fetched chunk/vector rows: for `R` rows sharing a page with `C` chunks, storage is approximately `R × C` row chunks plus the canonical `C` chunks. The writer deduplicates identical effective embedding inputs within a batch and reuses unchanged vectors on re-ingest, but PostgreSQL/HNSW storage still scales with the duplicated chunk count.
+Rows that share a page share one fetch but each get their own copies of its chunks, so storage grows with rows × chunks per page.
 
 #### Citation and status semantics
 
@@ -242,10 +217,6 @@ Limits (environment variables on the knowledge base Lambda):
 | `LINK_PER_DOMAIN_DELAY_SECONDS` | 1        | Minimum gap between requests to one host (a larger robots delay wins).   |
 | `LINK_MAX_CRAWL_DELAY_SECONDS`  | 10       | Cap on a robots.txt `Crawl-delay`.                                       |
 | `LINK_MAX_CONTINUATIONS`        | 20       | Times the worker re-invokes itself when out of time before giving up.    |
-
-#### Deployment and rollback
-
-Migration `017_csv_row_resources.js` is additive. Deploy and verify DBFlow first, then deploy the API/worker stack, then the frontend; re-sync existing configured CSVs to materialize their row resources. `cdk/bin/cdk.ts` declares the API stack's dependency on DBFlow so `cdk deploy --all` respects this order, but a phased production deployment is still preferred. CloudFormation does not run migration downs during rollback, PostgreSQL enum values are intentionally retained, and the migration down deletes row-resource content. Production recovery should therefore roll application code forward rather than invoke the down migration. Snapshot the database before any destructive future contract migration.
 
 ### PDF text extraction
 

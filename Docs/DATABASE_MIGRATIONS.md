@@ -1,589 +1,89 @@
 # Database Migrations
 
-This document provides comprehensive information about the database migration system used in the Knowledge Compass project.
-
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [Migration System Architecture](#migration-system-architecture)
-4. [Migration Files Structure](#migration-files-structure)
-5. [How Migrations Work](#how-migrations-work)
-6. [Creating New Migrations](#creating-new-migrations)
-7. [Common Migration Patterns](#common-migration-patterns)
-8. [Running Migrations](#running-migrations)
-9. [Migration Patterns and Best Practices](#migration-patterns-and-best-practices)
+- [How Migrations Run](#how-migrations-run)
+- [Adding a Migration](#adding-a-migration)
+- [Rules](#rules)
+- [Patterns in This Repo](#patterns-in-this-repo)
+- [Testing](#testing)
+- [Rollback](#rollback)
 
-## Overview
+## How Migrations Run
 
-The Knowledge Compass project uses a `node-pg-migrate` system to manage database schema changes with numbered JavaScript files. This provides a reliable, trackable, and automated approach to database schema evolution throughout the project lifecycle.
+- Migrations are JavaScript files in `cdk/lambda/db_setup/migrations/`, run by [`node-pg-migrate`](https://salsita.github.io/node-pg-migrate/) from `cdk/lambda/db_setup/index.js`.
+- The `<PREFIX>-DBFlow` stack runs that Lambda as a CDK trigger on every deploy. It applies all pending migrations in filename order, `up` only, and records each one in the `pgmigrations` table.
+- The API stack depends on DBFlow (`apiStack.addDependency(dbFlowStack)` in `cdk/bin/cdk.ts`), so `npx cdk deploy --all` applies migrations before the code that needs them.
+- Files in `cdk/lambda/db_setup/deferred/` are never run. See [Deferred changes](#rules).
 
-## Quick Start
+## Adding a Migration
 
-### Creating a New Migration
-
-1. **Find the next migration number:**
-
-   ```bash
-   ls cdk/lambda/db_setup/migrations/ | tail -1
-   # Use the next three-digit number (e.g., if the last is 049, use 050)
-   ```
-
-2. **Create migration file:**
-
-   ```bash
-   # Replace XXX with next number and describe_change with description
-   touch cdk/lambda/db_setup/migrations/XXX_describe_change.js
-   ```
-
-3. **Basic migration template:**
-
-   ```javascript
-   exports.up = (pgm) => {
-     // Your migration code here
-     pgm.sql(`
-       -- Your SQL here
-     `);
-   };
-
-   exports.down = (pgm) => {
-     // Optional: rollback logic
-   };
-   ```
-
-## Migration System Architecture
-
-The migration system is built on `node-pg-migrate` and consists of:
-
-- **Migration Files**: Located in `cdk/lambda/db_setup/migrations/` with numbered JavaScript files
-- **Migration Runner**: The `index.js` file contains the main migration execution logic
-- **Migration Tracking**: Uses a `pgmigrations` table to track which migrations have been applied
-- **Automatic Execution**: Runs during CDK deployments via AWS Lambda
-
-### Key Components
-
-```
-cdk/lambda/db_setup/
-├── index.js              # Main entry point: runs node-pg-migrate, then creates the app DB users
-├── migrations/           # Migration files, applied in file-name order
-│   ├── 000_initial_schema.js
-│   └── ...
-├── deferred/             # Approved-later changes; never applied by a deploy (see its README)
-└── tests/                # node --test migration tests (npm run test:lambda from cdk/)
-```
-
-Files are applied in file-name order. A few numbers were used twice by parallel work (`032_`, `033_`, `034_`); that is harmless because names differ, but new migrations should take the next unused number.
-
-The runner is a CDK `TriggerFunction` in the DBFlow stack, so it runs on every deploy of that stack. The Api stack depends on DBFlow, so `cdk deploy --all` applies migrations before deploying code that needs them.
-
-## Migration Files Structure
-
-### JavaScript Migration Files
-
-Each migration file follows this naming convention: `{number}_{description}.js`
-
-**Example Structure:**
+1. Name the file `NNN_description.js`, where `NNN` is the highest existing number plus one (currently `050`). Prefixes `032`, `033` and `034` each have two files, so check the highest number rather than the last file listed.
+2. Export `up` and normally `down`. Write SQL with `pgm.sql` and make it idempotent (`IF NOT EXISTS`, `DO $$ … EXCEPTION WHEN duplicate_object …`), so a retried deploy does not fail.
+3. Use `uuid_generate_v4()` for UUID defaults, as every existing migration does.
 
 ```javascript
+// cdk/lambda/db_setup/migrations/050_add_example_table.js
 exports.up = (pgm) => {
-  // Forward migration logic
   pgm.sql(`
-    ALTER TABLE users ADD COLUMN new_field VARCHAR(255);
+    CREATE TABLE IF NOT EXISTS example (
+      id          uuid        PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name        text        NOT NULL,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    );
   `);
 };
 
 exports.down = (pgm) => {
-  // Rollback logic (optional but recommended)
-  pgm.sql(`
-    ALTER TABLE users DROP COLUMN new_field;
-  `);
+  pgm.sql(`DROP TABLE IF EXISTS example;`);
 };
 ```
 
-### Common Migration Operations
+## Rules
 
-#### Adding Tables
+- **Never rewrite a migration that has been applied.** `pgmigrations` records it by name, so an edit never runs on existing databases. Write a new migration instead.
+- **Backfill before `NOT NULL`.** Add the column as nullable, fill every row, then `SET NOT NULL` (and a default) in the same migration. Example: `039_user_identity_source.js`.
+- **Enum values need `pgm.noTransaction()`.** `ALTER TYPE … ADD VALUE` cannot run inside a transaction, and a new value cannot be used in the transaction that adds it. Call `pgm.noTransaction()` at the top of `up`, and when a later step uses the value, put the enum change in its own earlier migration (`015_csv_link_source_type.js` adds `csv_link`; `016_csv_row_links.js` uses it). PostgreSQL cannot drop enum values, so `down` leaves them in place.
+- **Destructive changes go in `deferred/`.** A drop that could lose data is written as a placeholder `NNN_` file in `cdk/lambda/db_setup/deferred/` with an approval gate, and moves into `migrations/` only after that gate is met. See [`deferred/README.md`](../cdk/lambda/db_setup/deferred/README.md).
 
-```javascript
-exports.up = (pgm) => {
-  pgm.createTable("new_table", {
-    id: {
-      type: "uuid",
-      primaryKey: true,
-      default: pgm.func("uuid_generate_v4()"),
-    },
-    name: { type: "varchar", notNull: true },
-    created_at: { type: "timestamp", default: pgm.func("now()") },
-  });
-};
+## Patterns in This Repo
+
+Copy from a real migration rather than writing from scratch:
+
+| Change | Example |
+|---|---|
+| Add enum values (`noTransaction`) | `002_inclusion_canada_prompts.js`, `015_csv_link_source_type.js` |
+| New table with foreign key and index | `021_session_feedback.js` |
+| pgvector column and HNSW index | `011_hnsw_embedding_index.js`, `032_embedding_spaces.js` |
+| Backfill, then `NOT NULL` | `039_user_identity_source.js` |
+| Seed or replace a system message without overwriting admin edits | `044_shorten_welcome_message.js` |
+
+A data seed that must not duplicate rows uses `INSERT … SELECT … WHERE NOT EXISTS`:
+
+```sql
+INSERT INTO system_messages (type, content, character_limit, version, is_active, affects_text_generation, created_at)
+SELECT 'disclaimer', 'AI can make mistakes. Check important info.', 400, 1, true, false, now()
+WHERE NOT EXISTS (SELECT 1 FROM system_messages WHERE type = 'disclaimer');
 ```
 
-#### Adding Columns
+## Testing
 
-```javascript
-exports.up = (pgm) => {
-  pgm.addColumn("existing_table", {
-    new_column: {
-      type: "jsonb",
-      default: "{}",
-      comment: "Description of the column purpose",
-    },
-  });
-};
-```
-
-#### Modifying Columns
-
-```javascript
-exports.up = (pgm) => {
-  pgm.sql(`
-    ALTER TABLE table_name ALTER COLUMN column_name TYPE new_type;
-  `);
-};
-```
-
-## How Migrations Work
-
-### Execution Flow
-
-1. **Migration Discovery**: The system scans the `migrations/` directory for `.js` files
-2. **Sorting**: Files are sorted by file name, so the three-digit prefix sets the order
-3. **Tracking Check**: Each migration is checked against the `pgmigrations` table
-4. **Execution**: Only unapplied migrations are executed in order
-5. **Recording**: Successfully applied migrations are recorded in the tracking table
-
-### Migration Tracking
-
-The system uses a PostgreSQL table to track applied migrations:
-
-- **`pgmigrations`**: Used by node-pg-migrate to track which migrations have been successfully applied
-
-### Deployment Process
-
-```mermaid
-graph TD
-    A[Lambda Function Triggered] --> B[Connect to Database]
-    B --> C[Run node-pg-migrate]
-    C --> D[Check Migration Files]
-    D --> E[Apply Pending Migrations]
-    E --> F[Create Application Users]
-    F --> G[Update Secrets Manager]
-    G --> H[Return Success]
-```
-
-## Creating New Migrations
-
-### Method 1: JavaScript Migration Files (Recommended)
-
-1. **Determine the next migration number:**
-
-   ```bash
-   # Look at existing files in migrations/ directory
-   ls cdk/lambda/db_setup/migrations/
-   # Use the next sequential number
-   ```
-
-2. **Create the migration file:**
-
-   ```bash
-   # Example: Adding audit table
-   touch cdk/lambda/db_setup/migrations/001_add_audit_table.js
-   ```
-
-3. **Write the migration:**
-
-   ```javascript
-   exports.up = (pgm) => {
-     pgm.createTable("audit_logs", {
-       id: {
-         type: "uuid",
-         primaryKey: true,
-         default: pgm.func("uuid_generate_v4()"),
-       },
-       created_at: { type: "timestamp", default: pgm.func("now()") },
-     });
-   };
-
-   exports.down = (pgm) => {
-     pgm.dropTable("audit_logs");
-   };
-   ```
-
-## Common Migration Patterns
-
-### Adding a New Table
-
-```javascript
-exports.up = (pgm) => {
-  pgm.createTable("table_name", {
-    id: {
-      type: "uuid",
-      primaryKey: true,
-      default: pgm.func("uuid_generate_v4()"),
-    },
-    name: { type: "varchar", notNull: true },
-    description: { type: "text" },
-    status: {
-      type: "varchar",
-      default: "active",
-      check: "status IN ('active', 'inactive')",
-    },
-    created_at: { type: "timestamp", default: pgm.func("now()") },
-    updated_at: { type: "timestamp" },
-  });
-
-  // Add indexes
-  pgm.createIndex("table_name", "name");
-};
-```
-
-### Adding Columns
-
-```javascript
-exports.up = (pgm) => {
-  pgm.addColumns("existing_table", {
-    new_column: {
-      type: "varchar",
-      default: "default_value",
-      notNull: true,
-      comment: "Description of the column",
-    },
-    optional_column: {
-      type: "jsonb",
-      default: "{}",
-    },
-  });
-};
-```
-
-### Modifying Columns
-
-```javascript
-exports.up = (pgm) => {
-  // Change column type
-  pgm.sql(`ALTER TABLE table_name ALTER COLUMN column_name TYPE new_type;`);
-
-  // Add constraint
-  pgm.sql(
-    `ALTER TABLE table_name ADD CONSTRAINT constraint_name CHECK (condition);`
-  );
-
-  // Set default value
-  pgm.sql(
-    `ALTER TABLE table_name ALTER COLUMN column_name SET DEFAULT 'value';`
-  );
-};
-```
-
-### Adding Foreign Keys
-
-```javascript
-exports.up = (pgm) => {
-  pgm.addColumns("child_table", {
-    parent_id: {
-      type: "uuid",
-      references: "parent_table(id)",
-      onDelete: "CASCADE",
-      onUpdate: "CASCADE",
-    },
-  });
-
-  // Or add constraint to existing column
-  pgm.addConstraint("child_table", "fk_parent", {
-    foreignKeys: {
-      columns: "parent_id",
-      references: "parent_table(id)",
-      onDelete: "SET NULL",
-    },
-  });
-};
-```
-
-### Creating Indexes
-
-```javascript
-exports.up = (pgm) => {
-  // Simple index
-  pgm.createIndex("table_name", "column_name");
-
-  // Composite index
-  pgm.createIndex("table_name", ["col1", "col2"], {
-    name: "idx_custom_name",
-  });
-
-  // Unique index
-  pgm.createIndex("table_name", "email", {
-    unique: true,
-    name: "idx_unique_email",
-  });
-
-  // Partial index
-  pgm.createIndex("table_name", "status", {
-    where: "status = 'active'",
-    name: "idx_active_status",
-  });
-};
-```
-
-### Working with ENUMs
-
-```javascript
-exports.up = (pgm) => {
-  // Create ENUM type safely
-  pgm.sql(`
-    DO $$ BEGIN
-        CREATE TYPE status_type AS ENUM ('pending', 'active', 'inactive');
-    EXCEPTION
-        WHEN duplicate_object THEN null;
-    END $$;
-  `);
-
-  // Use in table
-  pgm.addColumn("table_name", {
-    status: {
-      type: "status_type",
-      default: "pending",
-    },
-  });
-};
-```
-
-### Adding Extensions
-
-```javascript
-exports.up = (pgm) => {
-  pgm.sql(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
-  pgm.sql(`CREATE EXTENSION IF NOT EXISTS "vector";`);
-};
-```
-
-### Data Migrations
-
-```javascript
-exports.up = (pgm) => {
-  // Insert default data
-  pgm.sql(`
-    INSERT INTO system_settings (max_messages_per_day)
-    VALUES (45)
-    WHERE NOT EXISTS (SELECT 1 FROM system_settings);
-  `);
-
-  // Update existing data
-  pgm.sql(`
-    UPDATE users
-    SET messages_sent = 0
-    WHERE messages_sent IS NULL;
-  `);
-};
-```
-
-## Running Migrations
-
-### Automatic Execution
-
-Migrations run automatically during:
-
-- **CDK deployment**: When the database setup Lambda function is triggered
-- **Database initialization**: First-time database setup
-- **Stack updates**: When infrastructure changes are deployed
-
-### Manual Execution (Development)
-
-For development or troubleshooting:
+Run from `cdk/`:
 
 ```bash
-# Navigate to the lambda directory
-cd cdk/lambda/db_setup
-
-# Install dependencies
-npm install
-
-# Run migrations directly using node-pg-migrate
-node -e "
-const { migrate } = require('node-pg-migrate');
-migrate({
-  databaseUrl: 'postgresql://user:pass@host:5432/db',
-  dir: './migrations',
-  direction: 'up'
-}).then(() => console.log('Done'));
-"
+npm run test:lambda   # node --test "lambda/**/tests/*.test.js", including lambda/db_setup/tests/
+npm test              # CDK Jest tests in cdk/test/
 ```
 
-## Safety Guidelines
+Add a `*.test.js` file in `cdk/lambda/db_setup/tests/` for a migration with logic worth checking (see `userIdentitySource.test.js` or `serviceStatus.test.js`).
 
-### Always Use These Patterns
+`node lambda/db_setup/tests/docker_migration_check.js [--deferred]` is an optional manual rehearsal. It needs Docker, starts a throwaway `pgvector/pgvector:pg16` container, applies migrations 000–034 with specific checks for 032, 033 and 034, and with `--deferred` applies and reverts the deferred file. It does not cover later migrations.
 
-```javascript
-// ✅ Safe table creation
-CREATE TABLE IF NOT EXISTS table_name (...);
+The database sits in isolated subnets behind RDS Proxy, so you cannot run migrations against it from a laptop. Deploy the DBFlow stack instead.
 
-// ✅ Safe column addition with default
-pgm.addColumn('table', {
-  column: { type: 'varchar', default: 'value', notNull: true }
-});
+## Rollback
 
-// ✅ Safe ENUM creation
-DO $$ BEGIN
-    CREATE TYPE enum_name AS ENUM ('val1', 'val2');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-// ✅ Safe index creation
-CREATE INDEX IF NOT EXISTS idx_name ON table (column);
-```
-
-### Avoid These Patterns
-
-```javascript
-// ❌ Dangerous: Non-nullable without default
-pgm.addColumn('table', {
-  required_field: { type: 'varchar', notNull: true } // Will fail on existing rows
-});
-
-// ❌ Dangerous: Dropping columns (data loss)
-pgm.dropColumn('table', 'column');
-
-// ❌ Dangerous: Dropping tables (data loss)
-pgm.dropTable('table');
-
-// ❌ Dangerous: Raw SQL without IF NOT EXISTS
-CREATE TABLE table_name (...); // Will fail if table exists
-```
-
-## Migration Patterns and Best Practices
-
-### 1. Safety First
-
-- **Always use `IF NOT EXISTS`** for CREATE statements
-- **Handle duplicate objects gracefully** using `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN null; END $$;`
-- **Test migrations in development** before applying to production
-
-### 2. Data Integrity
-
-```javascript
-// Good: new column with a default, then backfill, in one migration
-exports.up = (pgm) => {
-  pgm.sql(`
-    ALTER TABLE system_settings
-      ADD COLUMN IF NOT EXISTS max_example_per_day integer NOT NULL DEFAULT 100;
-  `);
-
-  // Backfill rows that need a value other than the default
-  pgm.sql(`
-    UPDATE system_settings
-    SET max_example_per_day = 200
-    WHERE max_messages_per_day > 100;
-  `);
-};
-
-// Avoid: Non-nullable column without default
-exports.up = (pgm) => {
-  pgm.addColumn("users", {
-    required_field: { type: "varchar", notNull: true }, // This will fail!
-  });
-};
-```
-
-### 3. Index Management
-
-```javascript
-exports.up = (pgm) => {
-  // Add table first
-  pgm.createTable("large_table", {
-    /* ... */
-  });
-
-  // Then add indexes
-  pgm.createIndex("large_table", "frequently_queried_column");
-  pgm.createIndex("large_table", ["composite", "index"], {
-    name: "idx_composite_key",
-  });
-};
-```
-
-### 4. Type Safety
-
-```javascript
-// Good: Handle ENUM types safely
-exports.up = (pgm) => {
-  pgm.sql(`
-    DO $$ BEGIN
-        CREATE TYPE new_status AS ENUM ('pending', 'active', 'inactive');
-    EXCEPTION
-        WHEN duplicate_object THEN null;
-    END $$;
-  `);
-};
-```
-
-### 5. Foreign Key Constraints
-
-```javascript
-exports.up = (pgm) => {
-  pgm.createTable("child_table", {
-    id: { type: "uuid", primaryKey: true },
-    parent_id: {
-      type: "uuid",
-      references: "parent_table(id)",
-      onDelete: "CASCADE", // or 'SET NULL', 'RESTRICT'
-      onUpdate: "CASCADE",
-    },
-  });
-};
-```
-
-### 6. Large Data Migrations
-
-For migrations involving large datasets:
-
-```javascript
-exports.up = (pgm) => {
-  // Use batch processing for large updates
-  pgm.sql(`
-    UPDATE large_table 
-    SET new_column = old_column 
-    WHERE id IN (
-      SELECT id FROM large_table 
-      WHERE new_column IS NULL 
-      LIMIT 1000
-    );
-  `);
-};
-```
-
-## Migration States and Lifecycle
-
-### Migration States
-
-1. **Pending**: Migration file exists but hasn't been applied
-2. **Applied**: Migration has been successfully executed and recorded
-3. **Failed**: Migration encountered an error during execution
-
-### Rollback Considerations
-
-- **Forward-only approach**: The system primarily supports forward migrations
-- **Manual rollbacks**: Rollback procedures must be handled manually if needed
-- **Data loss prevention**: Always backup before major schema changes
-
-### Best Practices Summary
-
-1. **Use sequential numbering** for migration files
-2. **Always use IF NOT EXISTS** for CREATE statements
-3. **Provide defaults** when adding NOT NULL columns
-4. **Test migrations** on development database first
-5. **Keep migrations focused** - one logical change per file
-6. **Add appropriate indexes** for new columns that will be queried
-7. **Document complex migrations** with comments
-8. **Consider performance** for large table modifications
-9. **Plan rollback strategy** for critical changes
-10. **Backup production** before major schema changes
-
-## Getting Help
-
-- Review existing migrations for patterns: `cdk/lambda/db_setup/migrations/`
-- Test in development environment first
-- Ask team for review of complex migrations
-- Check PostgreSQL documentation for advanced SQL features
-
-This comprehensive migration system ensures safe, trackable, and reliable database schema evolution throughout the Knowledge Compass project lifecycle.
+- CloudFormation never runs `down`. A failed or rolled-back deploy leaves applied migrations in place.
+- Production recovery is roll-forward: fix the problem in a new migration.
+- Take an RDS snapshot before any destructive change.
+- `down` exists for local rehearsal (for example the Docker harness's down/up round trip). Keep it correct, but do not rely on it in production.

@@ -2,7 +2,7 @@
 
 AWS CDK (TypeScript) app for the Knowledge Compass backend: VPC, database and migrations, CI/CD, ingestion, APIs and Lambdas, Amplify hosting, cost alerts, and the optional evaluation stacks. `bin/cdk.ts` wires the stacks together; `lib/` holds one file per stack.
 
-To deploy, follow the [Deployment Guide](../Docs/DEPLOYMENT_GUIDE.md); it lists the required secrets, SSM parameters and context flags (`StackPrefix`, `githubRepo`, `alarmEmail`, `monthlyBudgetUsd`, `enableReservedConcurrency`, `enableEval`).
+To deploy, follow the [Deployment Guide](../Docs/DEPLOYMENT_GUIDE.md); it lists the required secrets, SSM parameters and context flags (see [Optional context flags](../Docs/DEPLOYMENT_GUIDE.md#optional-context-flags)).
 
 ## Layout
 

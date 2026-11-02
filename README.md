@@ -1,34 +1,13 @@
 ﻿# Knowledge Compass
 Knowledge Compass is a conversational assistant that uses Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to answer questions from a curated knowledge base. The current deployment helps families find their way through Inclusion Canada's inclusive-education guidance: it asks about their situation, then suggests next steps grounded in the documents, websites and videos an administrator has added. Administrators manage the knowledge base, prompts, settings and analytics from an admin dashboard.
 
-| Index | Description |
-| :---------------------------------------------------- | :------------------------------------------------------ |
-| [High Level Architecture](#high-level-architecture) | High level overview illustrating component interactions |
-| [Deployment](#deployment-guide) | How to deploy the project |
-| [User Guide](#user-guide) | The working solution |
-| [Knowledge Base](#knowledge-base) | How content is ingested, embedded and retrieved |
-| [Directories](#directories) | General project directory structure |
-| [Additional Documentation](#additional-documentation) | Comprehensive guides and references |
-| [Credits](#credits) | Meet the team behind the solution |
-| [License](#license) | License details |
+To deploy, follow the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md). All guides are listed under [Documentation](#documentation).
 
 ## High-Level Architecture
 
 The following architecture diagram illustrates the various AWS components utilized to deliver the solution. For an in-depth explanation of the frontend and backend stacks, please look at the [Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md).
 
 ![Architecture Diagram](Docs/media/architecture-diagram.png)
-
-## Deployment Guide
-
-To deploy this solution, please follow the steps laid out in the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md).
-
-## User Guide
-
-Please refer to the [Web App User Guide](Docs/USER_GUIDE.md) for instructions on navigating the web app interface.
-
-## Knowledge Base
-
-Please refer to the [Knowledge Base Documentation](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md). It explains how uploaded files, websites and videos are chunked, embedded and stored in pgvector, how ingestion runs and retries work, and how the admin dashboard drives them. To change the embedding model, see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md).
 
 ## Directories
 
@@ -118,21 +97,16 @@ Please refer to the [Knowledge Base Documentation](Docs/KNOWLEDGE_BASE_DOCUMENTA
 
 ### Frontend
 
-- **React 19** with TypeScript
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
-- **shadcn/ui** (Radix UI) for UI components
+- **React 19**, TypeScript, **Vite 7**, **React Router 7**
+- **Tailwind CSS 4** and shadcn/ui (Radix UI) components
 - **AWS Amplify** for hosting and Cognito authentication
 - **Recharts** for analytics charts
-- **React Router** for client-side routing
 
 ### Backend
 
-- **AWS Lambda** (Python 3.12 and Node.js 22) for serverless compute
-- **Amazon Bedrock** for LLM inference — Claude Haiku 5.5 (Anthropic)
-- **Amazon Bedrock** embedding models for vector embeddings — **Amazon Titan Text Embeddings V2** on new installs (deployments created before migration 049 keep Cohere Embed English v3 until they switch); the active model is chosen from the admin console (see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md))
-- **pgvector** on PostgreSQL for vector storage and similarity search
-- **PostgreSQL** (RDS) for relational data storage
+- **AWS Lambda** (Python 3.12 and Node.js 22)
+- **Amazon Bedrock**: Claude Haiku 5.5 for generation; Amazon Titan Text Embeddings V2 for embeddings (Cohere Embed English v3 on installs created before migration 049, until an admin switches; see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md))
+- **PostgreSQL 16** on RDS with **pgvector** for relational data, vector storage and similarity search
 - **Amazon S3** for uploaded documents and transcription outputs
 - **Amazon ECS on Fargate** for the website crawler and video transcriber
 - **Amazon Transcribe** and **Amazon Textract** for video transcripts and scanned PDFs
@@ -142,16 +116,16 @@ Please refer to the [Knowledge Base Documentation](Docs/KNOWLEDGE_BASE_DOCUMENTA
 
 ### Infrastructure
 
-- **AWS CDK** (TypeScript) for infrastructure as code
+- **AWS CDK v2** (TypeScript) for infrastructure as code
 - **AWS CodePipeline** for CI/CD (unit tests, container image builds and scans)
 - **Amazon RDS** with RDS Proxy for managed PostgreSQL
 - **Amazon VPC** for network isolation
 
-## Additional Documentation
+## Documentation
 
 ### Architecture and Design
 
-- **[Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md)**: Comprehensive overview of system architecture and component interactions
+- **[Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md)**: System architecture and component interactions
 - **[Security Overview](Docs/SECURITY_OVERVIEW.md)**: Security architecture, controls, and compliance summary
 
 ### Deployment and Configuration
@@ -164,14 +138,14 @@ Please refer to the [Knowledge Base Documentation](Docs/KNOWLEDGE_BASE_DOCUMENTA
 
 - **[Database Migrations](Docs/DATABASE_MIGRATIONS.md)**: Guide to the database migration system and best practices
 - **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Where each component's Python dependencies come from and how to change them
-- **[Knowledge Base](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md)**: Ingestion, embedding and retrieval
+- **[Knowledge Base](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md)**: How uploaded files, websites and videos are chunked, embedded and stored in pgvector, and how ingestion runs and retries work
 - **[Embedding Model Swap Runbook](Docs/runbooks/embedding-model-swap.md)**: Changing the embedding model with a rebuild and cutover
 - **[Evaluations](Docs/EVALS.md)**: The conversation evaluation harness
 
 ### API and Usage
 
-- **[API Documentation](Docs/API_DOCUMENTATION.md)**: Comprehensive API reference for all REST and WebSocket endpoints
-- **[User Guide](Docs/USER_GUIDE.md)**: Complete guide for end-users on how to interact with Knowledge Compass
+- **[API Documentation](Docs/API_DOCUMENTATION.md)**: REST endpoints and the WebSocket message contract
+- **[User Guide](Docs/USER_GUIDE.md)**: How to use the web app
 
 ## Credits
 
