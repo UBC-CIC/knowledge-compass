@@ -5,6 +5,7 @@ python -m evals <command>
   extract       draft scenarios from the user-story Markdown files
   smoke         one tagged message against the live API (needs --yes)
   run           probes + journeys (+ judge, optional Bedrock eval, report) (needs --yes)
+  guardrails    F13 topic-scope cases, one message each, written for human review (needs --yes)
   judge         score a run's journey transcripts with the direct LLM judge
   bedrock-eval  start (and optionally wait for) Bedrock Evaluations jobs for a run
   report        rebuild report.md / report.json for a run
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from evals import config as config_mod
+from evals.guardrail_cases import DEFAULT_CASES_FILE, load_guardrail_cases
 from evals.schema import (
     ScenarioError,
     load_label_map,
@@ -69,10 +71,20 @@ def cmd_validate(args) -> int:
         for p in problems:
             print(f"- {p}")
         return 1
+    try:
+        case_set = load_guardrail_cases(Path(args.guardrails))
+    except ScenarioError as e:
+        print(f"1 problem(s):\n- {e}")
+        return 1
+    if args.for_scoring and not case_set.reviewed:
+        print(f"1 problem(s):\n- {args.guardrails}: not reviewed (set reviewed: true after checking the cases)")
+        return 1
     scenarios = load_scenarios(Path(args.scenarios))
     reviewed = sum(1 for s in scenarios if s.reviewed)
     testable = sum(1 for s in scenarios if s.testable)
-    print(f"OK: {len(scenarios)} scenario(s), {reviewed} reviewed, {testable} testable.")
+    counts = ", ".join(f"{n} {c}" for c, n in case_set.counts().items())
+    print(f"OK: {len(scenarios)} scenario(s), {reviewed} reviewed, {testable} testable; "
+          f"{len(case_set.cases)} guardrail case(s) ({counts}).")
     return 0
 
 
@@ -384,6 +396,60 @@ def cmd_run(args) -> int:
     return 0
 
 
+def _guardrails_markdown(run_id: str, records: List[dict]) -> str:
+    lines = [f"# Guardrail cases (F13), run `{run_id}`", "",
+             "Not scored. Read each reply against its expected behaviour and checks.", ""]
+    for r in records:
+        lines += [f"## {r['case_id']} ({r['category']}, expected: {r['expected']})", ""]
+        if r.get("description"):
+            lines += [r["description"], ""]
+        lines += [f"**Message:** {r['message']}", "", "**Checks:**"]
+        lines += [f"- {e}" for e in r.get("expectations") or []]
+        lines += [""]
+        if r.get("error"):
+            lines += [f"**Error:** {r['error']}", ""]
+        reply = (r.get("response") or "").strip()
+        lines += ["**Reply:**", "", "\n".join(f"> {line}" for line in reply.splitlines()) or "> (no reply)", ""]
+    return "\n".join(lines)
+
+
+def cmd_guardrails(args) -> int:
+    from evals.harness.runner import RunConfig, Runner, new_run_id
+
+    settings = config_mod.Settings.from_env()
+    case_set = load_guardrail_cases(Path(args.cases))
+    if not case_set.reviewed:
+        raise SystemExit(f"{args.cases}: not reviewed (set reviewed: true after checking the cases)")
+    count = len(case_set.cases)
+    _confirm(settings, f"Guardrail cases: {count} anonymous users, {count} tagged standard-mode sessions, "
+                       f"{count} messages, sequential.", args.yes)
+    client, keys, _ = _clients(settings, need_simulator=False)
+    run_id = args.run_id or new_run_id("guardrails")
+    runner = Runner(
+        client, keys, None,
+        RunConfig(run_id=run_id, probes=False, journeys=False, turn_delay=settings.turn_delay,
+                  user_delay=settings.user_delay, keep_sessions=args.keep_sessions),
+        results_root=RESULTS_DIR,
+    )
+    records = []
+    for case in case_set.cases:
+        try:
+            record = runner.run_guardrail_case(case)
+        except Exception as e:  # noqa: BLE001 - one failed case must not stop the run
+            record = {"case_id": case.id, "category": case.category, "expected": case.expected,
+                      "description": case.description, "expectations": case.expectations,
+                      "message": case.message, "error": f"{type(e).__name__}: {e}"}
+        records.append(record)
+        print(f"{case.id}: {'error ' + str(record['error']) if record.get('error') else 'reply recorded'}")
+    run_dir = RESULTS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "guardrails.md").write_text(_guardrails_markdown(run_id, records), encoding="utf-8")
+    print(f"Review: {run_dir / 'guardrails.md'}")
+    if runner.state.cleanup_failed:
+        print(f"WARNING: {len(runner.state.cleanup_failed)} session(s) could not be deleted (eval_run_id={run_id}).")
+    return 0
+
+
 def cmd_transcripts(args) -> int:
     from evals import transcripts
 
@@ -434,6 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("validate", help="check scenarios and label_map.yaml")
     p.add_argument("--scenarios", default=str(SCENARIOS_DIR))
     p.add_argument("--for-scoring", action="store_true", help="also require reviewed scenarios and labels")
+    p.add_argument("--guardrails", default=str(DEFAULT_CASES_FILE), help="F13 guardrail cases file to check")
     p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("extract", help="draft scenarios from user-story Markdown files")
@@ -473,6 +540,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id")
     p.add_argument("--yes", action="store_true", help="confirm sending real traffic")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("guardrails", help="F13 topic-scope cases, one message each, for human review")
+    p.add_argument("--cases", default=str(DEFAULT_CASES_FILE))
+    p.add_argument("--keep-sessions", action="store_true", help="do not delete sessions (they stay excluded from analytics)")
+    p.add_argument("--run-id")
+    p.add_argument("--yes", action="store_true", help="confirm sending real traffic")
+    p.set_defaults(func=cmd_guardrails)
 
     p = sub.add_parser("judge", help="judge a run's transcripts")
     p.add_argument("--run", required=True)
