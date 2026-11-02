@@ -94,7 +94,7 @@ class AnswerCapResponseTest(ChatModeTestBase):
         self.assertEqual(self._saved_ai_text(), capped)
         self.patches["invoke_output_guardrail"].assert_called_once_with(capped, config.REGION)
         self.assertLessEqual(len(streamed), self.cap)
-        self.assertTrue(LONG_ANSWER.startswith(streamed))
+        self.assertEqual(streamed, capped)
 
     def test_hidden_tags_after_a_long_answer_are_still_used(self):
         result, _ = self.respond("standard")

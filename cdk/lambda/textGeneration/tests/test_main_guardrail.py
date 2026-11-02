@@ -180,6 +180,22 @@ class MainGuardrailTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(json.loads(result["body"])["response"], DENIAL)
 
+    def test_websocket_request_streams(self):
+        get_response = mock.MagicMock(return_value={"response": "ok", "sources_used": [], "sessionId": SESSION})
+        with mock.patch.object(main, "get_response", get_response):
+            main.handler(make_event({"query": QUERY}))
+
+        self.assertTrue(callable(get_response.call_args.kwargs["stream_callback"]))
+
+    def test_rest_request_does_not_stream(self):
+        # No socket to stream to: no stream screening calls either.
+        get_response = mock.MagicMock(return_value={"response": "ok", "sources_used": [], "sessionId": SESSION})
+        with mock.patch.object(main, "get_response", get_response), \
+                mock.patch.object(main, "_get_ws_client", return_value=(None, None)):
+            main.handler(make_event({"query": QUERY}))
+
+        self.assertIsNone(get_response.call_args.kwargs["stream_callback"])
+
     def test_get_response_has_no_guardrail_bypass_parameter(self):
         self.assertNotIn("is_intro_message", inspect.signature(chat.get_response).parameters)
 

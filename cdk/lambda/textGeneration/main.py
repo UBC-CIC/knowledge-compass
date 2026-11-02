@@ -258,7 +258,7 @@ def handler(event, context=None):
             chat_session_id=chat_session_id,
             user_id=user_id,
             db_connection=conn,
-            stream_callback=stream_chunk,
+            stream_callback=stream_chunk if (apigw_management and connection_id) else None,
         )
         
         # Format response to match API contract

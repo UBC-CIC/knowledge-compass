@@ -31,6 +31,7 @@ import helpers.config as config
 from helpers.message_limits import reserve_daily_message
 from helpers.guardrail import (
     invoke_guardrail, invoke_output_guardrail, ACTION_ANONYMIZED, ACTION_BLOCKED, BLOCKED_INPUT_PLACEHOLDER,
+    OutputStreamScreener,
 )
 
 logger = logging.getLogger(__name__)
@@ -425,6 +426,16 @@ def _save_ai_response(
         db_connection.rollback()
         logger.error(f"Failed to save AI response: {e}")
 
+
+def _close_stream(stream):
+    """Stop reading the model stream and release its connection."""
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as e:
+            logger.warning("Failed to close model stream: %s", type(e).__name__)
+
 def get_response(
     query: str,
     region: str,
@@ -559,7 +570,6 @@ def get_response(
     bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
     
     full_response_text = ""
-    yielded_text = ""
     char_cap = answer_char_cap()
     answer_started = False
     answer_text = ""
@@ -581,9 +591,17 @@ def get_response(
         stream_stop_tags.append("<guide_state")
         stream_hold_tags.extend(["<guide_state>", "</guide_state>"])
 
+    # Every streamed character passes the output guardrail first (finding
+    # f-609f1065). No socket, no screener: nothing streams on REST.
+    screener = (
+        OutputStreamScreener(stream_callback, invoke_output_guardrail, config.REGION)
+        if stream_callback else None
+    )
+
     try:
         response = bedrock_runtime.converse_stream(**request_payload)
-        for event in response.get("stream", []):
+        stream = response.get("stream", [])
+        for event in stream:
             if "contentBlockDelta" in event:
                 delta = event["contentBlockDelta"]["delta"]
                 if "text" in delta:
@@ -632,41 +650,44 @@ def get_response(
                     settled = safe_text if stop_found else safe_text[:stream_settled_length(safe_text)]
                     visible = strip_internal_links(settled)[:char_cap]
 
-                    # 5. Stream only the newly added text. If sanitizing changed
-                    # text already sent, pause; 'complete' carries the clean reply.
-                    if len(visible) > len(yielded_text) and visible.startswith(yielded_text):
-                        new_text = visible[len(yielded_text):]
-                        yielded_text = visible
-                        if stream_callback and new_text:
-                            stream_callback(new_text)
+                    # 5. Screen before anything reaches the client. Leading
+                    # whitespace (the newline after <answer>) is never part of
+                    # the saved answer.
+                    if screener is not None:
+                        screener.offer(visible.lstrip())
+                        if screener.stopped:
+                            break
 
-        # Parse final answer text properly
-        final_answer_match = re.search(r'<answer>(.*?)</answer>', full_response_text, re.DOTALL)
-        if final_answer_match:
-            answer_text = final_answer_match.group(1).strip()
+        if screener is not None and screener.stopped:
+            _close_stream(stream)
         else:
-            # Detective phase: strip any trailing <detective_state> tag from saved text
-            answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
+            # Parse final answer text properly
+            final_answer_match = re.search(r'<answer>(.*?)</answer>', full_response_text, re.DOTALL)
+            if final_answer_match:
+                answer_text = final_answer_match.group(1).strip()
+            else:
+                # Detective phase: strip any trailing <detective_state> tag from saved text
+                answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
 
-        # The visible answer is held to the per-answer cap before it is
-        # screened, saved or sent. The stream above stops at the same length;
-        # 'complete' carries the cut text. Hidden tags are still parsed.
-        if len(answer_text) > char_cap:
-            logger.info("Answer cut to the per-answer cap (chars=%d, cap=%d)", len(answer_text), char_cap)
-            answer_text = cap_answer_length(answer_text, char_cap)
+            # The visible answer is held to the per-answer cap before it is
+            # screened, saved or sent. The stream above stops at the same length;
+            # 'complete' carries the cut text. Hidden tags are still parsed.
+            if len(answer_text) > char_cap:
+                logger.info("Answer cut to the per-answer cap (chars=%d, cap=%d)", len(answer_text), char_cap)
+                answer_text = cap_answer_length(answer_text, char_cap)
 
-        # Parse cited_indices tolerantly: one malformed token must not drop
-        # every citation.
-        parsed_indices = parse_cited_indices(full_response_text)
-        if parsed_indices is not None:
-            cited_indices = parsed_indices
-        elif sources and "<answer>" in full_response_text:
-            # Guidance reply without the citation block: sources can't be shown.
-            logger.warning(
-                "Guidance reply had no <cited_indices> block (phase=%s, retrieved=%d)",
-                phase_name,
-                len(sources),
-            )
+            # Parse cited_indices tolerantly: one malformed token must not drop
+            # every citation.
+            parsed_indices = parse_cited_indices(full_response_text)
+            if parsed_indices is not None:
+                cited_indices = parsed_indices
+            elif sources and "<answer>" in full_response_text:
+                # Guidance reply without the citation block: sources can't be shown.
+                logger.warning(
+                    "Guidance reply had no <cited_indices> block (phase=%s, retrieved=%d)",
+                    phase_name,
+                    len(sources),
+                )
 
     except Exception as e:
         logger.error(f"Generation Failed: {e}")
@@ -677,9 +698,17 @@ def get_response(
     # Every answer goes through the output guardrail before it is saved or sent
     # in 'complete', which replaces any text already streamed. A blocked answer
     # keeps no citations and is not trusted for grounding, state or the title.
-    # A guardrail error fails closed, like the input check.
+    # A block during the stream has the same outcome as a blocked final answer.
+    # A guardrail error on this final check fails closed, like the input check.
     output_blocked = False
-    if answer_text and not generation_failed:
+    if screener is not None and screener.blocked_result is not None:
+        # Blocked mid-stream: same outcome as a blocked final answer.
+        output_blocked = True
+        answer_text = screener.blocked_result['text']
+        cited_indices = []
+        parsed_indices = []
+        full_response_text = ""
+    elif answer_text and not generation_failed:
         try:
             screened = invoke_output_guardrail(answer_text, config.REGION)
         except Exception as e:
@@ -697,6 +726,15 @@ def get_response(
             full_response_text = ""
         elif screened['action'] == ACTION_ANONYMIZED:
             answer_text = screened['text']
+
+    # Older history turns may contain internal links the model could echo.
+    final_answer_text = strip_internal_links(answer_text)
+
+    # Send the screened rest of the answer before the slower grounding check.
+    if screener is not None:
+        screener.finish(
+            final_answer_text if not (output_blocked or generation_failed) else None
+        )
 
     # Full cited sources feed the grounding verifier; only the trimmed public
     # projection is streamed to the client and persisted with the message.
@@ -748,9 +786,6 @@ def get_response(
             logger.error(f"Intervention Failed: {e}")
             warning_text = None
             intervention_result = None
-            
-    # Older history turns may contain internal links the model could echo.
-    final_answer_text = strip_internal_links(answer_text)
 
     _save_ai_response(
         db_connection,
