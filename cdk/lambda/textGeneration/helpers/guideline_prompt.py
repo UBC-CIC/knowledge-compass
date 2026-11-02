@@ -155,7 +155,7 @@ def build_static_prompt() -> str:
 </guide_outline>
 
 <guardrails>
-{config.GUARDRAILS}
+{config.guardrails_block_text()}
 </guardrails>
 
 <language_guidelines>

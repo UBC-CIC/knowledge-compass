@@ -52,7 +52,12 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
     explain: "Who the assistant is and the rules it always follows. Sent with every reply, for every journey.",
     sections: [
       { id: "system_role", title: "Who it is", autoInsert: "Journey list added here automatically" },
-      { id: "guardrails", title: "Boundaries" },
+      {
+        id: "guardrails",
+        title: "Boundaries",
+        autoInsert:
+          "Topic scope rule added here automatically: stays on a child's schooling, always helps with harm, abuse, restraint, location and legal worries",
+      },
       { id: "language_guidelines", title: "Preferred language" },
     ],
   },

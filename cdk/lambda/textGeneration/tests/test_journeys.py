@@ -261,6 +261,14 @@ class PromptAssemblyTests(unittest.TestCase):
             self.assertIn("\nJ2 — Transitions and future planning: ", role)
         self.assertNotIn("JOURNEY 1", config.ROLE)
 
+    def test_scope_rule_follows_admin_guardrails_in_both_phases(self):
+        admin_text = "NEVER:\n- Edited by an admin."
+        for phase in (DETECTIVE, SUGGESTION):
+            with mock.patch.object(config, "GUARDRAILS", admin_text):
+                static, _, _, _, _ = logic.get_current_prompt(phase, 0, None, _route(journey="J1", situation="C"))
+            block = static.split("<guardrails>\n", 1)[1].split("\n</guardrails>", 1)[0]
+            self.assertEqual(block, f"{admin_text}\n\n{config.SCOPE_RULE}", phase)
+
     def test_journey_list_follows_the_catalog(self):
         catalog = _custom_catalog()
         with mock.patch.object(config, "JOURNEY_CATALOG", catalog):

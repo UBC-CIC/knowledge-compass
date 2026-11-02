@@ -237,5 +237,13 @@ class Migration025SyncTests(unittest.TestCase):
         self.assertNotIn("JOURNEY 1", seed["role"])
 
 
+class Migration018GuardrailsSyncTests(unittest.TestCase):
+    def test_guardrails_fallback_matches_018(self):
+        # SCOPE_RULE is code-owned and added by guardrails_block_text();
+        # GUARDRAILS itself must stay the 018 seed.
+        self.assertEqual(config.GUARDRAILS.strip(), _migration_018_content("guardrails").strip())
+        self.assertNotIn("SCOPE:", config.GUARDRAILS)
+
+
 if __name__ == "__main__":
     unittest.main()

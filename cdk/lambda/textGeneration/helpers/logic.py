@@ -173,7 +173,7 @@ def get_current_prompt(
 </role>
 
 <guardrails>
-{config.GUARDRAILS}
+{config.guardrails_block_text()}
 </guardrails>
 
 <language_guidelines>
