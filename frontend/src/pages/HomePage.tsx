@@ -7,6 +7,7 @@ import { useUser } from "@/providers/user";
 import { Menu, X } from "lucide-react";
 import { useSidebar } from "@/providers/sidebar";
 import AIChatPage from "@/pages/ChatInterface/ChatInterface";
+import GuestStartError from "@/components/ChatInterface/GuestStartError";
 import {
   DEMO_USER_ID,
   deleteDemoSessionState,
@@ -23,7 +24,7 @@ const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 
 export default function HomePage() {
-  const { userId, isLoading: isLoadingUser } = useUser();
+  const { userId, isLoading: isLoadingUser, error: userError, retry } = useUser();
   const { mobileOpen, toggleMobile } = useSidebar();
 
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
@@ -307,6 +308,10 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
         </div>
       </div>
     );
+  }
+
+  if (!isDemoMode && !userId && userError) {
+    return <GuestStartError message={userError.message} onRetry={retry} />;
   }
 
   return (

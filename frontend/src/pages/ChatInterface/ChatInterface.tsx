@@ -24,6 +24,7 @@ import {
 import { getPublicToken, invalidatePublicToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
 import { SessionLimitError } from "@/lib/sessionLimit";
+import { chatErrorMessage } from "@/lib/chatErrors";
 import ServiceStatusBanner from "@/components/ChatInterface/ServiceStatusBanner";
 import {
   NORMAL_SERVICE_STATE,
@@ -339,7 +340,7 @@ export default function AIChatPage({
                 msg.id === streamingMessageId
                   ? {
                       ...msg,
-                      text: message.message || "An error occurred",
+                      text: message.message || chatErrorMessage(message.error, null) || "An error occurred",
                       isTyping: false,
                     }
                   : msg
@@ -775,15 +776,15 @@ export default function AIChatPage({
           }
         }
         if (response.status === 429) {
-          const errData = await response.json();
-          if (errData.error === "TOKEN_LIMIT_EXCEEDED") {
+          const errData = await response.json().catch(() => null);
+          if (errData?.error === "TOKEN_LIMIT_EXCEEDED") {
             setIsTokenLimitReached(true);
             if (errData.token_usage?.reset_at) {
               setTokenResetTime(formatResetTime(errData.token_usage.reset_at));
             }
             throw new Error(errData.message || "Token limit exceeded");
           }
-          if (errData.error === "DAILY_CHARACTER_LIMIT_EXCEEDED") {
+          if (errData?.error === "DAILY_CHARACTER_LIMIT_EXCEEDED") {
             // Lock input only when nothing is left today (see the WS handler).
             if ((errData.character_usage?.remaining ?? 0) <= 0) {
               setIsTokenLimitReached(true);
@@ -802,6 +803,19 @@ export default function AIChatPage({
                         "You've reached today's message limit. Please come back tomorrow.",
                       isTyping: false,
                     }
+                  : msg
+              )
+            );
+            return;
+          }
+          // Service-wide limits, the pause switch and a busy assistant: show the
+          // message without locking the composer.
+          const limitMessage = chatErrorMessage(errData?.error, errData?.message);
+          if (limitMessage) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === botMsg.id
+                  ? { ...msg, text: limitMessage, isTyping: false }
                   : msg
               )
             );
