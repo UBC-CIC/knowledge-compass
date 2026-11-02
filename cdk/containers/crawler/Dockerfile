@@ -8,7 +8,7 @@
 # Uses the official Playwright Python image, which ships a matching Chromium +
 # system dependencies (avoids the 250MB Lambda limit; see crawler/README.md).
 # Pin the Playwright image tag to the version compatible with the installed
-# playwright package (keep in sync with playwright== in requirements.txt).
+# playwright package (keep in sync with playwright== in requirements.in).
 FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
 
 ENV PYTHONUNBUFFERED=1 \
@@ -45,9 +45,10 @@ ENV CRAWLEE_DISABLE_BROWSER_SANDBOX=true
 
 WORKDIR /app
 
-# Install Python deps first for better layer caching.
+# Install Python deps first for better layer caching. requirements.txt is the
+# fully pinned, hashed lock generated from requirements.in.
 COPY crawler/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Chromium is preinstalled in the base image; ensure the browser matching the
 # pinned playwright package is present (no-op if already installed).

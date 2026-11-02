@@ -13,8 +13,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# requirements.txt is the fully pinned, hashed lock generated from requirements.in.
 COPY transcriber/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # DB_HOST is the RDS Proxy endpoint, not the RDS instance directly. RDS Proxy
 # serves an ACM-issued certificate (not an rds-ca-* one), so verify-full must
