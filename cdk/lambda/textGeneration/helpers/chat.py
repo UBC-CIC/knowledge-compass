@@ -27,6 +27,7 @@ from helpers.citations import (
     strip_internal_links,
 )
 from helpers.intervention import assess_response
+from helpers.bedrock_clients import bedrock_runtime
 import helpers.config as config
 from helpers.message_limits import reserve_daily_message
 from helpers.guardrail import (
@@ -163,8 +164,7 @@ Output ONLY the title text.
 </assistant_response>
 """
     try:
-        bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
-        response = bedrock_runtime.converse(
+        response = bedrock_runtime(llm_region).converse(
             modelId=haiku_model_arn,
             messages=[{"role": "user", "content": [{"text": user_message}]}],
             system=[{"text": title_system_prompt}],
@@ -606,7 +606,7 @@ def get_response(
             },
         }
 
-    bedrock_runtime = boto3.client("bedrock-runtime", region_name=llm_region)
+    bedrock = bedrock_runtime(llm_region)
     
     full_response_text = ""
     char_cap = answer_char_cap()
@@ -641,7 +641,7 @@ def get_response(
     )
 
     try:
-        response = bedrock_runtime.converse_stream(**request_payload)
+        response = bedrock.converse_stream(**request_payload)
         stream = response.get("stream", [])
         for event in stream:
             if "contentBlockDelta" in event:

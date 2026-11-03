@@ -1,8 +1,8 @@
-import boto3
 import logging
 import re
 import time
 from helpers import config
+from helpers.bedrock_clients import bedrock_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,7 @@ _BLOCKED = 'blocked'
 
 
 def _apply_guardrail(text: str, source: str, region: str) -> dict:
-    client = boto3.client('bedrock-runtime', region_name=region)
-    return client.apply_guardrail(
+    return bedrock_runtime(region).apply_guardrail(
         guardrailIdentifier=config.GUARDRAIL_ID,
         guardrailVersion=config.GUARDRAIL_VERSION,
         source=source,

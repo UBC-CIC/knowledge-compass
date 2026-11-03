@@ -130,7 +130,7 @@ class ChatModeTestBase(unittest.TestCase):
         }
         self._patchers = [mock.patch.object(chat, name, value) for name, value in self.patches.items()]
         self._patchers.append(mock.patch.object(chat.RoutingState, "from_metadata", return_value=self.routing_state))
-        self._patchers.append(mock.patch.object(chat.boto3, "client", return_value=self.bedrock))
+        self._patchers.append(mock.patch.object(chat, "bedrock_runtime", return_value=self.bedrock))
         for p in self._patchers:
             p.start()
         if self.use_journey_documents:

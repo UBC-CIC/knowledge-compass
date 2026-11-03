@@ -2,8 +2,8 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
-import boto3
 import helpers.config as config
+from helpers.bedrock_clients import bedrock_runtime
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -156,7 +156,7 @@ def _call_llm_verifier(
         sources=sources,
     )
 
-    bedrock = boto3.client("bedrock-runtime", region_name=llm_region)
+    bedrock = bedrock_runtime(llm_region)
 
     try:
         response = bedrock.converse(

@@ -23,8 +23,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import boto3
-
+from helpers.bedrock_clients import bedrock_runtime
 from helpers.journeys import (
     DEFAULT_CATALOG,
     JOURNEY_BOTH,
@@ -512,7 +511,7 @@ def route_turn(
     """
     try:
         catalog = catalog if catalog is not None and not catalog.is_empty else DEFAULT_CATALOG
-        client = bedrock_client or boto3.client("bedrock-runtime", region_name=llm_region)
+        client = bedrock_client or bedrock_runtime(llm_region)
         response = client.converse(
             modelId=model_id or DEFAULT_ROUTER_MODEL_ID,
             messages=[{
