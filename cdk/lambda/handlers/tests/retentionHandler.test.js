@@ -51,6 +51,16 @@ test("selects only idle guest students, oldest first, locking with SKIP LOCKED",
   assert.deepEqual(select.values, [90, 200]);
 });
 
+test("skips guests with starred feedback until it is unstarred", async () => {
+  const sql = retentionSql([[]]);
+  await run(sql);
+  const select = sql.queries().find((q) => q.text.startsWith("SELECT u.id FROM users u"));
+  assert.match(
+    select.text,
+    /NOT EXISTS \( SELECT 1 FROM session_feedback sf JOIN chat_sessions cs ON cs\.id = sf\.chat_session_id WHERE cs\.user_id = u\.id AND sf\.starred_at IS NOT NULL \)/
+  );
+});
+
 test("archives, then deletes messages, sessions and users for the same ids", async () => {
   const sql = retentionSql([[USER_A, USER_B]]);
   const totals = await run(sql);

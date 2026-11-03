@@ -201,7 +201,7 @@ Encryption in transit is listed in [§5.3](#53-encryption-in-transit); Bedrock c
 
 | Control | Detail |
 |---------|--------|
-| **Retention** | A daily job (`cdk/lambda/handlers/retentionHandler.js`, 09:00 UTC) deletes each guest user, with all their chats, messages and feedback, once their most recent activity is more than 90 days old. Staff (Cognito) rows are never touched. |
+| **Retention** | A daily job (`cdk/lambda/handlers/retentionHandler.js`, 09:00 UTC) deletes each guest user, with all their chats, messages and feedback, once their most recent activity is more than 90 days old. A guest with starred feedback is kept until an admin unstars or dismisses it, then deleted on the next run. Staff (Cognito) rows are never touched. The chat sidebar tells families that conversations are cleared after 90 days without a visit. |
 | **Analytics rollup** | Before deleting, the job keeps per-day counts only (sessions, messages, questions, thumbs up/down) in `analytics_archive` under a fresh anonymous number that cannot be linked back to the user. Admin analytics adds these to live data, so totals do not drop. Written feedback text is not kept. |
 | **Limit bookkeeping** | The same job prunes `daily_usage_requests` after 2 days and `user_daily_usage` after 7 days. |
 | **Session cap** | Each guest can start 20 new chats per UTC day (`POST /chat_sessions` returns 429 `DAILY_SESSION_LIMIT_EXCEEDED`). Deleting a chat does not free a slot. |
