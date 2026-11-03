@@ -25,17 +25,17 @@ This guide covers practical modifications developers commonly need to make: styl
 
 The frontend uses Tailwind and CSS variables for theme colors. Primary variables are defined in `frontend/src/index.css`.
 
-**Example** (change the primary brand color and sidebar background):
+**Example** (the primary brand color and sidebar background, as currently set):
 
 ```css
 /* frontend/src/index.css */
 :root {
-  --primary: rgb(23, 68, 103);
-  --sidebar: rgb(23, 68, 103);
+  --primary: oklch(0.42 0.10 268);
+  --sidebar: #f4f5f7;
 }
 ```
 
-The `.dark` block overrides the same variables for dark mode.
+The `.dark` block repeats the same variables (currently with the same values), and `@theme inline` maps them to Tailwind color names. Change both blocks to keep the theme consistent.
 
 For component-specific overrides, search for hex codes or Tailwind classes directly in `frontend/src/components/`.
 
@@ -200,7 +200,7 @@ See [`DATABASE_MIGRATIONS.md`](./DATABASE_MIGRATIONS.md) for the full workflow.
 
 ## Message Limits
 
-These limits are admin settings in `system_settings` (dashboard: [General Settings](./USER_GUIDE.md#general-settings)); changes apply without a deploy:
+These limits are admin settings in `system_settings` (admin console: [Assistant settings](./USER_GUIDE.md#assistant-settings)); changes apply without a deploy:
 
 - `max_characters_per_user_message`: length of one message
 - `max_characters_per_day` and `max_messages_per_day`: per user, per UTC day
@@ -245,6 +245,7 @@ cd frontend
 npm ci
 npm run build   # type-check and production build
 npm run lint
+npm test        # Vitest unit tests (*.test.ts / *.test.tsx beside the code), single run
 ```
 
 Run the dev server manually with `npm run dev` (Vite).
@@ -265,5 +266,5 @@ Most resources use AWS managed keys (S3 buckets use SSE-S3); the API Gateway and
 - **Memory/Latency**: Increase `memorySize`; check VPC and RDS proxy config.
 - **Database**: Verify `SM_DB_CREDENTIALS` in Secrets Manager and RDS proxy endpoint.
 - **Cognito**: Check the user pool and client IDs in `frontend/.env.local` (local development) or the Amplify environment variables (see [`frontend/README.md`](../frontend/README.md)).
-- **Guardrails**: See `Docs/BEDROCK_GUARDRAILS.md` for topic policies, allow rules, and testing.
+- **Guardrails**: See `Docs/BEDROCK_GUARDRAILS.md` for the PII, regex and content filter policy, streaming screening, and testing. Topic scope is a prompt rule (`SCOPE_RULE` in `cdk/lambda/textGeneration/helpers/config.py`), not a guardrail topic policy.
 - **Logging**: CloudWatch logs are the primary debugging source for all Lambdas.

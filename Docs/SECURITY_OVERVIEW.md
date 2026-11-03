@@ -2,7 +2,7 @@
 
 **Project:** Knowledge Compass
 **Document Type:** Public Security Architecture Overview
-**Last Updated:** October 2026
+**Last Updated:** November 2026
 
 ---
 
@@ -120,9 +120,9 @@ Amplify Hosting adds these to every file it serves (`spaSecurityHeaders` in `cdk
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
 - `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy` denying camera, microphone, geolocation, payment and USB
-- A Content Security Policy: same-origin scripts only, no framing (`frame-ancestors 'none'`), and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
+- An enforced `Content-Security-Policy`: same-origin scripts only, no framing (`frame-ancestors 'none'`), no plugins (`object-src 'none'`), styles and fonts from the app and Google Fonts only, and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
 
-The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are logged in the browser console but nothing is blocked. After a dev deploy shows no violations, rename the header to `Content-Security-Policy`. Header changes take effect on the branch's next Amplify deploy.
+The browser blocks anything the policy does not list. If a change needs a new source (for example another API origin), add it to `spaSecurityHeaders` rather than switching back to `Content-Security-Policy-Report-Only`. Header changes take effect on the branch's next Amplify deploy.
 
 ---
 
@@ -283,7 +283,7 @@ Coarse location (province/territory, city, school board) is intentionally not ma
 |---------|-------------|
 | **Prompt Attack Detection** | Identifies and blocks injection attempts |
 | **Untrusted Context** | Retrieved documents are wrapped as data with an instruction not to follow anything inside them; tag-like text is escaped so a crawled page cannot close the block |
-| **Scope Enforcement** | System prompts restrict scope to inclusive education in Canada |
+| **Scope Enforcement** | A code-owned scope rule (`SCOPE_RULE` in `textGeneration/helpers/config.py`) is added after the admin Boundaries prompt, so a prompt edit cannot remove it. It limits help to a child's schooling in Canada, keeps sensitive school topics (harm, restraint, self-harm, legal worries) in scope with care, politely declines unrelated tasks, and gives tips rather than drafting emails or letters to the school. `evals/guardrails/f13_cases.yaml` tests it |
 | **Guardrails** | Strict boundaries on acceptable responses |
 
 For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROCK_GUARDRAILS.md).
@@ -292,7 +292,7 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 | Control | Description |
 |---------|-------------|
-| **Output Guardrail** | Every final answer is screened before it is saved or sent: content filters replace a flagged answer with a safe message, and passwords, PINs, card, bank, health and SIN numbers are masked. A guardrail error fails closed. Streamed tokens are replaced by the screened answer when generation completes. |
+| **Output Guardrail** | Every final answer is screened before it is saved or sent: content filters replace a flagged answer with a safe message, and passwords, PINs, card, bank, health and SIN numbers are masked. A guardrail error fails closed. While the answer streams, each batch is screened (with everything sent before it) before it reaches the socket, so a blocked answer stops streaming; the final screened answer in the `complete` event replaces the streamed text ([details](./BEDROCK_GUARDRAILS.md#streaming-and-the-output-guardrail)). |
 | **Grounding Check** | A separate model call (`textGeneration/helpers/intervention.py`) checks the answer against its cited sources; answers that are not grounded carry a warning to the user |
 
 ---
@@ -311,7 +311,7 @@ All logs go to CloudWatch Logs; the alarms in [§8.2](#82-alerting) read CloudWa
 | **VPC Flow Logs** | Network traffic metadata | Configurable |
 | **WebSocket Logs** | Connection events, route keys (no authorizer fields: the WebSocket API has no API Gateway authorizer) | 1 year (retained on stack deletion) |
 | **WAF Logs** (`aws-waf-logs-<STACK-PREFIX>-Api`) | Blocked requests only, `Authorization` header redacted | 1 year, customer-managed key (retained on stack deletion) |
-| **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for promote_user, admin user creation, system-message create/activate/delete, system-settings updates and data-source deletion; written in the same transaction as the change; append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
+| **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for role elevation (`admin.promote_user`), admin user creation, system-message create/activate/delete, system-settings updates, journey and situation create/update, journey prompt version create/activate/delete, guideline mode changes, guideline document deletion, feedback triage, data-source deletion and embedding-space purge; written in the same transaction as the change (a purge, whose vector batches commit one at a time, commits its row before the first batch); append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
 | **Token issuance log** | One line per access token from `GET /user/publicToken`: token id (`jti`), bound guest id or null, source IP, user agent, request id (never the token or credential) | Lambda log retention |
 | **Worker task log** | One line per self-invoked ingestion/embedding task with the originating admin (sub/email/request id, null for scheduler/ECS paths) | Lambda log retention |
 
@@ -331,7 +331,7 @@ All logs go to CloudWatch Logs; the alarms in [§8.2](#82-alerting) read CloudWa
 | **Encryption at Rest** | ✅ Enabled | AWS managed keys (CMK upgrade available — see [`AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md)) |
 | **Encryption in Transit** | ✅ Enabled | TLS enforced on all connections |
 | **Access Control** | ✅ Enabled | Role-based, least privilege |
-| **Audit Logging** | ✅ Enabled | Privileged admin actions (role elevation, admin creation, system messages/settings, data-source deletion) are recorded with the acting administrator in the append-only `admin_audit` table; API access logs carry the authorizer identity and token id and are kept 1 year; token issuance and admin-started worker tasks are logged with their ids and originating admin. CloudTrail covers AWS API calls. |
+| **Audit Logging** | ✅ Enabled | Privileged admin actions (role elevation, admin creation, system messages/settings, journeys and their prompts, guideline mode and documents, feedback triage, data-source deletion, embedding-space purge) are recorded with the acting administrator in the append-only `admin_audit` table; API access logs carry the authorizer identity and token id and are kept 1 year; token issuance and admin-started worker tasks are logged with their ids and originating admin. CloudTrail covers AWS API calls. |
 | **Credential Management** | ✅ Enabled | Secrets Manager with automatic rotation |
 | **PII Protection** | ✅ Enabled | Automatic anonymization via Bedrock Guardrails |
 | **Input Validation** | ✅ Enabled | Schema and application-level validation |
@@ -347,7 +347,7 @@ Known gaps that are accepted by design, and settings an operator must change out
 
 | Area | What remains | Why it is accepted | Mitigation in place |
 |------|--------------|--------------------|---------------------|
-| **WebSocket API not behind WAF** [A-03] | The chat WebSocket API has no WAF web ACL | AWS WAF cannot attach to API Gateway WebSocket (or HTTP) APIs; only REST API stages are supported | Token verified on `$connect`; stage-wide throttles; a per-connection limit on `generate_text` messages; the input guardrail. Putting CloudFront (with WAF) in front would only inspect the initial upgrade request. |
+| **WebSocket API not behind WAF** [A-03] | The chat WebSocket API has no WAF web ACL | AWS WAF cannot attach to API Gateway WebSocket (or HTTP) APIs; only REST API stages are supported | Token verified on `$connect`; stage-wide throttles; a `generate_text` limit counted both per connection and per guest across all of that guest's sockets (`cdk/lambda/websocket/connections.js`); one in-flight answer per guest; the input guardrail. Putting CloudFront (with WAF) in front would only inspect the initial upgrade request. |
 | **Wildcard API id in Lambda invoke permissions** [A-11] | API Gateway invoke permissions name `*` for the REST API id, and text generation's `ManageConnections` grant names `*` for the WebSocket API id | Naming the API id would create a CloudFormation dependency cycle (the OpenAPI body references the functions) | Every grant is pinned to this account and region and to its route, stage or `POST /@connections`; the authorizers still gate every request. Only an API Gateway in the same account could use the wildcard. |
 | **Single-AZ database** [A-16] | RDS runs in one Availability Zone with 7-day automated backups | Cost, for the current scale | Encrypted storage, TLS only, isolated subnets, deletion protection, rotated credentials. For production consider `multiAz: true` and backups aligned with the data-retention policy (`cdk/lib/database-stack.ts`). |
 | **Ingest buckets are deleted with the stack** | The S3 ingest bucket (uploaded originals, transcript outputs, cached OCR text) and its access-log bucket use `RemovalPolicy.DESTROY` with `autoDeleteObjects: true`, so deleting the ingestion stack permanently deletes their contents | Content should not outlive the deployment that processed it. The originals are not needed to change embedding models: a rebuild re-embeds from the chunk text stored in the database | Deleting a stack is a deliberate, approved action. The database (chunk text and vectors) has deletion protection, and RDS takes a final snapshot if the database is deleted. To keep the originals, copy the bucket before teardown (`cdk/lib/ingestion-stack.ts`). |
@@ -361,7 +361,6 @@ Known gaps that are accepted by design, and settings an operator must change out
 | **Reserve Lambda concurrency** [A-14] | Request an account Lambda concurrency quota of at least 350, then deploy with `-c enableReservedConcurrency=true` | Before public launch. Until then the public Lambdas run unreserved, so a traffic spike can starve admin functions; WAF rate rules and WebSocket throttles are the backstop |
 | **Enable Cognito threat protection** [A-17] | Cognito Plus feature plan with threat protection (compromised-credential and adaptive authentication) in ENFORCED mode, on the admin user pool | Optional. Admin sign-in already requires TOTP MFA, a strong password policy and SRP; only users in the `admin` group reach the admin role |
 | **Accept or fix ECR scan findings** | `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts` (each entry needs a reason), or a newer base image | Whenever the image scan gate blocks a build on a CRITICAL or HIGH finding |
-| **Enforce the Content Security Policy** | Rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in `cdk/lib/amplify-stack.ts` | After a dev deploy shows no CSP violations in the browser console ([section 4.5](#45-frontend-security-headers)) |
 
 ### 9.3 Authorization model (reviewed, no change needed) [A-17]
 

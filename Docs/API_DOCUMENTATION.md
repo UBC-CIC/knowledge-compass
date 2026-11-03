@@ -103,7 +103,10 @@ Admin and user endpoints accept `<token>` or `Bearer <token>`. `GET /user/public
 - `403` - Forbidden (insufficient permissions)
 - `404` - Not Found
 - `409` - Conflict (e.g. duplicate resource)
+- `429` - Too Many Requests: a daily limit was reached (the body names it, for example `DAILY_SESSION_LIMIT_EXCEEDED`), or WAF or API Gateway throttling stopped the request
 - `500` - Internal Server Error
+
+A `403` or `429` that WAF or API Gateway throttling returns never reaches a Lambda, so its body is not in the standard format. Wait and retry; the SPA tells families to wait a few minutes when this happens on `GET /user/publicToken`.
 
 ---
 
@@ -268,6 +271,16 @@ Create a new chat session for a user.
   "created_at": "2024-01-15T10:30:00.000Z",
   "last_active_at": "2024-01-15T10:30:00.000Z",
   "metadata": null
+}
+```
+
+Returns `201` on success. Each guest can start 20 chat sessions per UTC day (`DAILY_SESSION_LIMIT` in `chatSessionHandler.js`); deleting a session does not free a slot. Over the limit, the response is `429`:
+
+```json
+{
+  "error": "DAILY_SESSION_LIMIT_EXCEEDED",
+  "message": "<text safe to show>",
+  "session_usage": { "limit": 20, "reset_at": "2026-11-04T00:00:00.000Z" }
 }
 ```
 
@@ -1251,7 +1264,7 @@ The client sends one JSON frame per chat message:
 | `token` | yes | Current access token; must name the user the connection is bound to |
 | `user_id` | no | Legacy field. If sent, it must equal the bound user |
 
-- `generate_text` frames are rate limited per connection: `WS_GENERATE_RATE_LIMIT` frames per `WS_GENERATE_RATE_WINDOW_SECONDS` (defaults 10 per 60 s, `cdk/lambda/websocket/connections.js`).
+- `generate_text` frames are rate limited twice, with the same limit and window: per connection, and per guest across all of that guest's connections, so opening more sockets gives no extra allowance. The limit is `WS_GENERATE_RATE_LIMIT` frames per `WS_GENERATE_RATE_WINDOW_SECONDS` (defaults 10 per 60 s, `cdk/lambda/websocket/connections.js`). Every `generate_text` frame counts, valid or not. An over-limit frame gets a `RATE_LIMITED` error event and nothing else runs.
 - An empty `query` or an invalid `chat_session_id` returns `400` with no event, so the client must validate both before sending.
 - The client sends `{"type": "ping"}` every 30 seconds to keep the connection open. Pings are not rate limited.
 
@@ -1271,7 +1284,7 @@ The server posts these frames to the connection (`cdk/lambda/textGeneration/main
 
 | `error` | Meaning |
 |---|---|
-| `RATE_LIMITED` | Too many `generate_text` frames on this connection |
+| `RATE_LIMITED` | Too many `generate_text` frames on this connection, or from this guest across all of their connections |
 | `CONNECTION_NOT_AUTHORIZED` | The connection has no verified binding; the server closes it |
 | `CONNECTION_USER_MISMATCH` | The frame's token names a different user than the connection |
 | `PUBLIC_CHAT_PAUSED` | The ops kill switch `/<STACK-PREFIX>-Api/PublicChatEnabled` is `false` |
