@@ -62,6 +62,45 @@ ANSWER_CHAR_CAP_FALLBACK = 5000
 # Ends an answer that was cut to the cap. Counted within the cap.
 ANSWER_TRUNCATION_MARKER = "…"
 
+# Hidden metadata tags the model writes after the visible answer. They are
+# parsed server-side and must never reach the family, even when the model puts
+# them inside <answer> or leaves out </answer>.
+HIDDEN_TAG_NAMES = ("journey_state", "cited_indices", "detective_state", "guide_state")
+_HIDDEN_NAMES_RE = "|".join(HIDDEN_TAG_NAMES)
+_HIDDEN_BLOCK_RE = re.compile(rf"<({_HIDDEN_NAMES_RE})>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_HIDDEN_OPEN_RE = re.compile(rf"<(?:{_HIDDEN_NAMES_RE})\b", re.IGNORECASE)
+_HIDDEN_STRAY_RE = re.compile(rf"</(?:{_HIDDEN_NAMES_RE})>|</?answer>", re.IGNORECASE)
+
+
+def strip_hidden_tags(text: str) -> str:
+    """
+    Remove hidden metadata blocks from visible text. Closed blocks are removed
+    wherever they appear; an unclosed opening tag drops everything after it;
+    stray closing tags and <answer> tags are removed.
+    """
+    if not text:
+        return text
+    text = _HIDDEN_BLOCK_RE.sub("", text)
+    open_match = _HIDDEN_OPEN_RE.search(text)
+    if open_match:
+        text = text[:open_match.start()]
+    return _HIDDEN_STRAY_RE.sub("", text).strip()
+
+
+def _sanitize_history(raw_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Strip hidden tags from earlier AI messages before they are replayed to the
+    router and the model, so a reply that leaked a tag is not copied forward.
+    User messages are left as written.
+    """
+    cleaned = []
+    for msg in raw_history or []:
+        if msg.get("sender") != "user" and msg.get("content"):
+            msg = {**msg, "content": strip_hidden_tags(msg["content"])}
+        cleaned.append(msg)
+    return cleaned
+
+
 # Sent when generation or the output guardrail fails. Failure is tracked by the
 # generation_failed flag, never by matching this text: the model can be asked
 # to start its answer with it (finding f-db9c8d85).
@@ -165,7 +204,7 @@ def _prepare_conversation(
         raise ValueError("Please provide a non-empty question.")
 
     # 2. Retrieve History
-    raw_history = fetch_recent_messages(db_connection, chat_session_id)
+    raw_history = _sanitize_history(fetch_recent_messages(db_connection, chat_session_id))
     
     # 3. Save User Message
     try:
@@ -585,8 +624,11 @@ def get_response(
     has_guides = exclusive_guideline or bool(routing_ctx.get("has_guides"))
     # Hidden metadata tags that must never reach the stream. Guideline mode
     # adds <guide_state>; standard mode keeps its original tag lists.
-    stream_stop_tags = ["</answer>", "<cited", "<detective_state"]
-    stream_hold_tags = ["</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>"]
+    stream_stop_tags = ["</answer>", "<cited", "<detective_state", "<journey_state"]
+    stream_hold_tags = [
+        "</answer>", "<cited_indices>", "</cited_indices>", "<cited", "<detective_state>", "</detective_state>",
+        "<journey_state>", "</journey_state>",
+    ]
     if has_guides:
         stream_stop_tags.append("<guide_state")
         stream_hold_tags.extend(["<guide_state>", "</guide_state>"])
@@ -664,10 +706,13 @@ def get_response(
             # Parse final answer text properly
             final_answer_match = re.search(r'<answer>(.*?)</answer>', full_response_text, re.DOTALL)
             if final_answer_match:
-                answer_text = final_answer_match.group(1).strip()
+                answer_text = final_answer_match.group(1)
             else:
-                # Detective phase: strip any trailing <detective_state> tag from saved text
-                answer_text = re.split(r'<(?:cited_indices|detective_state|guide_state)', full_response_text)[0].strip()
+                # Detective phase, or a reply without </answer>: keep the text
+                # before the first hidden tag.
+                answer_text = full_response_text.split("<answer>", 1)[-1]
+            # Hidden blocks the model put inside the answer are removed too.
+            answer_text = strip_hidden_tags(answer_text)
 
             # The visible answer is held to the per-answer cap before it is
             # screened, saved or sent. The stream above stops at the same length;
