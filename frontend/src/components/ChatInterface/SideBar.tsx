@@ -163,7 +163,7 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
       </div>
 
       <div className="shrink-0 border-t border-foreground/10 px-[22px] py-4 text-[12.5px] leading-snug text-foreground/80">
-        Nothing is sent to your school or school board.
+        To protect your privacy, conversations are cleared after 90 days without a visit.
         {isAdmin || isDemoMode ? (
           <button
             type="button"
