@@ -56,7 +56,7 @@ export const SHARED_PAGES: Record<SharedPageId, SharedPage> = {
         id: "guardrails",
         title: "Boundaries",
         autoInsert:
-          "Topic scope rule added here automatically: stays on a child's schooling, always helps with harm, abuse, restraint, location and legal worries",
+          "Topic scope rule added here automatically: stays on a child's schooling, always helps with harm, abuse, restraint, location and legal worries, gives tips (not written messages) for contacting the school",
       },
       { id: "language_guidelines", title: "Preferred language" },
     ],
