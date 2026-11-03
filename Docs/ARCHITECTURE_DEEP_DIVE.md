@@ -30,43 +30,289 @@
 
 For the full list of stacks see the [Deployment Guide](./DEPLOYMENT_GUIDE.md#stacks-deployed); for ingestion details see [Knowledge Base Documentation](./KNOWLEDGE_BASE_DOCUMENTATION.md); for security controls see [Security Overview](./SECURITY_OVERVIEW.md).
 
-### Why pgvector?
-
-The project originally used Amazon Bedrock Knowledge Bases with OpenSearch Serverless. It moved retrieval into the existing PostgreSQL database ([migration plan](./PGVECTOR_MIGRATION_PLAN.md), now historical) because:
-
-- **Cost** — no OpenSearch Serverless capacity units; vector search runs on the RDS instance that already exists.
-- **Control** — chunking, metadata, citations and filtering are application code, so CSV rows, linked pages, videos and guideline sections can each be chunked and cited the way they need.
-- **One store** — sources, chunks, vectors and the rest of the application data live in one database, so deleting a data source removes its content from retrieval in the same transaction.
-- **Swappable models** — embedding spaces let a model be replaced with a rebuild and cutover instead of a re-ingest.
-
 ## Database Schema
 
 Migrations in `cdk/lambda/db_setup/migrations/` are the source of truth for the schema; see [Database Migrations](./DATABASE_MIGRATIONS.md). The tables below are grouped by purpose, with the migration that introduced each one.
 
-> The database diagram below predates the pgvector migration and shows only the original tables.
+The diagrams show each table's keys and main columns as of migration 049. Tables without lines have no foreign keys. The `created_by` and `updated_by` columns that point at an administrator's `users` row (on `data_sources`, `system_messages`, `system_settings`, `journeys`, `journey_clusters` and `journey_prompt_versions`) are not drawn.
 
-![Database Diagram](./media/db-diagram.png)
+#### Users, chat, prompts and limits
+
+```mermaid
+erDiagram
+    users ||--o{ chat_sessions : owns
+    chat_sessions ||--o{ chat_messages : contains
+    chat_sessions ||--o| session_feedback : "rated by"
+    chat_messages |o--o{ session_feedback : "left on"
+    users ||--o{ user_daily_usage : "counted in"
+    users ||--o| user_inflight_generations : "generating"
+    journeys ||--o{ journey_clusters : "has situations"
+    journeys |o--o{ journey_prompt_versions : "versions of"
+    journey_clusters |o--o{ journey_prompt_versions : "versions of"
+    journeys |o--o{ guideline_documents : "guides for"
+    guideline_documents ||--o{ guideline_sections : contains
+
+    users {
+        uuid id PK
+        varchar identity_source "guest or cognito"
+        varchar cognito_sub UK "admins only"
+        user_role role "student (guest) or admin"
+        varchar email UK "admins only"
+        int credential_version
+        timestamptz last_seen_at
+    }
+    chat_sessions {
+        uuid id PK
+        uuid user_id FK
+        varchar title
+        timestamptz last_active_at
+        jsonb metadata "journey, routing and guide state"
+        varchar eval_run_id
+        varchar prompt_mode_override
+    }
+    chat_messages {
+        uuid id PK
+        uuid chat_session_id FK
+        sender_role sender "user or AI"
+        text content
+        jsonb sources "cited sources"
+        text warning "grounding warning"
+    }
+    session_feedback {
+        uuid id PK
+        uuid chat_session_id FK,UK
+        uuid chat_message_id FK
+        varchar rating "up or down"
+        text comment
+        timestamptz starred_at "Review later"
+        timestamptz dismissed_at
+    }
+    system_messages {
+        uuid id PK
+        system_message_type type
+        text content
+        int version
+        boolean is_active
+        boolean affects_text_generation
+    }
+    system_settings {
+        uuid id PK
+        int max_messages_per_day
+        int max_characters_per_day
+        int max_messages_per_day_global
+        int max_characters_per_user_message
+        int max_characters_per_ai_message
+        varchar routing_mode
+        varchar service_status
+        text service_message
+    }
+    journeys {
+        uuid id PK
+        varchar key UK
+        varchar name
+        text description
+        text detection_signals "words families use"
+        boolean is_archived
+    }
+    journey_clusters {
+        uuid id PK
+        uuid journey_id FK
+        varchar key UK
+        varchar name
+        text matches_when
+        boolean is_archived
+    }
+    journey_prompt_versions {
+        uuid id PK
+        varchar field
+        uuid journey_id FK
+        uuid cluster_id FK
+        text content
+        int version
+        boolean is_active
+    }
+    guideline_config {
+        int id PK
+        varchar prompt_mode "standard or guideline"
+    }
+    guideline_documents {
+        uuid id PK
+        uuid journey_id FK
+        varchar file_name
+        varchar status
+        int section_count
+    }
+    guideline_sections {
+        uuid id PK
+        uuid document_id FK
+        varchar section_key
+        varchar auto_label
+        varchar label_override
+        text summary
+    }
+    user_daily_usage {
+        uuid user_id PK,FK
+        date usage_date PK
+        int characters_sent
+        int sessions_created
+    }
+    user_inflight_generations {
+        uuid user_id PK,FK
+        text request_id
+        timestamptz started_at
+    }
+    daily_usage_requests {
+        text request_id PK
+        int characters_reserved
+    }
+    global_daily_usage {
+        date usage_date PK
+        int messages
+    }
+    admin_audit {
+        uuid id PK
+        varchar actor_sub
+        varchar actor_email
+        varchar action
+        jsonb target "ids only"
+        varchar request_id
+    }
+    analytics_archive {
+        bigint archive_user_id PK "anonymous"
+        date activity_date PK
+        int sessions_created
+        int messages
+        int questions
+        int thumbs_up
+        int thumbs_down
+    }
+```
+
+#### Knowledge base and embeddings
+
+```mermaid
+erDiagram
+    data_sources ||--o{ ingestion_runs : "ingested by"
+    sources |o--o{ ingestion_runs : "written by"
+    sources ||--o{ chunks : "split into"
+    data_sources ||--o{ web_source_owners : crawled
+    sources ||--o{ web_source_owners : "owned by"
+    data_sources ||--o{ csv_row_links : "rows of"
+    sources |o--o{ csv_row_links : "row source"
+    chunks ||--o{ chunk_embeddings : "embedded as"
+    embedding_spaces ||--o{ chunk_embeddings : holds
+    embedding_spaces ||--o| embedding_active_space : "active space"
+    embedding_spaces ||--o{ embedding_jobs : "jobs for"
+
+    data_sources {
+        uuid id PK
+        varchar name "seed URL or file name"
+        data_source_type type
+        uuid created_by FK
+        jsonb metadata
+    }
+    ingestion_runs {
+        uuid id PK
+        uuid data_source_id FK
+        uuid source_id FK
+        ingestion_status status
+        text error_message
+        jsonb metadata "sync session, PDF extraction"
+    }
+    sources {
+        uuid id PK
+        varchar url UK
+        varchar name
+        source_type source_type
+        jsonb metadata
+    }
+    chunks {
+        uuid id PK
+        uuid source_id FK
+        int chunk_index
+        text body
+        int word_count
+        varchar content_hash
+        vector embedding "legacy, Cohere v3"
+        jsonb metadata
+    }
+    web_source_owners {
+        uuid source_id PK,FK
+        uuid data_source_id PK,FK
+        timestamptz last_seen_at
+    }
+    csv_row_links {
+        uuid id PK
+        uuid data_source_id FK
+        uuid row_source_id FK
+        varchar row_key
+        varchar normalized_url
+        varchar status "pending, success, failed, skipped"
+        text citation_url
+        boolean row_indexed
+        boolean fetched_content_indexed
+    }
+    embedding_spaces {
+        uuid id PK
+        varchar name UK
+        varchar provider
+        text model_id
+        int dimensions
+        varchar status
+        numeric min_score
+    }
+    embedding_active_space {
+        int id PK
+        uuid space_id FK
+        boolean cutover_locked
+    }
+    chunk_embeddings {
+        uuid chunk_id PK,FK
+        uuid space_id PK,FK
+        vector embedding
+        char embed_hash
+    }
+    embedding_jobs {
+        uuid id PK
+        uuid space_id FK
+        varchar mode
+        varchar status
+        int processed
+        jsonb report
+    }
+    upload_issuances {
+        varchar s3_bucket PK
+        varchar s3_key PK
+        varchar issued_to_sub
+        timestamptz expires_at
+        timestamptz consumed_at
+    }
+```
 
 ### Users and chat
 
 | Table | Purpose | Migration |
 |---|---|---|
-| `users` | Anonymous public users and administrators (`role`: `student` for public users, `admin`), credential version, identity source, normalized email | 000 |
-| `chat_sessions` | One row per conversation: title, journey and routing state, guide state, and eval-harness columns | 000 |
-| `chat_messages` | Messages (`sender`: `user` or `AI`) with their public citations and grounding warning | 000 |
-| `session_feedback` | End-of-conversation thumbs up/down and optional comment, with admin triage fields | 021 |
+| `users` | Anonymous guests and administrators. `identity_source` is `guest` or `cognito` (with `cognito_sub` for admins); `role` is `admin` or `student`, a legacy enum name that means a public guest. Also holds the credential version and a lowercase email (admins only; guests have none) | 000, 033, 039, 041, 046 |
+| `chat_sessions` | One row per conversation: title, last activity, and in `metadata` the journey, routing and guide state; `eval_run_id` and `prompt_mode_override` for evaluation runs | 000, 035 |
+| `chat_messages` | Messages (`sender`: `user` or `AI`), with the AI message's cited sources (`sources`) and grounding warning | 000 |
+| `session_feedback` | One rating per conversation (`up` or `down`), an optional comment up to 1,000 characters, the reply it was left on, and the admin Review later (`starred_at`) and dismissed flags | 021, 029, 030 |
+
+Guests and everything they own are deleted 90 days after their last activity, unless they have feedback saved for Review later ([Security Overview §6.5](./SECURITY_OVERVIEW.md#65-guest-data-retention-and-limits)).
 
 ### Knowledge base
 
 | Table | Purpose | Migration |
 |---|---|---|
-| `data_sources` | What an administrator added (`type`: `website`, `csv`, `markdown`, `json`, `video`, `document`) | 000 |
-| `ingestion_runs` | One row per ingestion attempt (`status`: `pending`, `queued`, `running`, `failed`, `completed`) with counters and errors | 000 |
-| `sources` | One row per retrievable source (`source_type`: `web`, `video`, `document`, `csv_link`, `csv_row`) | 001 |
-| `chunks` | Chunk text and metadata for each source | 001 |
-| `csv_row_links` | CSV rows whose link column is fetched and embedded as its own source | 016 |
-| `web_source_owners` | Which website data sources crawled each page, so deleting a website removes its pages | 038 |
-| `upload_issuances` | Binds each presigned upload to the administrator it was issued to | 045 |
+| `data_sources` | What an administrator added (`type`: `website`, `csv`, `markdown`, `video`, `document`, or `json` for the metadata file that accompanies a CSV or Markdown upload) | 000, 005, 008 |
+| `ingestion_runs` | One row per ingestion attempt (`status`: `pending`, `queued`, `running`, `failed`, `completed`) with its sync session, counters, errors and metadata (for example how a PDF was read) | 000, 001 |
+| `sources` | One row per retrievable source, keyed by URL (`source_type`: `web` for a crawled page, `video`, `document`, `csv_link` for a page a CSV row links to, `csv_row` for a CSV row) | 001, 015, 017 |
+| `chunks` | Chunk text, word count, content hash and metadata (for example video timestamps and citations) for each source. Vectors live in `chunk_embeddings`; the legacy `chunks.embedding` column (Cohere v3) is kept until the [deferred cleanup](../cdk/lambda/db_setup/deferred/README.md) | 001 |
+| `csv_row_links` | One row per CSV row when the CSV has a link column: the link, the row's columns, its fetch status (`pending`, `success`, `failed`, `skipped`) and whether the row and its fetched page are indexed | 016, 017 |
+| `web_source_owners` | Which website data sources crawled each page, so deleting a website removes the pages no other website shares | 038 |
+| `upload_issuances` | Binds each presigned upload to the administrator it was issued to, so staging can claim it once | 045 |
+
+Uploaded files, transcripts and cached PDF text are in the S3 ingest bucket, not the database. There is no Amazon Bedrock Knowledge Base or OpenSearch index; see [Knowledge Base Documentation](./KNOWLEDGE_BASE_DOCUMENTATION.md).
 
 ### Embeddings
 

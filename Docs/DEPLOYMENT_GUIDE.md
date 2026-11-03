@@ -2,27 +2,32 @@
 
 ## Table of Contents
 
-- [Requirements](#requirements)
-  - [Request Higher Bedrock LLM Invocation Quotas](#request-higher-bedrock-llm-invocation-quotas)
-- [Pre-Deployment](#pre-deployment)
-  - [Create GitHub Personal Access Token](#create-github-personal-access-token)
-- [Deployment](#deployment)
-  - [Step 1: Fork \& Clone The Repository](#step-1-fork--clone-the-repository)
-  - [Step 2: Upload Secrets \& Parameters](#step-2-upload-secrets--parameters)
-  - [Step 3: CDK Deployment](#step-3-cdk-deployment)
-    - [CDK Deployment with an Existing VPC (Optional)](#cdk-deployment-with-an-existing-vpc-optional)
-    - [Initialize the CDK stack](#initialize-the-cdk-stack)
-    - [Deploy the stacks](#deploy-the-stacks)
-    - [Optional context flags](#optional-context-flags)
-    - [Stacks Deployed](#stacks-deployed)
-  - [Step 4: Authorize the GitHub Connection and Build the Images](#step-4-authorize-the-github-connection-and-build-the-images)
-- [Post-Deployment](#post-deployment)
-  - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
-  - [Step 2: Configure Admin User](#step-2-configure-admin-user)
-  - [Step 3: Visit Web App](#step-3-visit-web-app)
-  - [Adding Custom Allowed Origins](#adding-custom-allowed-origins)
-- [Troubleshooting](#troubleshooting)
-- [Cleanup](#cleanup)
+- [Deployment Guide](#deployment-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Requirements](#requirements)
+    - [Request Higher Bedrock LLM Invocation Quotas](#request-higher-bedrock-llm-invocation-quotas)
+  - [Pre-Deployment](#pre-deployment)
+    - [Create GitHub Personal Access Token](#create-github-personal-access-token)
+  - [Deployment](#deployment)
+    - [Step 1: Fork \& Clone The Repository](#step-1-fork--clone-the-repository)
+    - [Step 2: Upload Secrets \& Parameters](#step-2-upload-secrets--parameters)
+    - [Step 3: CDK Deployment](#step-3-cdk-deployment)
+      - [CDK Deployment with an Existing VPC (Optional)](#cdk-deployment-with-an-existing-vpc-optional)
+        - [Step-by-Step Instructions](#step-by-step-instructions)
+        - [Second Deployment in the Same Environment with an Existing VPC](#second-deployment-in-the-same-environment-with-an-existing-vpc)
+      - [Initialize the CDK stack](#initialize-the-cdk-stack)
+      - [Deploy the stacks](#deploy-the-stacks)
+      - [Optional context flags](#optional-context-flags)
+      - [Stacks Deployed](#stacks-deployed)
+    - [Step 4: Authorize the GitHub Connection and Build the Images](#step-4-authorize-the-github-connection-and-build-the-images)
+  - [Post-Deployment](#post-deployment)
+    - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
+    - [Step 2: Configure Admin User](#step-2-configure-admin-user)
+    - [Step 3: Visit Web App](#step-3-visit-web-app)
+    - [Adding Custom Allowed Origins](#adding-custom-allowed-origins)
+  - [Troubleshooting](#troubleshooting)
+  - [Cleanup](#cleanup)
+    - [Taking down the deployed stack](#taking-down-the-deployed-stack)
 
 ## Requirements
 
@@ -38,7 +43,7 @@ Tools:
 
 ### Request Higher Bedrock LLM Invocation Quotas
 
-Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and your embedding model (Amazon Titan Text Embeddings V2 on a new install; Cohere Embed V3 on deployments created before migration 049). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
+Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and your embedding model (Amazon Titan Text Embeddings V2 on a new install). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
 
 ## Pre-Deployment
 
@@ -109,7 +114,7 @@ aws secretsmanager create-secret `
 
 </details>
 
-Allowed email domains for **admin** sign-up, as a comma-separated list. The Cognito pre-sign-up trigger rejects any other domain. Public users never sign up, so this list does not affect them.
+Allowed email domains for **administrator** accounts, as a comma-separated list with no spaces, in lowercase (for example `inclusioncanada.ca,example.org`). Domains must match exactly; subdomains are not included. The Cognito pre-sign-up trigger rejects an account with any other domain, including one you create in the Cognito console. Public users have no account, so this list does not affect them.
 
 ```bash
 aws ssm put-parameter \
@@ -248,7 +253,7 @@ Add any of these as `--context <flag>=<value>` to the deploy command. For any sh
 
 | Flag | Default | Effect |
 |---|---|---|
-| `githubBranch` | `main` | Adds an Amplify branch (when not `main`), sets the CICD source branch, and sets the origin written to AllowedOrigins (`https://<githubBranch>.<app-id>.amplifyapp.com`) |
+| `githubBranch` | `main` | Adds an Amplify branch (when not `main`), sets the CICD source branch, and sets the origin written to AllowedOrigins (`https://<githubBranch>.<app-id>.amplifyapp.com`). The origin is written only when the Amplify stack is first created; if you change the branch later, add the new origin yourself ([Adding Custom Allowed Origins](#adding-custom-allowed-origins)) |
 | `alarmEmail` | none | Subscribes the address to the operational alarm topic |
 | `lifecycleAlertEmail` / `lifecycleAlertEmailParam` | none | Subscribes to the model lifecycle alert topic. `lifecycleAlertEmailParam` is the name of an SSM String parameter holding the address; `lifecycleAlertEmail` wins if both are set |
 | `monthlyBudgetUsd` | none | Creates a monthly AWS Budget in `<PREFIX>-Cost` with 50/80/100 % alerts to the alarm topic |
@@ -312,16 +317,16 @@ To create the first admin user:
 
 1. Open **Amazon Cognito** and select the user pool `<STACK-PREFIX>-Api-UserPool`.
 2. Click **Users**, then **Create user**.
-3. Enter your email address as the username and email, and a temporary password.
+3. Enter your email address as the username and email, and a temporary password. The email's domain must be in `/KC/AllowedEmailDomains`; otherwise creation fails with `PreSignUp failed with error Error validating email domain during pre-signup.`
 4. Choose **Don't send an email invitation**, then **Create user**.
 5. Select the user, click **Add user to group**, and choose `admin`.
-6. At first sign-in you set a new password and an authenticator app (TOTP MFA is required).
+6. Sign in at `<web app URL>/admin/login`. At first sign-in you set a new password and an authenticator app (TOTP MFA is required).
 
 Once one admin exists, add further admins through the API: `POST /admin/users` with `{ "display_name": "...", "email": "..." }` (admin ID token in `Authorization`). It creates the Cognito user, adds it to the `admin` group and records the admin in the database. Cognito emails the new admin a temporary password. The email must be in an allowed sign-up domain (`/KC/AllowedEmailDomains`). If the email already has a Cognito account, it is added to the `admin` group instead (response `200` rather than `201`).
 
 ### Step 3: Visit Web App
 
-Open the web app URL shown in the Amplify console: `https://<githubBranch>.<app-id>.amplifyapp.com` (`main` by default).
+Open the web app URL shown in the Amplify console: `https://<githubBranch>.<app-id>.amplifyapp.com` (`main` by default). Families use this URL directly; administrators sign in at `/admin/login` on the same URL. See the [User Guide](./USER_GUIDE.md).
 
 ### Adding Custom Allowed Origins
 
@@ -394,7 +399,7 @@ Follow these steps in order, and wait for each stack to finish deleting before s
 5. **Delete the retained resources.** These survive stack deletion by design:
    - Cognito user pool `<STACK-PREFIX>-Api-UserPool`: turn off its deletion protection, then delete it.
    - KMS key described as `<STACK-PREFIX>-Api API Gateway and WAF log encryption`: schedule its deletion after the log groups below are gone.
-   - CloudWatch log groups for REST API access logs, WebSocket access logs, and `aws-waf-logs-<STACK-PREFIX>-Api`.
+   - CloudWatch log groups for REST API access logs, WebSocket access logs, `aws-waf-logs-<STACK-PREFIX>-Api`, and the VPC flow logs.
    - ECR repositories `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` (lowercase).
    - The final RDS snapshot taken when the database was deleted (**Amazon RDS → Snapshots**), once you no longer need the data.
 
