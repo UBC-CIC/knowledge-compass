@@ -2,9 +2,10 @@
 // chat page cannot start, so the provider keeps one of these errors and the
 // page shows its message with a retry.
 //   blocked:     429 (API Gateway throttling) or 403 (a WAF block, often an
-//                HTML body). Usually clears after a short wait.
+//                HTML body) on POST /user or the /user/publicToken request
+//                before it. Usually clears after a short wait.
 //   unavailable: anything else (5xx, unreadable body, network failure, or the
-//                public token request failing).
+//                public token request failing for another reason).
 export type GuestStartErrorKind = "blocked" | "unavailable";
 
 export const DEFAULT_GUEST_START_MESSAGES: Record<GuestStartErrorKind, string> = {
