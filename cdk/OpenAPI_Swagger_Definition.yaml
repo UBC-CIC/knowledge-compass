@@ -2140,8 +2140,6 @@ paths:
                   max_characters_per_day: { type: integer }
                   max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
-                  temperature: { type: number }
-                  top_p: { type: number }
                   support_score_threshold: { type: number }
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }
@@ -2194,8 +2192,6 @@ paths:
                   maximum: 1000000
                   description: Messages all public users together can send per UTC day
                 max_characters_per_ai_message: { type: integer }
-                temperature: { type: number }
-                top_p: { type: number }
                 support_score_threshold: { type: number }
                 scope_alignment_score_threshold: { type: number }
                 grounded_threshold: { type: number }
@@ -2226,8 +2222,6 @@ paths:
                   max_characters_per_day: { type: integer }
                   max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
-                  temperature: { type: number }
-                  top_p: { type: number }
                   support_score_threshold: { type: number }
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }

@@ -186,8 +186,6 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
                     'max_characters_per_day': s.get('max_characters_per_day'),
                     'max_messages_per_day_global': s.get('max_messages_per_day_global'),
                     'max_characters_per_ai_message': s.get('max_characters_per_ai_message'),
-                    'temperature': _float('temperature'),
-                    'top_p': _float('top_p'),
                     'support_score_threshold': _float('support_score_threshold'),
                     'scope_alignment_score_threshold': _float('scope_alignment_score_threshold'),
                     'grounded_threshold': _float('grounded_threshold'),

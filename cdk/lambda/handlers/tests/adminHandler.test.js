@@ -285,8 +285,6 @@ test("system settings: each allowed key can be patched on its own", async () => 
     max_characters_per_user_message: 2000,
     max_messages_per_day_global: 1234,
     max_characters_per_ai_message: 8000,
-    temperature: 0.3,
-    top_p: 0.6,
     support_score_threshold: 0.4,
     scope_alignment_score_threshold: 0.5,
     grounded_threshold: 0.7,
@@ -313,7 +311,8 @@ test("system settings: a flow preset patch updates", async () => {
 
 test("system settings: invalid patches return 400 without updating", async () => {
   const cases = [
-    [{ temperature: 3 }, "temperature must be a number between 0 and 2"],
+    [{ support_score_threshold: 3 }, "support_score_threshold must be a number between 0 and 1"],
+    [{ temperature: 0.3, top_p: 0.6 }, "No valid fields to update"],
     [{ max_messages_per_day: null }, "max_messages_per_day must be an integer between 1 and 1000"],
     [{}, "No valid fields to update"],
   ];
@@ -517,7 +516,7 @@ test("validation failures write no audit row", async () => {
     httpMethod: "PUT",
     resource: "/admin/system-settings",
     requestContext: auditContext,
-    body: JSON.stringify({ temperature: 9 }),
+    body: JSON.stringify({ support_score_threshold: 9 }),
   });
   assert.equal(res.statusCode, 400);
   assert.equal(auditInserts(sql).length, 0);

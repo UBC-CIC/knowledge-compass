@@ -383,26 +383,6 @@ export default function SystemSettings() {
                   onChange={set("max_characters_per_ai_message")}
                   error={errors.max_characters_per_ai_message}
                 />
-                <NumberField
-                  label="Temperature"
-                  help={`Lower is more consistent. Recommended ${RECOMMENDED.temperature}.`}
-                  step="0.01"
-                  min={0}
-                  max={2}
-                  value={draft.temperature}
-                  onChange={set("temperature")}
-                  error={errors.temperature}
-                />
-                <NumberField
-                  label="Top P"
-                  help={`How strictly the model sticks to likely words. Recommended ${RECOMMENDED.top_p}.`}
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.top_p}
-                  onChange={set("top_p")}
-                  error={errors.top_p}
-                />
               </div>
               <div className="space-y-5 border-t border-foreground/10 pt-5">
                 <div>

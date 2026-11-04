@@ -595,8 +595,8 @@ def get_response(
                 },
                 {"text": dynamic_prompt}
             ],
-            # Haiku 5.5 rejects non-default temperature/top_p, so the admin
-            # sampling settings are not sent. Thinking is on by default there;
+            # Haiku 5.5 rejects non-default temperature/top_p, so no
+            # sampling settings are sent. Thinking is on by default there;
             # keep it off so the streamed reply starts with the answer.
             "inferenceConfig": {
                 "maxTokens": config.MAX_TOKENS,

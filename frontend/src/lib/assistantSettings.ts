@@ -19,8 +19,6 @@ export type AssistantSettings = {
   max_characters_per_day: number;
   max_messages_per_day_global: number;
   max_characters_per_ai_message: number;
-  temperature: number;
-  top_p: number;
   support_score_threshold: number;
   scope_alignment_score_threshold: number;
   grounded_threshold: number;
@@ -38,8 +36,6 @@ export const RECOMMENDED: AssistantSettings = {
   max_characters_per_day: 10000,
   max_messages_per_day_global: 5000,
   max_characters_per_ai_message: 5000,
-  temperature: 0.15,
-  top_p: 0.5,
   support_score_threshold: 0.25,
   scope_alignment_score_threshold: 0.25,
   grounded_threshold: 0.75,
@@ -51,8 +47,6 @@ export const SETTING_KEYS = Object.keys(RECOMMENDED) as SettingKey[];
 /** Settings a developer manages; "Reset to recommended" only touches these. */
 export const DEVELOPER_KEYS: SettingKey[] = [
   "max_characters_per_ai_message",
-  "temperature",
-  "top_p",
   "support_score_threshold",
   "scope_alignment_score_threshold",
   "grounded_threshold",
@@ -115,8 +109,6 @@ const RULES: Partial<Record<SettingKey, Rule>> = {
   max_characters_per_day: { min: 1, max: 1000000, integer: true, label: "Characters per day" },
   max_messages_per_day_global: { min: 1, max: 1000000, integer: true, label: "Messages per day, everyone" },
   max_characters_per_ai_message: { min: 1, max: 200000, integer: true, label: "Longest reply" },
-  temperature: { min: 0, max: 2, integer: false, label: "Temperature" },
-  top_p: { min: 0, max: 1, integer: false, label: "Top P" },
   support_score_threshold: { min: 0, max: 1, integer: false, label: "Evidence match" },
   scope_alignment_score_threshold: { min: 0, max: 1, integer: false, label: "Topic match" },
   grounded_threshold: { min: 0, max: 1, integer: false, label: "Reliable answer" },

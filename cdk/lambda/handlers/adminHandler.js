@@ -1045,8 +1045,6 @@ exports.handler = async (event) => {
             latest.max_characters_per_day,
             latest.max_messages_per_day_global,
             latest.max_characters_per_ai_message,
-            latest.temperature,
-            latest.top_p,
             latest.support_score_threshold,
             latest.scope_alignment_score_threshold,
             latest.grounded_threshold,
@@ -1072,8 +1070,6 @@ exports.handler = async (event) => {
           max_characters_per_day: 10000,
           max_messages_per_day_global: 5000,
           max_characters_per_ai_message: 5000,
-          temperature: 0.15,
-          top_p: 0.5,
           support_score_threshold: 0.25,
           scope_alignment_score_threshold: 0.25,
           grounded_threshold: 0.75,
@@ -1217,8 +1213,6 @@ exports.handler = async (event) => {
           "max_characters_per_day",
           "max_messages_per_day_global",
           "max_characters_per_ai_message",
-          "temperature",
-          "top_p",
           "support_score_threshold",
           "scope_alignment_score_threshold",
           "grounded_threshold",
@@ -1350,21 +1344,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        if (
-          patch.temperature !== undefined &&
-          (!isFiniteNumber(patch.temperature) ||
-            patch.temperature < 0 ||
-            patch.temperature > 2)
-        ) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({
-            error: "temperature must be a number between 0 and 2",
-          });
-          break;
-        }
-
         const unitIntervalFields = [
-          "top_p",
           "support_score_threshold",
           "scope_alignment_score_threshold",
           "grounded_threshold",
@@ -1507,8 +1487,6 @@ exports.handler = async (event) => {
             max_characters_per_day = COALESCE(${patch.max_characters_per_day ?? null}::int, s.max_characters_per_day),
             max_messages_per_day_global = COALESCE(${patch.max_messages_per_day_global ?? null}::int, s.max_messages_per_day_global),
             max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message ?? null}::int, s.max_characters_per_ai_message),
-            temperature = COALESCE(${patch.temperature ?? null}::float8, s.temperature),
-            top_p = COALESCE(${patch.top_p ?? null}::float8, s.top_p),
             support_score_threshold = COALESCE(${patch.support_score_threshold ?? null}::float8, s.support_score_threshold),
             scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold ?? null}::float8, s.scope_alignment_score_threshold),
             grounded_threshold = COALESCE(${patch.grounded_threshold ?? null}::float8, s.grounded_threshold),
@@ -1528,8 +1506,6 @@ exports.handler = async (event) => {
             s.max_characters_per_day,
             s.max_messages_per_day_global,
             s.max_characters_per_ai_message,
-            s.temperature,
-            s.top_p,
             s.support_score_threshold,
             s.scope_alignment_score_threshold,
             s.grounded_threshold,
