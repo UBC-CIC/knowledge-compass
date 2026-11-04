@@ -8,6 +8,7 @@ This guide covers the family chat and the admin console. To deploy the app first
 | ----- | ----------- |
 | [For families](#for-families) | Starting a conversation, reading answers, sources and warnings, managing earlier conversations |
 | [For administrators](#for-administrators) | Signing in, content, prompts and journeys, guides, settings, analytics and feedback, the search index |
+| [Adding content](#adding-content) | Step-by-step: websites, documents, video transcription, CSV and Markdown |
 
 ---
 
@@ -79,22 +80,69 @@ The console sidebar has five pages: **Overview**, **Analytics**, **Prompts**, **
 
 The top of the page shows **Users reached**, **Conversations** and **Messages exchanged** across all time.
 
-**Data sources** lists everything the assistant can answer from, with each item's type, status (Pending, Queued, Running, Completed or Failed), and upload and completion times. Search by name or type.
+**Data sources** lists everything the assistant can answer from, with each item's type, status (Pending, Transcribing, Queued, Running, Completed or Failed), and upload and completion times. Search by name or type.
 
-Adding content:
-
-- **Add web URL.** Enter a public website address. The crawler reads up to 50 pages on the same site. The include and exclude pattern fields are saved but not yet applied to the crawl.
-- **Upload files, video, or documents** has four tabs:
-  - **Single File:** a CSV or Markdown file plus a matching metadata file named `<file name>.metadata.json`. For a CSV whose rows link to web pages or PDFs, you can choose the link column and, optionally, the columns for a row id, title, description and the link families should see. The assistant then fetches each linked page and can cite individual rows.
-  - **Zip Upload:** several CSV or Markdown files with their metadata files in one `.zip`. Files are paired by name.
-  - **Video:** a video or audio file plus its public link (for example a YouTube URL), used for citations and links to the right moment. Transcription starts right away.
-  - **Document:** a PDF, Word (`.docx`) or text file plus its public link, used as the citation. Scanned PDFs are read with text recognition. Processing starts right away.
-
-Staged websites and files go live only after **Sync now**. Uploading a file again with the same name replaces it, and only changed text is processed again.
+To add websites, documents, videos or spreadsheets, see [Adding content](#adding-content).
 
 For each item, the actions let you re-queue a failed item for the next sync or delete it. Deleting removes its content from the assistant's answers. For CSVs with links, the link view shows each row's fetch and indexing status; use **Refresh** to update it.
 
-For how ingestion works and how to troubleshoot it, see [Knowledge Base Documentation](./KNOWLEDGE_BASE_DOCUMENTATION.md).
+### Adding content
+
+The assistant can only answer from content you add here. All of it is added from **Overview → Data sources**. Documents and videos need a public link families can open, because that link is what the assistant cites; uploaded files are never shown to families.
+
+| Content | How it is added | When it goes live |
+|---|---|---|
+| Website | **Add web URL** | After you click **Sync now** |
+| Document (PDF, Word, text) | **Upload files, video, or documents → Document** | Automatically after upload, usually within a few minutes (scanned PDFs take longer) |
+| Video or audio | **Upload files, video, or documents → Video** | Automatically once transcription finishes; longer recordings take longer |
+| CSV or Markdown | **Upload files, video, or documents → Single File** or **Zip Upload** | After you click **Sync now** |
+
+#### Add a website
+
+1. Click **Add web URL**.
+2. Enter the site's public address, for example `https://www.example.org/inclusive-education`. Only public `http` or `https` addresses are accepted.
+3. Leave **Include patterns** and **Exclude patterns** empty. They are saved but not yet applied, so the crawler reads the whole site from that address.
+4. Click **Stage URL**. The website appears in the table as **Pending**.
+5. Click **Sync now**. The status changes to **Queued**, then **Running**, then **Completed**.
+
+The crawler follows links on the same site, up to 50 pages, and each page becomes its own source that answers can cite. Adding an address that is already in the table is rejected. To pick up later changes on the site, delete the website, add it again and click **Sync now**.
+
+#### Add a document
+
+1. Click **Upload files, video, or documents** and open the **Document** tab.
+2. Drag in or choose a PDF, Word (`.docx`) or text (`.txt`) file, up to 50 MB. Save older `.doc` files as `.docx` first.
+3. Check the **Title**. It is filled in from the file name; change it to what families should see, for example "Family rights handbook".
+4. Enter the **Public link (required)**: an `http` or `https` address where families can open the document, such as its page on your website. Answers cite this link, never the uploaded file.
+5. Click **Upload & embed**. The text is read and added automatically; you do not need to click Sync now.
+
+Scanned or image-only PDFs are read with text recognition, which can take several minutes. To update a document, upload the new version with the same file name: it replaces the old one, and only the changed text is processed again.
+
+#### Add a video (transcription)
+
+1. Click **Upload files, video, or documents** and open the **Video** tab.
+2. Drag in or choose the recording: video (`.mp4`, `.m4v`, `.webm`) or audio (`.mp3`, `.m4a`, `.wav`, `.flac`, `.ogg`, `.amr`), up to 1 GB. Upload the file itself; the app cannot download a video from YouTube.
+3. Check the **Title**, for example "Inclusive education webinar".
+4. Enter the **Public video URL**, usually the YouTube link. Answers cite this link, and video cards open it at the moment that supports the answer.
+5. Click **Upload & transcribe**. Amazon Transcribe creates the transcript, then the transcript is split by timestamp and added automatically. The item shows **Transcribing** while the transcript is made; you do not need to click Sync now.
+
+A video URL that is already used by a crawled web page or another source is rejected, so each video is added once.
+
+#### Add a CSV or Markdown file
+
+1. Click **Upload files, video, or documents** and open the **Single File** tab.
+2. Choose the CSV or Markdown file. A CSV needs a header row.
+3. Add the matching metadata file. It must be named exactly `<file name>.metadata.json` (for example `guidance-resources.csv.metadata.json`). The dialog shows an example you can copy or download.
+4. For a CSV whose rows each link to a web page or PDF, choose the link column. Optionally choose the columns for a stable row id, title, description and the link families should see. The assistant then fetches each linked page and can cite individual rows.
+5. Click **Upload & Stage**, then **Sync now**.
+
+To add several files at once, put each file and its metadata file in one `.zip` and use the **Zip Upload** tab.
+
+#### Check that content is live
+
+- The table shows each item's status. **Completed** means its content is searchable; a **Failed** item shows the reason. Fix the cause (for example a broken link or an unreadable file), then use the re-queue action and click **Sync now**.
+- Ask a question in the family chat that the new content answers, and check that it appears under **More resources**.
+
+For how ingestion works and how to troubleshoot it, see [Knowledge Base Documentation](./KNOWLEDGE_BASE_DOCUMENTATION.md#monitoring-and-debugging).
 
 ### Prompts
 

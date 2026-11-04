@@ -24,6 +24,7 @@
     - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
     - [Step 2: Configure Admin User](#step-2-configure-admin-user)
     - [Step 3: Visit Web App](#step-3-visit-web-app)
+  - [Step 4: Add Content](#step-4-add-content)
     - [Adding Custom Allowed Origins](#adding-custom-allowed-origins)
   - [Troubleshooting](#troubleshooting)
   - [Cleanup](#cleanup)
@@ -328,6 +329,10 @@ Once one admin exists, add further admins through the API: `POST /admin/users` w
 
 Open the web app URL shown in the Amplify console: `https://<githubBranch>.<app-id>.amplifyapp.com` (`main` by default). Families use this URL directly; administrators sign in at `/admin/login` on the same URL. See the [User Guide](./USER_GUIDE.md).
 
+### Step 4: Add Content
+
+A new deployment has no content, so the assistant cannot give grounded answers until you add some. Sign in to the admin console and add Inclusion Canada's websites, documents and videos from **Overview → Data sources**. Follow [Adding content](./USER_GUIDE.md#adding-content) in the User Guide for step-by-step instructions for websites, documents, video transcription, and CSV or Markdown files. Then ask a question in the chat to check that the new sources appear under the answer.
+
 ### Adding Custom Allowed Origins
 
 Allowed CORS origins live in the SSM parameter `/<STACK-PREFIX>-Api/API/AllowedOrigins`. The Amplify URL is written on the first deployment. To allow another origin (a custom domain, or `http://localhost:5173` for development), read the current value and write it back with the new origin appended (comma-separated, no trailing slashes):
@@ -365,6 +370,15 @@ Add the page's origin to `/<STACK-PREFIX>-Api/API/AllowedOrigins` ([Adding Custo
 **Text generation Lambda fails with a parameter not found error**
 
 Create the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters ([Step 2](#step-2-upload-secrets--parameters)).
+
+**The first chat fails with `AccessDeniedException` from Bedrock**
+
+On a new AWS account, two one-time Bedrock steps can block calls to Claude. The `lambdaTextGen` CloudWatch logs show which one:
+
+- **Anthropic use-case form not submitted.** Anthropic requires use-case details once per account (or once for the AWS Organizations management account) before any Claude model can be called. In the Amazon Bedrock console, open **Model catalog**, select any Anthropic model and submit the form. Access is granted right after submission ([Bedrock model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)).
+- **AWS Marketplace subscription not created.** Claude is a third-party model, so the first call in an account starts an AWS Marketplace subscription in the background, which can take up to 15 minutes. The text generation role already has `aws-marketplace:ViewSubscriptions` and `aws-marketplace:Subscribe` for this (`cdk/lib/api-stack.ts`). If the error says the caller is not authorized to perform the required AWS Marketplace actions, a Service Control Policy or permissions boundary in your organization is probably denying those actions; ask your AWS administrator to allow them or to subscribe to the model for the account ([Resolve AWS Marketplace permission errors](https://repost.aws/knowledge-center/bedrock-resolve-marketplace-permission)).
+
+Amazon Titan Text Embeddings V2 is an Amazon model and needs neither step. After fixing either one, wait a few minutes and send a new message.
 
 **Knowledge base ingestion fails or returns no results**
 
