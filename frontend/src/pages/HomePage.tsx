@@ -339,7 +339,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
         <div className="flex h-full overflow-hidden bg-white">
           <SideBar />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10 px-4 py-4 md:px-[34px]">
+            <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10 px-4 py-2 md:px-[34px] md:py-4">
               <button
                 type="button"
                 onClick={toggleMobile}

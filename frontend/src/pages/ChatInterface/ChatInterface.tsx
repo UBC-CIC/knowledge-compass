@@ -964,18 +964,18 @@ export default function AIChatPage({
     <div className="flex h-full min-h-0 w-full flex-col">
       <ServiceStatusBanner state={serviceState} />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full px-4 md:px-[34px]">
-        <div className="mx-auto w-full max-w-[680px] py-10 pb-6">
+        <div className="mx-auto w-full min-w-0 max-w-[680px] pt-6 pb-6 md:pt-10">
           {isWelcome ? (
             <div>
-              <h1 className="font-serif text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
+              <h1 className="font-serif text-[28px] md:text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
                 {WELCOME_HEADING}
               </h1>
               {displayedWelcome ? (
-                <p className="mt-4 text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
+                <p className="mt-4 text-base md:text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
                   {displayedWelcome}
                 </p>
               ) : null}
-              <p className="mt-3.5 text-[17.5px] font-semibold leading-relaxed text-pretty">
+              <p className="mt-3.5 text-base md:text-[17.5px] font-semibold leading-relaxed text-pretty">
                 {WELCOME_ASK}
               </p>
 
@@ -993,7 +993,7 @@ export default function AIChatPage({
                     <span className="mt-px shrink-0 rounded-md bg-secondary px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.03em] text-secondary-foreground">
                       {starter.tag}
                     </span>
-                    <span>
+                    <span className="min-w-0">
                       <span className="block text-[15.5px] font-semibold leading-snug">
                         {starter.text}
                       </span>
@@ -1037,7 +1037,7 @@ export default function AIChatPage({
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-[18px] pt-3 md:px-[34px]">
+      <div className="shrink-0 px-4 pb-3 pt-2 md:px-[34px] md:pb-[18px] md:pt-3">
         <div className="mx-auto w-full max-w-[680px]">
           {latestWarning ? (
             <GroundingWarningBanner

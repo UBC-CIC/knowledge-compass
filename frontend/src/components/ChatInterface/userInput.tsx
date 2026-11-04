@@ -216,7 +216,9 @@ export function AiChatInput({
   return (
     <div className={cn("relative w-full", className)}>
       <div className="flex items-end gap-2.5 rounded-[11px] border-[1.5px] border-foreground/18 bg-white py-2.5 pr-2.5 pl-[15px]">
-        <div className="relative min-w-0 flex-1">
+        {/* The input and placeholder share one grid cell so a placeholder that
+            wraps on narrow screens grows the box instead of spilling out of it. */}
+        <div className="grid min-w-0 flex-1">
           <div
             ref={editableRef}
             contentEditable={!disabled}
@@ -226,7 +228,7 @@ export function AiChatInput({
             onCompositionEnd={handleCompositionEnd}
             spellCheck={false}
             className={cn(
-              "min-h-[44px] max-h-[120px] overflow-auto py-2 text-base leading-relaxed",
+              "[grid-area:1/1] min-h-[44px] max-h-[120px] overflow-auto py-2 text-base leading-relaxed",
               "whitespace-pre-wrap break-words outline-none",
               disabled && "cursor-not-allowed opacity-50"
             )}
@@ -238,7 +240,10 @@ export function AiChatInput({
           />
 
           {value === "" && (
-            <div className="pointer-events-none absolute inset-x-0 top-0 py-2 text-base text-foreground/55">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none [grid-area:1/1] py-2 text-base leading-relaxed text-foreground/55"
+            >
               {placeholder}
             </div>
           )}

@@ -206,7 +206,7 @@ export default function SideBar() {
         />
         <div
           className={cn(
-            "absolute left-0 h-full w-[316px] transform bg-muted transition-transform",
+            "absolute left-0 h-full w-[min(316px,85vw)] transform bg-muted transition-transform",
             mobileOpen ? "translate-x-0" : "-translate-x-full"
           )}
         >

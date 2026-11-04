@@ -8,7 +8,7 @@ export default function UserChatMessage({ text, hasPII }: UserChatMessageProps) 
     <div className="flex flex-col items-end gap-1">
       <div className="flex w-full justify-end">
         <div className="max-w-[74%] rounded-[12px] rounded-br-[3px] bg-primary px-4 py-3 text-[15.5px] leading-relaxed text-white">
-          <p className="whitespace-pre-wrap">{text}</p>
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
         </div>
       </div>
       {hasPII ? (
