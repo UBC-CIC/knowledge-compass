@@ -3378,6 +3378,25 @@ export default function DataSourceManagement() {
                                   )}
                                 </Button>
                               )}
+                              {status === "completed" &&
+                                ds.type === "website" && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 rounded-full px-2 text-[11px]"
+                                    title="Crawl this website again on the next sync to pick up changes. Only changed sections are re-embedded."
+                                    onClick={() => handleRetry(ds.id)}
+                                    disabled={retryingId === ds.id}
+                                  >
+                                    {retryingId === ds.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <RefreshCw className="h-3 w-3" />
+                                    )}
+                                    <span className="ml-1">Re-crawl</span>
+                                  </Button>
+                                )}
                             </div>
                           </TableCell>
 
