@@ -74,9 +74,9 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
 
 
 def handle_transcribe_complete(event, connection):
-    # The event reaches this Lambda with no authorization check (any principal
-    # that can invoke it, or the relay, can supply one), so only the job name
-    # is taken from it. Status and failure reason come from Transcribe itself.
+    # main.handler accepts the event only with the invoke token that
+    # transcribeRelay adds. As defence in depth only the job name is taken from
+    # it; status and failure reason come from Transcribe itself.
     detail = event.get("detail") or {}
     job_name = detail.get("TranscriptionJobName")
     if not isinstance(job_name, str) or not job_name:

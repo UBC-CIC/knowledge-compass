@@ -218,9 +218,9 @@ def handle_ecs_task_stopped(event, connection) -> dict:
     Successful tasks finalize the row themselves (completed/failed) before exit;
     this only catches crashes that never reached the DB.
     """
-    # The event reaches this Lambda with no authorization check, so only the
-    # task ARN is taken from it; the task's state is read back from ECS in this
-    # deployment's cluster.
+    # main.handler accepts the event only with the invoke token that
+    # transcribeRelay adds. As defence in depth only the task ARN is taken from
+    # it; the task's state is read back from ECS in this deployment's cluster.
     task_arn = (event.get("detail") or {}).get("taskArn")
     if not isinstance(task_arn, str) or not task_arn:
         return {"ignored": True, "reason": "missing_task_arn"}

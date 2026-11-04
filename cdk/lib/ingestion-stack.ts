@@ -301,6 +301,11 @@ export class IngestionStack extends Stack {
     // cycle, and targeting that stack's Lambdas makes the changeset fail.
     const knowledgeBaseName = `${props.stackPrefix}-Api-lambdaKnowledgeBase`;
     const knowledgeBaseArn = `arn:aws:lambda:${this.region}:${this.account}:function:${knowledgeBaseName}`;
+    // lambdaKnowledgeBase runs aws.transcribe / aws.ecs events only with the
+    // worker invoke token (finding f-9d5748bc), which the relay adds. Name and
+    // ARN are built by hand for the same reason as knowledgeBaseArn; they must
+    // match the WorkerInvokeSecret in api-stack.ts (`${id}-KC-WorkerInvokeSecret`).
+    const workerInvokeSecretName = `${props.stackPrefix}-Api-KC-WorkerInvokeSecret`;
     const transcribeRelay = new lambda.Function(this, "transcribeRelay", {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "index.handler",
@@ -309,6 +314,7 @@ export class IngestionStack extends Stack {
       memorySize: 128,
       environment: {
         TARGET_FUNCTION_NAME: knowledgeBaseName,
+        WORKER_INVOKE_SECRET_NAME: workerInvokeSecretName,
       },
       functionName: `${id}-transcribeRelay`,
     });
@@ -317,6 +323,15 @@ export class IngestionStack extends Stack {
         effect: iam.Effect.ALLOW,
         actions: ["lambda:InvokeFunction"],
         resources: [knowledgeBaseArn, `${knowledgeBaseArn}:*`],
+      })
+    );
+    transcribeRelay.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${workerInvokeSecretName}-??????`,
+        ],
       })
     );
     new events.Rule(this, "TranscribeComplete", {

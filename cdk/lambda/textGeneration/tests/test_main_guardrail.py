@@ -121,6 +121,30 @@ class MainGuardrailTests(unittest.TestCase):
         self.assertNotIn("guest-access-token-secret", output)
         self.assertNotIn(QUERY, output)
 
+    def test_no_header_query_cookie_or_identity_value_is_logged(self):
+        # Finding f-342ab3ef: only allow-listed routing fields may be logged.
+        event = make_event({"query": QUERY})
+        event["resource"] = "/chat_sessions/{id}/text_generation"
+        event["httpMethod"] = "POST"
+        event["requestContext"]["requestId"] = "req-1"
+        event["requestContext"]["authorizer"]["tokenId"] = "secret-token-id"
+        event["requestContext"]["identity"] = {"sourceIp": "203.0.113.9", "userAgent": "secret-agent"}
+        event["headers"] = {
+            "Authorization": "Bearer secret-bearer",
+            "Cookie": "session=secret-cookie",
+            "X-Amz-Security-Token": "secret-sts",
+        }
+        event["multiValueHeaders"] = {k: [v] for k, v in event["headers"].items()}
+        event["queryStringParameters"] = {"token": "secret-query"}
+        event["multiValueQueryStringParameters"] = {"token": ["secret-query"]}
+        event["cookies"] = ["session=secret-cookie-v2"]
+        with self.assertLogs(main.logger, level="DEBUG") as logs:
+            main.handler(event)
+        output = "\n".join(logs.output)
+        for marker in ("secret-", "203.0.113.9", USER, QUERY, "Authorization", "Cookie"):
+            self.assertNotIn(marker, output)
+        self.assertIn("req-1", output)
+
     def test_guardrail_runs_without_the_flag(self):
         main.handler(make_event({"query": QUERY}))
 

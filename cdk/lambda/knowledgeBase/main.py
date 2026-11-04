@@ -66,6 +66,9 @@ _EMBEDDING_TASKS = {
     "rollback_space": rollback_space,
 }
 
+# Event sources forwarded by transcribeRelay (cdk/lib/ingestion-stack.ts).
+_EVENTBRIDGE_SOURCES = ("aws.transcribe", "aws.ecs")
+
 def _connect_to_db():
     global connection
     if connection is None or connection.closed:
@@ -146,15 +149,15 @@ def handler(event, context=None):
         # every task must carry the invoke token (helpers/worker_envelope.py),
         # a generated Secrets Manager value only this function's role can read.
         # Checked before any dispatch or logging of the payload's actor.
-        # EventBridge events (aws.transcribe / aws.ecs via transcribeRelay)
-        # never carry "task" and are handled below without a token: anyone
-        # able to invoke this function can forge one, so their handlers take
-        # only the job name / task ARN from the event and read the state back
-        # from Transcribe / ECS.
-        if "task" in event and not verify_worker_event(event):
+        # EventBridge events (aws.transcribe / aws.ecs) need the same token
+        # (finding f-9d5748bc): transcribeRelay, the only target of those
+        # rules, adds it, so a direct invoke cannot forge one. Their handlers
+        # still take only the job name / task ARN and read state back from AWS.
+        if ("task" in event or event.get("source") in _EVENTBRIDGE_SOURCES) and not verify_worker_event(event):
             logger.warning(
-                "Rejected worker invocation without a valid invoke token: task=%s",
+                "Rejected worker invocation without a valid invoke token: task=%s source=%s",
                 str(event.get("task"))[:64],
+                str(event.get("source"))[:64],
             )
             return {"error": "Unauthorized worker invocation"}
 

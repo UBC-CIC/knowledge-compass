@@ -5,9 +5,11 @@ f-7f03f151).
 Every async worker payload ({"task": ...}) is serialized through
 worker_payload, which adds "invoke_token": a generated secret kept in Secrets
 Manager (WORKER_INVOKE_SECRET_ARN) that only the knowledgeBase execution role
-can read. main.handler calls verify_worker_event before dispatching any task,
-so holding lambda:InvokeFunction alone is not enough to rewrite the corpus or
-move the embedding pointer.
+and transcribeRelay can read. main.handler calls verify_worker_event before
+dispatching any task or aws.transcribe / aws.ecs event (the relay adds the
+token to those, finding f-9d5748bc), so holding lambda:InvokeFunction alone is
+not enough to rewrite the corpus, move the embedding pointer, or forge an
+EventBridge event.
 
 The secret is rotated by appSecretRotation, which keeps the outgoing token as
 "previousToken": payloads are signed with the current token and either is
