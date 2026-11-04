@@ -164,7 +164,6 @@ aws ssm put-parameter \
 **Rules when updating:**
 - All ARNs must use the `us.` cross-region inference prefix (e.g., `us.anthropic.claude-...`).
 - Every generation call sends `thinking: {"type": "disabled"}` and no `temperature`/`top_p` (Haiku 5.5 returns a 400 for non-default sampling values). A model that needs different request fields needs a code change, not only a parameter change.
-- The admin `temperature` and `top_p` settings are stored but not sent to Bedrock.
 
 > **Note:** If you switch to a different model family, you'll also need to update the IAM policy on the `lambdaTextGen` role to allow `bedrock:InvokeModel` for the new model ARN. This is configured in `cdk/lib/api-stack.ts` under `textGenBedrockPolicyStatement`.
 

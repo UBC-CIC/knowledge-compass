@@ -951,8 +951,6 @@ Retrieve the current system settings.
   "max_characters_per_day": 10000,
   "max_messages_per_day_global": 5000,
   "max_characters_per_ai_message": 5000,
-  "temperature": 0.15,
-  "top_p": 0.5,
   "support_score_threshold": 0.25,
   "scope_alignment_score_threshold": 0.25,
   "grounded_threshold": 0.75,
@@ -994,7 +992,6 @@ Update one or more system settings (partial update).
 - `max_characters_per_day` (integer): Characters one user may send per UTC day
 - `max_messages_per_day_global` (integer): Messages all public users together may send per UTC day
 - `max_characters_per_ai_message` (integer): Max AI response length
-- `temperature`, `top_p` (number, 0–1): Stored but **not sent** to the model (Claude Haiku 5.5 rejects non-default sampling values)
 - `support_score_threshold`, `scope_alignment_score_threshold`, `grounded_threshold`, `partially_grounded_threshold` (number, 0–1): Grounding check thresholds
 - `service_status` (string): `normal`, `banner` (show `service_message` above the chat) or `read_only` (show it and refuse new chat turns)
 - `service_message` (string, up to 500 characters): Text shown to families; `null` when unused

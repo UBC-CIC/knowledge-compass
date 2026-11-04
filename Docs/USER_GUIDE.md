@@ -203,7 +203,7 @@ Changes save with **Save changes** and apply to new messages without a redeploy.
 - **How the conversation flows:** when the assistant stops asking and starts guiding. Choose **Ask a few questions first** (questions for the first 4 messages), **Balanced** (at least one question, then guidance once the situation is clear, by the 3rd message at the latest) or **Answer as soon as it's clear** (guidance as soon as the situation is clear, by the 4th message at the latest). Urgent situations are always answered right away.
 - **Service status** (saved on its own): **Normal**; **Show a banner** with your message above the chat; or **Pause new messages (read-only)**, where families see your message and can still read earlier chats. It takes effect within about a minute.
 
-**Show developer settings** adds **Developer settings**: routing mode and its message counts, the longest reply length, temperature and top P (stored, but not sent to the current model), and the **Answer checks** thresholds (evidence match, topic match, reliable answer and partial warning) that decide when families see a warning. These checks never change what the assistant says. **Reset to recommended** restores the defaults in that card. Test changes in a dev environment first.
+**Show developer settings** adds **Developer settings**: routing mode and its message counts, the longest reply length, and the **Answer checks** thresholds (evidence match, topic match, reliable answer and partial warning) that decide when families see a warning. These checks never change what the assistant says. **Reset to recommended** restores the defaults in that card. Test changes in a dev environment first.
 
 ### Analytics and feedback
 
