@@ -154,12 +154,13 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
+  /** `skipQuality` skips the golden-set comparison with the live index; coverage is still checked. */
   const validate = useCallback(
-    async (spaceId: string): Promise<string> => {
+    async (spaceId: string, opts: { skipQuality?: boolean } = {}): Promise<string> => {
       refuseInDemo();
       const res = await adminFetch<{ id: string }>(`/admin/embedding-spaces/${encodeURIComponent(spaceId)}/validate`, {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify(opts.skipQuality ? { skip_quality: true } : {}),
       });
       await load(true);
       return res.id;
@@ -167,12 +168,13 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
+  /** `skipQuality` applies to activation only (the server accepts it only there). */
   const cutover = useCallback(
-    async (spaceId: string, action: "activate" | "rollback"): Promise<string> => {
+    async (spaceId: string, action: "activate" | "rollback", opts: { skipQuality?: boolean } = {}): Promise<string> => {
       refuseInDemo();
       const res = await adminFetch<{ id: string }>(`/admin/embedding-spaces/${encodeURIComponent(spaceId)}/${action}`, {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify(action === "activate" && opts.skipQuality ? { skip_quality: true } : {}),
       });
       await load(true);
       return res.id;
