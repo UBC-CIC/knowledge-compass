@@ -2015,9 +2015,11 @@ export class ApiGatewayStack extends cdk.Stack {
       role: knowledgeBaseRole,
       layers: [psycopgLayer, sharedPythonLayer],
       // The document worker reads each upload whole from S3, and the pypdf fallback
-      // and DOCX/CSV parsing hold the parsed copy too. Check "Max Memory Used" in the
-      // REPORT log lines before changing this.
-      memorySize: 1024,
+      // and DOCX/CSV parsing hold the parsed copy too. The CSV link worker
+      // (helpers/process_csv_links.py) fetches and reads up to LINK_CONCURRENCY
+      // (8) linked pages/PDFs at once, each up to 50 MB (helpers/link_fetcher.py).
+      // Check "Max Memory Used" in the REPORT log lines before changing this.
+      memorySize: 2048,
       vpc: vpcStack.vpc,
       tracing: lambda.Tracing.ACTIVE,
       environment: {

@@ -59,8 +59,8 @@ _READ_SIZE = 64 * 1024
 @dataclass(frozen=True)
 class FetchLimits:
     request_timeout: float = 15.0        # per socket operation (connect / each read)
-    total_timeout: float = 45.0          # whole fetch of one URL, redirects included
-    max_bytes: int = 10 * 1024 * 1024    # decoded body
+    total_timeout: float = 90.0          # whole fetch of one URL, redirects included
+    max_bytes: int = 50 * 1024 * 1024    # decoded body; matches uploads (MAX_SOURCE_FILE_BYTES)
     max_redirects: int = 5
     per_domain_concurrency: int = 2
     per_domain_delay: float = 1.0        # min seconds between requests to one host

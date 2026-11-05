@@ -221,8 +221,8 @@ Limits (environment variables on the knowledge base Lambda):
 | ------------------------------- | -------- | ------------------------------------------------------------------------ |
 | `LINK_MAX_URLS_PER_CSV`         | 500      | Distinct URLs crawled per CSV; rows past the cap are `skipped`.           |
 | `LINK_REQUEST_TIMEOUT_SECONDS`  | 15       | Per connect/read.                                                        |
-| `LINK_TOTAL_TIMEOUT_SECONDS`    | 45       | Whole fetch of one URL, redirects included.                              |
-| `LINK_MAX_CONTENT_BYTES`        | 10485760 | Largest page/PDF (after decompression).                                  |
+| `LINK_TOTAL_TIMEOUT_SECONDS`    | 90       | Whole fetch of one URL, redirects included.                              |
+| `LINK_MAX_CONTENT_BYTES`        | 52428800 | Largest page/PDF (after decompression), 50 MB, same as uploads.          |
 | `LINK_MAX_REDIRECTS`            | 5        |                                                                          |
 | `LINK_CONCURRENCY`              | 8        | Parallel fetches per worker.                                             |
 | `LINK_PER_DOMAIN_CONCURRENCY`   | 2        | Parallel requests to one host.                                           |
