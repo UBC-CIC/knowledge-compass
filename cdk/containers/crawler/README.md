@@ -171,6 +171,14 @@ pattern matches. `common/crawl_scope.py` holds the rules; the Lambda copy
   pattern over 300 characters, and a seed URL the patterns would exclude, with
   a 400. `process_crawler_batch.py` re-checks stored rows before `ecs:RunTask`
   and fails the run instead of launching.
+- Python's `re` backtracks, so patterns whose matching time could explode are
+  rejected the same way: nested quantifiers (`(a+)+`, `(a*)*`), a repeated or
+  optional group containing `|` (`(a|aa)+`, `(?:www\.|m\.)?`), backreferences
+  and conditional groups, more than two open-ended repeats such as `.*` or
+  `\d+` (one when the pattern does not start with `^`), and more than 16
+  combinations of optional parts and alternatives. With patterns, URLs over
+  2048 characters are out of scope. A stored row that fails these checks fails
+  its next sync with the "patterns were rejected" message.
 - The Lambda passes the patterns as `CRAWL_INCLUDE_PATTERNS` and
   `CRAWL_EXCLUDE_PATTERNS` (JSON arrays). Re-crawls go through the same launch.
 - In the container, the patterns apply to the seed (checked before anything is
@@ -178,10 +186,18 @@ pattern matches. `common/crawl_scope.py` holds the rules; the Lambda copy
   the pre-navigation hook; page and frame navigations are also aborted in
   `guard_route`), and to the URL a page ended on after redirects (nothing is
   stored and no links are followed from it).
-- URLs are compared as given and in a canonical spelling (lowercase host,
-  default port dropped, unreserved percent-escapes decoded, `.`/`..` and
-  repeated slashes removed), so `/a/%70rivate/` cannot slip past an exclude
-  written for `/a/private/`. The path is case-sensitive; use `(?i)` to ignore case.
+- URLs are compared in three spellings: as given; canonical (lowercase host,
+  default port and fragment dropped, percent-escapes decoded until stable, at
+  most three rounds, `\`, `%2F` and `%5C` read as `/`, `.`/`..` and repeated
+  slashes removed, then reserved and non-ASCII characters re-encoded as
+  uppercase `%XX`); and fully decoded. An exclude pattern that matches any
+  spelling excludes the URL, so `/a/%70rivate/`, `/a/b/..%2Fprivate/` and
+  `/a/b/%252E%252E/private/` cannot slip past an exclude written for
+  `/a/private/`. Include patterns must match the canonical spelling, so write
+  non-ASCII or reserved characters in an include pattern percent-encoded.
+  URLs with userinfo (`https://example.com@other.host/`) are never in scope,
+  and with patterns, neither are URLs whose encoding has not settled after
+  three rounds. The path is case-sensitive; use `(?i)` to ignore case.
 
 Limit: a redirect hop is not routed, so an in-scope URL that redirects to an
 excluded one is loaded by the browser; its content is discarded.

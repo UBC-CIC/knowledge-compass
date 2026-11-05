@@ -62,6 +62,111 @@ class CrawlScopeMatchingTests(unittest.TestCase):
                 self.assertFalse(scope.allows(url))
         self.assertTrue(scope.allows("https://example.org/science/public/a"))
 
+    # scan-b594378e f-29b5b14f: encoded separators, double encoding, backslashes
+    # and userinfo must not dodge the patterns.
+    def test_encoded_separators_and_double_encoding_cannot_dodge_exclude(self):
+        scope = crawl_scope.CrawlScope.from_patterns([], EXCLUDE)
+        for url in (
+            "https://example.org/science/a/b/..%2F..%2Fprivate/x",
+            "https://example.org/science/a/..%2fprivate/x",
+            "https://example.org/science/a/%252E%252E/private/x",
+            "https://example.org/science/a/%25252e%25252e/private/x",
+            "https://example.org/science%2Fprivate%2Fx",
+            "https://example.org/science\\private\\x",
+            "https://example.org/science/a/..\\private/x",
+            "https://example.org/science/a/..%5Cprivate/x",
+            "https://example.org/science/a/..%255Cprivate/x",
+            "https://ExAmple.ORG/science/private/x",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(scope.allows(url))
+        self.assertTrue(scope.allows("https://example.org/science/public/x"))
+
+    def test_exclude_also_matches_the_fully_decoded_spelling(self):
+        scope = crawl_scope.CrawlScope.from_patterns([], [r"/private file/"])
+        self.assertFalse(scope.allows("https://example.org/private%20file/x"))
+        self.assertFalse(scope.allows("https://example.org/private%2520file/x"))
+        self.assertTrue(scope.allows("https://example.org/public%20file/x"))
+
+    def test_include_matches_the_canonical_spelling_only(self):
+        scope = crawl_scope.CrawlScope.from_patterns([r"^https://example\.com/docs/"], [])
+        self.assertFalse(scope.allows("https://example.com/docs/../private/x"))
+        self.assertFalse(scope.allows("https://example.com/docs/..%2Fprivate/x"))
+        self.assertFalse(scope.allows("https://example.com/docs/%252E%252E/private/x"))
+        self.assertTrue(scope.allows("https://example.com/docs/a"))
+        self.assertTrue(scope.allows("https://EXAMPLE.COM/docs/a"))
+
+    def test_userinfo_urls_are_refused(self):
+        scope = crawl_scope.CrawlScope.from_patterns([r"^https://example\.com"], [])
+        self.assertFalse(scope.allows("https://example.com@evil.com/x"))
+        self.assertFalse(scope.allows("https://user:pw@example.com/x"))
+        self.assertFalse(crawl_scope.CrawlScope().allows("https://user@example.com/x"))
+        self.assertTrue(scope.allows("https://example.com/x"))
+
+    def test_canonical_url(self):
+        self.assertEqual(crawl_scope.canonical_url("https://EXAMPLE.com:443/a/b/..%2Fc"), "https://example.com/a/c")
+        self.assertEqual(crawl_scope.canonical_url("https://example.com/a\\b/%7Ex%20y"), "https://example.com/a/b/~x%20y")
+        self.assertIsNone(crawl_scope.canonical_url("https://user@example.com/"))
+
+    def test_urls_whose_encoding_does_not_settle_are_refused(self):
+        scope = crawl_scope.CrawlScope.from_patterns([], EXCLUDE)
+        # Five levels of encoding; MAX_DECODE_ROUNDS allows three.
+        deep = "https://example.org/science/a/%252525252E%252525252E/private/x"
+        self.assertIsNone(crawl_scope.canonical_url(deep))
+        self.assertFalse(scope.allows(deep))
+
+    def test_overlong_urls_are_refused_when_patterns_exist(self):
+        scope = crawl_scope.CrawlScope.from_patterns([], EXCLUDE)
+        url = "https://example.org/science/" + "a" * crawl_scope.MAX_URL_LENGTH
+        self.assertFalse(scope.allows(url))
+        self.assertTrue(crawl_scope.CrawlScope().allows(url))
+
+    # scan-b594378e f-a21a67ce: patterns that can backtrack catastrophically are rejected.
+    def test_catastrophic_patterns_are_rejected(self):
+        for pattern in (
+            r"^(a+)+$",
+            r"(a*)*",
+            r"(?:a+){2,}",
+            r"(a|aa)+",
+            r"(?:news|events)*/x",
+            r"(a)\1",
+            r"(?P<n>a)(?P=n)",
+            r"(a)?(?(1)b|c)",
+            r".*.*.*x",
+            r".*a.*b",
+            r"(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)x",
+            r"a?a?a?a?a?a?a?a?a?a?.*x",
+        ):
+            for field in ("include_patterns", "exclude_patterns"):
+                args = ([pattern], []) if field == "include_patterns" else ([], [pattern])
+                with self.subTest(pattern=pattern, field=field), \
+                        self.assertRaises(crawl_scope.InvalidPatterns) as caught:
+                    crawl_scope.CrawlScope.from_patterns(*args)
+                self.assertIn(f"{field}[0]", str(caught.exception))
+
+    def test_common_patterns_are_still_accepted(self):
+        patterns = [
+            r"^https://example\.org/science/",
+            r"^https?://(?:www\.)?example\.org/.*",
+            r"/private/",
+            r"\.pdf$",
+            r"/docs/.*\.pdf$",
+            r"(?i)/news/\d+/",
+            r"^https://example\.org/[^/]+/archive/.*",
+            r"/(?:news|events|blog)/",
+            r"^https://example\.org/item/\d{4}/",
+        ]
+        crawl_scope.CrawlScope.from_patterns(patterns, patterns)
+
+    def test_accepted_patterns_match_long_urls_in_bounded_time(self):
+        import time
+        worst = [r"^.*.*x", r".*x", r"^a?a?a?a?.*.*x", r"(?:a|aa)(?:a|aa)(?:a|aa).*x"]
+        scope = crawl_scope.CrawlScope.from_patterns([], worst)
+        url = "https://example.org/" + "a" * (crawl_scope.MAX_URL_LENGTH - 30)
+        started = time.monotonic()
+        scope.allows(url)
+        self.assertLess(time.monotonic() - started, 2.0)
+
     def test_invalid_patterns_are_rejected_with_admin_readable_errors(self):
         cases = (
             ("not-a-list", [], "include_patterns must be an array"),
@@ -153,6 +258,8 @@ class CrawlerLaunchPatternTests(_LaunchBase):
         for include, exclude, name in (
             (["[unclosed"], [], "https://example.org/science/"),
             (INCLUDE, [], "https://example.org/"),  # seed outside its own include patterns
+            # Stored before complexity checks existed: fails closed, never hangs.
+            ([], [r"^(a+)+$"], "https://example.org/science/"),
         ):
             with self.subTest(include=include, name=name):
                 self.ecs.run_task.reset_mock()

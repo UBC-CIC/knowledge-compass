@@ -12,17 +12,39 @@ matched with re.search against the page URL, so "^" anchors at the start of the
 URL. A URL is in scope when no exclude pattern matches it and, if any include
 patterns exist, at least one include pattern matches it.
 
-Every URL is tested in two spellings: as given, and canonicalized (lowercase
-scheme and host, default port and fragment dropped, percent-encoded unreserved
-characters decoded, "." / ".." segments and repeated slashes removed). An
-exclude pattern that matches either spelling excludes the URL, so
-"/science/%70rivate/" cannot slip past an exclude written for "/science/private/".
-Matching is case-sensitive in the path; start a pattern with (?i) to ignore case.
+URLs are compared in three spellings:
+  raw        as given
+  canonical  lowercase scheme and host, default port, fragment and userinfo
+             dropped, percent-escapes decoded until stable (at most
+             MAX_DECODE_ROUNDS rounds), "\\", "%2F" and "%5C" read as "/",
+             "." / ".." segments and repeated slashes removed, then re-encoded
+             (reserved and non-ASCII characters as uppercase %XX)
+  decoded    the canonical URL with every escape decoded
+An exclude pattern that matches any spelling excludes the URL, so
+"/science/%70rivate/" or "/science/a/..%2Fprivate/" cannot slip past an exclude
+written for "/science/private/". Include patterns are matched against the
+canonical spelling only, so "/docs/../private/" is not inside an include written
+for "/docs/". URLs with userinfo ("user@host") are never in scope, and with
+patterns, neither are URLs longer than MAX_URL_LENGTH or whose encoding does
+not settle. Matching is case-sensitive in the path; start a pattern with (?i)
+to ignore case.
+
+Python's re engine backtracks, so validate_patterns rejects patterns whose
+matching time could grow fast with the URL length: nested quantifiers such as
+(a+)+, a quantified group containing "|", backreferences and conditional
+groups, more than MAX_OPEN_REPEATS open-ended repeats (one fewer when the
+pattern does not start with "^"), and more than MAX_CHOICES combinations of
+optional parts and alternatives.
 """
 
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote_to_bytes, urlsplit
+
+try:
+    from re import _parser as _sre_parse  # Python 3.11+
+except ImportError:  # pragma: no cover - older interpreters
+    import sre_parse as _sre_parse  # type: ignore
 
 # Limits keep the patterns inside the 8192-character ecs:RunTask overrides
 # (they travel as task environment variables) and keep matching cheap.
@@ -30,17 +52,107 @@ MAX_PATTERNS = 20
 MAX_PATTERN_LENGTH = 300
 # Combined size of both lists as they appear, JSON-encoded twice, in the RunTask request.
 MAX_ENCODED_LENGTH = 4000
+# Matching cost bounds (see the module docstring).
+MAX_URL_LENGTH = 2048
+MAX_DECODE_ROUNDS = 3
+MAX_OPEN_REPEATS = 2
+MAX_CHOICES = 16
 
 INCLUDE_ENV = "CRAWL_INCLUDE_PATTERNS"
 EXCLUDE_ENV = "CRAWL_EXCLUDE_PATTERNS"
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
-_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-_PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
+# quote() never escapes letters, digits and "_.-~".
+_PATH_SAFE = "/!$&'()*+,;=:@"
+_QUERY_SAFE = _PATH_SAFE + "?"
+_HOST_FORBIDDEN = frozenset("/\\@?#%[] ")
+_REPEATS = frozenset(("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"))
+_BACKREFS = frozenset(("GROUPREF", "GROUPREF_EXISTS", "GROUPREF_IGNORE", "GROUPREF_LOC_IGNORE",
+                       "GROUPREF_UNI_IGNORE"))
+_STARTS = frozenset(("AT_BEGINNING", "AT_BEGINNING_STRING"))
 
 
 class InvalidPatterns(ValueError):
     """The include/exclude patterns are malformed. The message is safe to show to an admin."""
+
+
+class _TooComplex(Exception):
+    pass
+
+
+def _op_name(op) -> str:
+    return getattr(op, "name", str(op))
+
+
+def _cost(items):
+    """(open-ended repeats on the worst path, choice combinations, has "|", has a variable repeat)."""
+    degree, choices, branch, variable = 0, 1, False, False
+    for op, av in items:
+        name = _op_name(op)
+        if name in _BACKREFS:
+            raise _TooComplex("backreferences and conditional groups are not allowed")
+        if name in _REPEATS:
+            low, high, body = av
+            b_degree, b_choices, b_branch, b_variable = _cost(body)
+            if b_branch:
+                raise _TooComplex("a group with | alternation cannot be repeated or optional")
+            if high > 1 and b_variable:
+                raise _TooComplex("nested quantifiers such as (a+)+ are not allowed")
+            if low == high:
+                degree += b_degree
+                choices *= b_choices
+            elif high == 1:
+                degree += b_degree
+                choices *= 2 * b_choices
+                variable = True
+            else:
+                degree += 1
+                variable = True
+            variable = variable or b_variable
+        elif name == "BRANCH":
+            costs = [_cost(alt) for alt in av[1]]
+            degree += max(c[0] for c in costs)
+            choices *= sum(c[1] for c in costs)
+            branch = True
+            variable = variable or any(c[3] for c in costs)
+        else:
+            for sub in _subpatterns(av):
+                s_degree, s_choices, s_branch, s_variable = _cost(sub)
+                degree += s_degree
+                choices *= s_choices
+                branch = branch or s_branch
+                variable = variable or s_variable
+        if choices > MAX_CHOICES:
+            raise _TooComplex(f"more than {MAX_CHOICES} combinations of optional parts and | alternatives")
+    return degree, choices, branch, variable
+
+
+def _subpatterns(av):
+    if isinstance(av, _sre_parse.SubPattern):
+        yield av
+    elif isinstance(av, (tuple, list)):
+        for item in av:
+            if isinstance(item, _sre_parse.SubPattern):
+                yield item
+
+
+def _check_complexity(pattern: str) -> None:
+    """Raise _TooComplex when the pattern could backtrack heavily on a long URL."""
+    parsed = _sre_parse.parse(pattern)
+    degree = _cost(parsed)[0]
+    anchored = (
+        len(parsed) > 0
+        and _op_name(parsed[0][0]) == "AT"
+        and _op_name(parsed[0][1]) in _STARTS
+        and not parsed.state.flags & re.MULTILINE
+    )
+    if not anchored:
+        degree += 1  # re.search retries the pattern at every position
+    if degree > MAX_OPEN_REPEATS:
+        raise _TooComplex(
+            f"more than {MAX_OPEN_REPEATS} open-ended repeats such as .* or \\d+ "
+            f"({MAX_OPEN_REPEATS - 1} when the pattern does not start with ^)"
+        )
 
 
 def validate_patterns(value, field: str) -> list:
@@ -61,6 +173,12 @@ def validate_patterns(value, field: str) -> list:
         except (re.error, OverflowError, RecursionError, ValueError) as e:
             reason = getattr(e, "msg", None) or type(e).__name__
             raise InvalidPatterns(f"{field}[{i}] is not a valid regular expression ({reason})") from None
+        try:
+            _check_complexity(pattern)
+        except _TooComplex as e:
+            raise InvalidPatterns(f"{field}[{i}] could take too long to match: {e}") from None
+        except (re.error, OverflowError, RecursionError, ValueError) as e:
+            raise InvalidPatterns(f"{field}[{i}] could take too long to match ({type(e).__name__})") from None
     return list(value)
 
 
@@ -68,12 +186,15 @@ def _encoded_length(include: list, exclude: list) -> int:
     return len(json.dumps(json.dumps(include))) + len(json.dumps(json.dumps(exclude)))
 
 
-def _decode_unreserved(text: str) -> str:
-    def repl(match):
-        char = chr(int(match.group(1), 16))
-        return char if char in _UNRESERVED else "%" + match.group(1).upper()
-
-    return _PERCENT.sub(repl, text)
+def _decode_fully(text):
+    """The bytes of text with percent-escapes decoded until stable, or None if they never settle."""
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    for _ in range(MAX_DECODE_ROUNDS + 1):
+        decoded = unquote_to_bytes(data)
+        if decoded == data:
+            return data
+        data = decoded
+    return None
 
 
 def _clean_path(path: str) -> str:
@@ -94,27 +215,69 @@ def _clean_path(path: str) -> str:
     return cleaned
 
 
-def canonical_url(url: str):
-    """The canonical spelling of an http(s) URL, or None when it cannot be parsed."""
+def _browser_form(url: str) -> str:
+    # Browsers read "\" as "/" before the query of an http(s) URL.
+    url = url.strip()
+    cut = min([i for i in (url.find("?"), url.find("#")) if i >= 0] or [len(url)])
+    return url[:cut].replace("\\", "/") + url[cut:]
+
+
+def _has_userinfo(url: str) -> bool:
+    for spelling in (url, _browser_form(url)):
+        try:
+            parts = urlsplit(spelling.strip())
+        except ValueError:
+            continue
+        if parts.username is not None or parts.password is not None:
+            return True
+    return False
+
+
+def _spellings(url: str):
+    """(canonical, decoded) spellings of an http(s) URL, or None when it cannot be compared safely."""
     try:
-        parts = urlsplit(url.strip())
+        parts = urlsplit(_browser_form(url))
         port = parts.port
     except (ValueError, AttributeError):
         return None
+    if parts.username is not None or parts.password is not None:
+        return None
     scheme = parts.scheme.lower()
-    host = (parts.hostname or "").rstrip(".")
-    if not scheme or not host:
+    host = _decode_fully(parts.hostname or "")
+    path = _decode_fully(parts.path)
+    query = _decode_fully(parts.query)
+    if host is None or path is None or query is None:
+        return None
+    try:
+        host = host.decode("utf-8").lower().rstrip(".")
+    except UnicodeDecodeError:
+        return None
+    if not scheme or not host or any(c in _HOST_FORBIDDEN or ord(c) < 33 for c in host):
         return None
     if ":" in host:
         host = f"[{host}]"
     netloc = host if port in (None, _DEFAULT_PORTS.get(scheme)) else f"{host}:{port}"
-    path = _clean_path(_decode_unreserved(parts.path))
-    query = _decode_unreserved(parts.query)
-    return f"{scheme}://{netloc}{path}" + (f"?{query}" if query else "")
+    # latin-1 maps each byte to one character, so the path round-trips exactly.
+    path = _clean_path(path.decode("latin-1").replace("\\", "/")).encode("latin-1")
+    base = f"{scheme}://{netloc}"
+    canonical = base + quote(path, safe=_PATH_SAFE)
+    decoded = base + path.decode("utf-8", "replace")
+    if query:
+        canonical += "?" + quote(query, safe=_QUERY_SAFE)
+        decoded += "?" + query.decode("utf-8", "replace")
+    return canonical, decoded
+
+
+def canonical_url(url: str):
+    """The canonical spelling of an http(s) URL, or None when it cannot be parsed or has userinfo."""
+    if not isinstance(url, str):
+        return None
+    spellings = _spellings(url)
+    return spellings[0] if spellings else None
 
 
 class CrawlScope:
-    """Compiled include/exclude patterns. CrawlScope() allows every URL."""
+    """Compiled include/exclude patterns. CrawlScope() allows every URL without userinfo."""
 
     def __init__(self, include_patterns=(), exclude_patterns=()):
         self.include_patterns = list(include_patterns)
@@ -139,15 +302,19 @@ class CrawlScope:
         """True when the URL may be fetched and stored."""
         if not isinstance(url, str) or not url:
             return False
+        if _has_userinfo(url):
+            return False
         if self.unrestricted:
             return True
-        spellings = [url]
-        canonical = canonical_url(url)
-        if canonical and canonical != url:
-            spellings.append(canonical)
-        if any(p.search(s) for p in self._exclude for s in spellings):
+        if len(url) > MAX_URL_LENGTH:
             return False
-        if self._include and not any(p.search(s) for p in self._include for s in spellings):
+        spellings = _spellings(url)
+        if spellings is None:
+            return False
+        canonical, decoded = spellings
+        if any(p.search(s) for p in self._exclude for s in {url, canonical, decoded}):
+            return False
+        if self._include and not any(p.search(canonical) for p in self._include):
             return False
         return True
 

@@ -65,7 +65,10 @@ class StageWebsitePatternTests(unittest.TestCase):
         return response, insert
 
     def test_malformed_pattern_is_a_400_and_nothing_is_stored(self):
-        for include, exclude in ((["[unclosed"], []), ([], ["(a"]), ([42], []), (["ok"], "nope")):
+        for include, exclude in (
+            (["[unclosed"], []), ([], ["(a"]), ([42], []), (["ok"], "nope"),
+            ([], [r"^(a+)+$"]),  # catastrophic backtracking (scan-b594378e)
+        ):
             with self.subTest(include=include, exclude=exclude):
                 self.connection.reset_mock()
                 response, insert = self.stage(include=include, exclude=exclude)

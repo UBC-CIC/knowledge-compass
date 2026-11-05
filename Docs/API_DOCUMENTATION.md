@@ -688,7 +688,7 @@ Stage a new data source (website or CSV) for future syncing.
 - `type` (string, required): `website` or `csv`
 - `created_by` (string, required): Admin email
 - `name` (string, optional): URL for website sources
-- `include_patterns` / `exclude_patterns` (array of strings, optional): Python regular expressions matched with `re.search` against each page URL. The crawler skips any URL an exclude pattern matches and, when include patterns exist, any URL none of them matches. At most 20 patterns per list and 300 characters per pattern. A malformed pattern, or patterns that exclude `name` itself, return `400`
+- `include_patterns` / `exclude_patterns` (array of strings, optional): Python regular expressions matched with `re.search` against each page URL. The crawler skips any URL an exclude pattern matches and, when include patterns exist, any URL none of them matches. At most 20 patterns per list and 300 characters per pattern. A malformed pattern, a pattern that could backtrack heavily (nested quantifiers, a repeated or optional group with `|`, backreferences, too many open-ended repeats), or patterns that exclude `name` itself, return `400`
 - `csv_file_name`, `csv_s3_bucket`, `csv_s3_key` (string): Required for CSV sources
 - `metadata_file_name`, `metadata_s3_bucket`, `metadata_s3_key` (string, optional): Metadata file for CSV sources
 

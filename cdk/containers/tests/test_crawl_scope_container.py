@@ -181,6 +181,27 @@ class CrawlerScopeTests(unittest.TestCase):
         self.assert_no_work()
         self.assertIn("exclude_patterns[0]", str(caught.exception))
 
+    def test_main_refuses_catastrophic_patterns_before_any_work(self):
+        # scan-b594378e f-a21a67ce: rejected at load, never matched.
+        env = {"SEED_URL": "https://example.org/science/", "CRAWL_EXCLUDE_PATTERNS": json.dumps([r"^(a+)+$"])}
+        with self.assertRaises(self.mod.CrawlScopeRejected) as caught:
+            self.run_main(env)
+        self.assert_no_work()
+        self.assertIn("exclude_patterns[0]", str(caught.exception))
+
+    def test_encoded_and_userinfo_links_are_not_enqueued(self):
+        # scan-b594378e f-29b5b14f.
+        scope = self.scope()
+        for url in (
+            "https://example.org/science/a/..%2Fprivate/roster",
+            "https://example.org/science/a/%252E%252E/private/roster",
+            "https://example.org/science/a/..\\private/roster",
+            "https://example.org/science/../arts/",
+            "https://example.org@evil.example/science/",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.mod.enqueue_filter({"url": url}, scope), "skip")
+
 
 class ParityWithLambdaTests(unittest.TestCase):
     def test_container_and_lambda_copies_are_identical(self):
