@@ -9,6 +9,8 @@ failed query yields an empty coverage map so the typed prompts still work.
 import logging
 from typing import Any, Dict, List, Optional
 
+from helpers.prompt_data import neutralize_tags
+
 logger = logging.getLogger(__name__)
 
 _UNCLEAR = frozenset({None, "", "UNCLEAR", "BOTH"})
@@ -107,6 +109,8 @@ def outlines_for(coverage: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
         if not labels:
             continue
         lines = ["  Situations in the uploaded guides:"]
-        lines.extend(f"    - {label}" for label in labels)
+        # Labels come from uploaded guide headings: third-party text that must
+        # not close the <journeys> block (finding f-26eea3ab).
+        lines.extend(f"    - {neutralize_tags(str(label))}" for label in labels)
         outlines[key] = "\n".join(lines)
     return outlines

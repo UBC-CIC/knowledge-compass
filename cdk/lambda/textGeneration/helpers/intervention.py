@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Optional
 import helpers.config as config
 from helpers.bedrock_clients import bedrock_runtime
+from helpers.prompt_data import neutralize_tags
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -55,16 +56,16 @@ def _format_sources_for_verifier(sources: List[Dict[str, Any]], max_chars_per_so
 
     blocks = []
     for i, s in enumerate(sources, 1):
-        block = (
-            f"<source_{i}>\n"
+        # Library and guide text is third-party: it must not close <source_N>
+        # (finding f-26eea3ab). Only the wrapper tags are ours.
+        body = neutralize_tags(
             f"type: {s.get('type')}\n"
             f"uri: {s.get('uri')}\n"
             f"url: {s.get('url')}\n"
             f"retrieval_score: {s.get('score')}\n"
-            f"content:\n{_truncate(s.get('content') or '', max_chars_per_source)}\n"
-            f"</source_{i}>"
+            f"content:\n{_truncate(str(s.get('content') or ''), max_chars_per_source)}"
         )
-        blocks.append(block)
+        blocks.append(f"<source_{i}>\n{body}\n</source_{i}>")
 
     return "\n\n".join(blocks)
 

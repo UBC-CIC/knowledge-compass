@@ -156,17 +156,19 @@ class GuidelineRetrievalTest(unittest.TestCase):
             self.assertIn("s.metadata->>'kb_role' = 'guideline'", sql)
             self.assertIn("d.status = 'ready'", sql)
 
-    def test_db_error_returns_empty_and_rolls_back(self):
+    # Finding f-50122d26: a failure is not "no guidance applies"; it raises.
+    def test_db_error_raises_and_rolls_back(self):
         conn = FakeConnection(error=RuntimeError("db down"))
-        results, _ = run(conn)
-        self.assertEqual(results, [])
+        with self.assertRaises(gr.GuidelineRetrievalError):
+            run(conn)
         self.assertEqual(conn.rollbacks, 1)
 
-    def test_embed_error_returns_empty(self):
+    def test_embed_error_raises(self):
         conn = FakeConnection()
         with mock.patch.object(gr, "get_active_space", return_value=SPACE), \
                 mock.patch.object(gr, "embed_query", side_effect=RuntimeError("bedrock")):
-            self.assertEqual(gr.retrieve_guideline_sections("q", conn, "us-east-1"), [])
+            with self.assertRaises(gr.GuidelineRetrievalError):
+                gr.retrieve_guideline_sections("q", conn, "us-east-1")
         self.assertEqual(conn.executed, [])
 
     def test_embedding_space_error_propagates(self):

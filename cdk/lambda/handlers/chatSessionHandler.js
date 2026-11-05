@@ -140,10 +140,13 @@ exports.handler = async (event) => {
           break;
         }
 
-        // guide_state names the guide section in use; it is admin-only.
+        // guide_state and routing.guide_section name the guide section in use;
+        // they are admin-only (journeyPrompts.js feedbackCounts reads
+        // routing.guide_section). Every guest projection below strips both
+        // (finding f-d2560261).
         const sessions = await sqlConnection`
           SELECT id, user_id, title, created_at, last_active_at,
-                 metadata - 'guide_state' AS metadata
+                 (metadata - 'guide_state') #- '{routing,guide_section}' AS metadata
           FROM chat_sessions
           WHERE user_id = ${caller.userId}
           ORDER BY created_at DESC
@@ -229,7 +232,7 @@ exports.handler = async (event) => {
               ${evalTag.runId}, ${evalTag.mode}
             )
             RETURNING id, user_id, title, created_at, last_active_at,
-                      metadata - 'guide_state' AS metadata
+                      (metadata - 'guide_state') #- '{routing,guide_section}' AS metadata
           `
             : await tx`
             INSERT INTO chat_sessions (
@@ -239,7 +242,7 @@ exports.handler = async (event) => {
               ${chatSessionId}, ${userId}, ${title}, ${now}, ${now}, ${metadata}
             )
             RETURNING id, user_id, title, created_at, last_active_at,
-                      metadata - 'guide_state' AS metadata
+                      (metadata - 'guide_state') #- '{routing,guide_section}' AS metadata
           `;
         });
 
@@ -301,7 +304,7 @@ exports.handler = async (event) => {
           SET title = ${title}, last_active_at = NOW()
           WHERE id = ${chatSessionId}
           RETURNING id, user_id, title, created_at, last_active_at,
-                    metadata - 'guide_state' AS metadata
+                    (metadata - 'guide_state') #- '{routing,guide_section}' AS metadata
         `;
 
         response.statusCode = 200;

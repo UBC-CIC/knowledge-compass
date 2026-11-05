@@ -315,9 +315,15 @@ export class IngestionStack extends Stack {
       environment: {
         TARGET_FUNCTION_NAME: knowledgeBaseName,
         WORKER_INVOKE_SECRET_NAME: workerInvokeSecretName,
+        // The relay forwards only task ARNs on this cluster (finding f-0ddd7657).
+        // Same stack, so this token adds no cross-stack reference.
+        ECS_CLUSTER_NAME: this.cluster.clusterName,
       },
       functionName: `${id}-transcribeRelay`,
     });
+    // Invoke rights: targets.LambdaFunction below adds one resource-policy
+    // statement per rule (principal events.amazonaws.com, SourceArn = that
+    // rule). No other resource-policy grant exists for this function.
     transcribeRelay.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,

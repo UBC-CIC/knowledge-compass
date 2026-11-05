@@ -292,6 +292,10 @@ def _prepare_conversation(
     if phase != DETECTIVE:
         document_ids = document_ids_for_turn(route, coverage)
         if document_ids:
+            # A failure raises GuidelineRetrievalError, which get_response turns
+            # into its generic error reply: a journey with reviewed guides is
+            # never answered from the library alone because its guides could
+            # not be read (finding f-50122d26).
             sections = retrieve_guideline_sections(
                 search_query,
                 db_connection,
@@ -901,6 +905,8 @@ def get_response(
             )
             routing_metadata = next_state.to_metadata(routing_ctx["route"])
             if guide_state:
+                # Admin feedback analytics only (journeyPrompts.js). Guest
+                # session reads strip it (chatSessionHandler.js).
                 routing_metadata["guide_section"] = {
                     "document_id": guide_state["document_id"],
                     "section_key": guide_state["section_key"],

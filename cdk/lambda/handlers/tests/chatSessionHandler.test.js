@@ -322,6 +322,45 @@ test("removed chat_history route is no longer served here", async () => {
   assert.deepEqual(res.body, { error: "Internal server error" });
 });
 
+// Finding f-d2560261: the guide section in use is admin-only. textGeneration
+// stores it as metadata.guide_state and, for admin feedback analytics, as
+// metadata.routing.guide_section; guest responses must carry neither.
+const GUEST_METADATA = "(metadata - 'guide_state') #- '{routing,guide_section}' AS metadata";
+
+test("guest session reads strip guide_state and routing.guide_section", async () => {
+  const projections = (sql) => sql.queries().filter((q) => /\bAS metadata\b/.test(q.text));
+
+  const listSql = fakeSql(() => []);
+  await invoke(listSql, { httpMethod: "GET", resource: "/chat_sessions/user/{user_id}", pathParameters: { user_id: USER } });
+
+  const createSqlConn = createSql();
+  assert.equal((await post(createSqlConn, {})).statusCode, 201);
+
+  const renameSql = sessionSql(USER, (text) =>
+    text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: "New" }] : [],
+  );
+  await invoke(renameSql, {
+    httpMethod: "PUT",
+    resource: "/chat_sessions/{chat_session_id}",
+    pathParameters: { chat_session_id: SESSION },
+    body: JSON.stringify({ title: "New" }),
+  });
+
+  for (const [name, sql] of [["list", listSql], ["create", createSqlConn], ["rename", renameSql]]) {
+    const found = projections(sql);
+    assert.equal(found.length, 1, name);
+    assert.ok(found[0].text.includes(GUEST_METADATA), `${name}: ${found[0].text}`);
+  }
+});
+
+test("every metadata projection in chatSessionHandler.js uses the guest projection", () => {
+  // Also covers the evaluation-harness insert, which needs a signed tag.
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "chatSessionHandler.js"), "utf8");
+  const projections = source.match(/[^\n]*\bAS metadata\b/g) || [];
+  assert.equal(projections.length, 4);
+  for (const line of projections) assert.ok(line.includes(GUEST_METADATA), line.trim());
+});
+
 test("malformed, null, array and scalar bodies are a 400 on every body route (f-5290289f)", async () => {
   const routes = [
     { httpMethod: "POST", resource: "/chat_sessions" },

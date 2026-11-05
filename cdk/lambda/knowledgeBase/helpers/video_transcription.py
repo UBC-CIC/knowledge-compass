@@ -46,6 +46,8 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
             "Unsupported video/audio type. Use mp4, webm, mp3, wav, flac, ogg, m4a, or amr."
         )
 
+    # transcribeRelay forwards completion events only for names of exactly this
+    # shape (TRANSCRIBE_JOB_NAME_RE); change both together.
     job_name = f"kc-video-{uuid4().hex}"
     output_key = f"{TRANSCRIBE_OUTPUT_PREFIX}/{job_name}.json"
     params = {
