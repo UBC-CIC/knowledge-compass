@@ -688,7 +688,15 @@ function CsvLinkStatusPanel({
       ) : (
         <>
           <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
-            <table className="w-full text-sm">
+            {/* Fixed layout keeps long URLs inside their column; they truncate with an ellipsis. */}
+            <table className="w-full min-w-[56rem] table-fixed text-sm">
+              <colgroup>
+                <col className="w-[18%]" />
+                <col className="w-[24%]" />
+                <col className="w-[24%]" />
+                <col className="w-[14%]" />
+                <col className="w-[20%]" />
+              </colgroup>
               <thead className="bg-gray-50 text-left text-xs text-gray-600">
                 <tr>
                   <th className="px-3 py-2 font-semibold">Row / resource</th>
@@ -708,33 +716,37 @@ function CsvLinkStatusPanel({
                     : null;
                   return (
                     <tr key={link.row_key} className="border-t border-gray-100 align-top">
-                      <td className="px-3 py-2 min-w-40">
-                        <div className="font-medium text-gray-800">
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-gray-800 break-words">
                           {link.title || `Row ${link.row_number}`}
                         </div>
                         <div className="text-[11px] text-gray-400 tabular-nums">Row {link.row_number}</div>
                       </td>
-                      <td className="px-3 py-2 min-w-48 max-w-80">
+                      <td className="px-3 py-2">
                         {fetchHref ? (
                           <a
                             href={fetchHref}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-primary break-all underline underline-offset-2"
+                            title={link.url || fetchHref}
+                            className="block truncate text-primary underline underline-offset-2"
                           >
                             {link.url || fetchHref}
                           </a>
                         ) : (
-                          <span className="break-all text-gray-500">{link.url || "No fetch URL"}</span>
+                          <span className="block truncate text-gray-500" title={link.url || undefined}>
+                            {link.url || "No fetch URL"}
+                          </span>
                         )}
                       </td>
-                      <td className="px-3 py-2 min-w-48 max-w-80">
+                      <td className="px-3 py-2">
                         {citationHref ? (
                           <a
                             href={citationHref}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-primary break-all underline underline-offset-2"
+                            title={citationHref}
+                            className="block truncate text-primary underline underline-offset-2"
                           >
                             {citationHref}
                           </a>
@@ -745,7 +757,7 @@ function CsvLinkStatusPanel({
                           <div className="mt-1 text-[11px] text-amber-700">{link.citation_warning}</div>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2 min-w-32 space-y-1">
+                      <td className="px-3 py-2 space-y-1">
                         <div>{linkStatusBadge(link.status)}</div>
                         <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                           link.row_indexed
@@ -758,7 +770,7 @@ function CsvLinkStatusPanel({
                           <div className="text-[11px] text-gray-500">Fetched text attached</div>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2 min-w-48 text-xs text-gray-600 break-words">
+                      <td className="px-3 py-2 text-xs text-gray-600 break-words">
                         {link.reason ? <div>{link.reason}</div> : null}
                         {link.indexing_reason ? <div>{link.indexing_reason}</div> : null}
                         <div className="text-gray-400">
