@@ -210,6 +210,22 @@ def guardrails_block_text() -> str:
     parts = (GUARDRAILS, SCOPE_RULE)
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
+
+# Plain wording for acronyms. Added after the admin language guidelines by
+# language_guidelines_block_text(), so an admin prompt edit cannot remove it.
+ACRONYM_RULE = """
+ACRONYMS:
+- Many families don't know education acronyms, so write the full words instead. For example, write "individual education plan", not "IEP"; "educational assistant", not "EA"; "individual program plan", not "IPP"; "United Nations Convention on the Rights of Persons with Disabilities", not "CRPD".
+- This applies to every acronym and short form, including ones that appear in the sources, the guides or the family's own message.
+- If the family used the acronym themselves, you may add it once in brackets after the full words, for example "individual education plan (IEP)". Never use the acronym on its own.
+""".strip()
+
+
+def language_guidelines_block_text() -> str:
+    """Admin language guidelines, then the code-owned ACRONYM_RULE."""
+    parts = (LANGUAGE_GUIDELINES, ACRONYM_RULE)
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
 DETECTIVE_JOURNEY_GUIDE = (
     "Use the journeys listed in the <journeys> block below to identify the family's journey. "
     "When a journey lists situations from its uploaded guides, ask one question that tells "

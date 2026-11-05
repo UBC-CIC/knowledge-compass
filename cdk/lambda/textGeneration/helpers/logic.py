@@ -177,7 +177,7 @@ def get_current_prompt(
 </guardrails>
 
 <language_guidelines>
-{config.LANGUAGE_GUIDELINES}
+{config.language_guidelines_block_text()}
 </language_guidelines>
 """.strip()
 

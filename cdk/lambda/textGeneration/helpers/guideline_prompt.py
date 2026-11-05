@@ -159,7 +159,7 @@ def build_static_prompt() -> str:
 </guardrails>
 
 <language_guidelines>
-{config.LANGUAGE_GUIDELINES}
+{config.language_guidelines_block_text()}
 </language_guidelines>""".strip()
 
 
