@@ -688,8 +688,10 @@ function CsvLinkStatusPanel({
       ) : (
         <>
           <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
-            {/* Fixed layout keeps long URLs inside their column; they truncate with an ellipsis. */}
-            <table className="w-full min-w-[56rem] table-fixed text-sm">
+            {/* Fixed layout keeps long URLs inside their column; they truncate with an ellipsis.
+                whitespace-normal undoes the nowrap inherited from the enclosing TableCell so
+                titles and details wrap. */}
+            <table className="w-full min-w-[56rem] table-fixed whitespace-normal text-sm">
               <colgroup>
                 <col className="w-[18%]" />
                 <col className="w-[24%]" />
