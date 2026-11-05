@@ -318,7 +318,8 @@ class CrawlerSpaceTests(_IngestMixin, unittest.TestCase):
     def _run_main(self, argv, space):
         seen = {}
 
-        async def fake_crawl(seed_url, max_pages, max_words, use_semantic=False, semantic_threshold=0.6):
+        async def fake_crawl(seed_url, max_pages, max_words, use_semantic=False, semantic_threshold=0.6,
+                             scope=None):
             seen["threshold"] = semantic_threshold
             return [], set()
 

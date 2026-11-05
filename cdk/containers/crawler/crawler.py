@@ -90,6 +90,22 @@ except ImportError:
     url_safety = importlib.util.module_from_spec(_safety_spec)
     _safety_spec.loader.exec_module(url_safety)  # type: ignore
 
+# Include/exclude patterns of the website (identical copy of the Lambda
+# helpers/crawl_scope.py); same import / path-load fallback.
+try:
+    from common import crawl_scope  # type: ignore
+except ImportError:
+    _scope_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "common",
+        "crawl_scope.py",
+    )
+    if not os.path.exists(_scope_path):
+        _scope_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crawl_scope.py")
+    _scope_spec = importlib.util.spec_from_file_location("crawl_scope", _scope_path)
+    crawl_scope = importlib.util.module_from_spec(_scope_spec)
+    _scope_spec.loader.exec_module(crawl_scope)  # type: ignore
+
 
 # ── Config (environment-driven) ───────────────────────────────────────────────
 
@@ -888,6 +904,14 @@ class UnsafeRequestURL(RuntimeError):
     """A request was about to navigate to a non-public URL."""
 
 
+class OutOfScopeURL(RuntimeError):
+    """A request was about to navigate to a URL outside the include/exclude patterns."""
+
+
+class CrawlScopeRejected(RuntimeError):
+    """The include/exclude patterns are malformed or exclude the seed URL."""
+
+
 def validate_seed_url(seed_url: str, resolver=None) -> None:
     """Refuse to crawl a seed that is not a public http(s) URL (never prints the address)."""
     try:
@@ -909,24 +933,43 @@ def _log_blocked_host(url: str, checker) -> None:
         print(f"[ssrf] blocked request to non-public host {host}", file=sys.stderr)
 
 
-async def guard_route(route, checker) -> None:
-    """Playwright route handler: let public http(s) requests through, abort the rest."""
+async def guard_route(route, checker, scope=None) -> None:
+    """
+    Playwright route handler: let public http(s) requests through, abort the
+    rest. With a scope, a page or frame navigation (not a subresource) outside
+    the include/exclude patterns is aborted as well.
+    """
     url = route.request.url
     try:
         allowed = await checker.allows(url)
+        in_scope = (
+            scope is None
+            or scope.unrestricted
+            or not route.request.is_navigation_request()
+            or scope.allows(url)
+        )
     except Exception:  # noqa: BLE001 - fail closed; an unresolved route would hang the page
-        allowed = False
-    if allowed:
+        allowed = in_scope = False
+    if allowed and in_scope:
         await route.continue_()
     else:
-        _log_blocked_host(url, checker)
+        if not allowed:
+            _log_blocked_host(url, checker)
         await route.abort("blockedbyclient")
 
 
-async def guard_navigation(ctx, checker, guarded_contexts) -> None:
+def _no_retry(request) -> None:
+    try:
+        request.no_retry = True  # a blocked URL stays blocked
+    except (AttributeError, TypeError, ValueError):
+        pass  # retries are then blocked the same way
+
+
+async def guard_navigation(ctx, checker, guarded_contexts, scope=None) -> None:
     """
     Pre-navigation hook: route every request of the browser context through
-    guard_route, and refuse a navigation to a non-public URL.
+    guard_route, and refuse a navigation to a non-public URL or to a URL
+    outside the website's include/exclude patterns.
 
     The route is installed on the BrowserContext, not the page: page.route does
     not apply to popups, and a crawled page could otherwise window.open() or
@@ -935,28 +978,72 @@ async def guard_navigation(ctx, checker, guarded_contexts) -> None:
     """
     context = ctx.page.context
     if context not in guarded_contexts:
-        await context.route("**/*", lambda route: guard_route(route, checker))
+        await context.route("**/*", lambda route: guard_route(route, checker, scope))
         guarded_contexts.add(context)
     if not await checker.allows(ctx.request.url):
         _log_blocked_host(ctx.request.url, checker)
-        try:
-            ctx.request.no_retry = True  # a blocked URL stays blocked
-        except (AttributeError, TypeError, ValueError):
-            pass  # retries are then blocked the same way
+        _no_retry(ctx.request)
         raise UnsafeRequestURL("blocked non-public URL")
+    if scope is not None and not scope.allows(ctx.request.url):
+        print("  [scope] refused a URL outside the include/exclude patterns", file=sys.stderr)
+        _no_retry(ctx.request)
+        raise OutOfScopeURL("URL is outside the website's include/exclude patterns")
 
 
-def enqueue_filter(request_options):
-    """transform_request_function for enqueue_links: skip non-http(s) / non-public-IP links."""
-    if not url_safety.is_crawlable_url(request_options.get("url")):
+async def final_url_allowed(page_url, checker, scope) -> bool:
+    """
+    Whether to store the page a navigation ended on. Request routing does not
+    see the redirect hops of a navigation, so a URL that passed every check can
+    still redirect to a non-public or out-of-scope one.
+    """
+    if not await checker.allows(page_url):
+        _log_blocked_host(page_url, checker)
+        print("  [ssrf] skipped page whose final URL is not public", file=sys.stderr)
+        return False
+    if not scope.allows(page_url):
+        print("  [scope] skipped page whose final URL is outside the include/exclude patterns",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def enqueue_filter(request_options, scope=None):
+    """
+    transform_request_function for enqueue_links: skip non-http(s) /
+    non-public-IP links, and links outside the include/exclude patterns.
+    """
+    url = request_options.get("url")
+    if not url_safety.is_crawlable_url(url):
+        return "skip"
+    if scope is not None and not scope.allows(url):
         return "skip"
     return request_options
+
+
+def load_crawl_scope(environ, seed_url: str):
+    """
+    The include/exclude patterns the Lambda passed in the task environment.
+    Raises CrawlScopeRejected when they are malformed or exclude the seed
+    itself; nothing is fetched in either case.
+    """
+    try:
+        scope = crawl_scope.from_env(environ)
+    except crawl_scope.InvalidPatterns as e:
+        raise CrawlScopeRejected(f"Crawl patterns rejected: {e}") from None
+    if not scope.allows(seed_url):
+        raise CrawlScopeRejected(
+            "Crawl patterns rejected: the website URL must match an include pattern "
+            "and no exclude pattern"
+        )
+    return scope
 
 
 # ── Crawler ───────────────────────────────────────────────────────────────────
 
 async def crawl(seed_url: str, max_pages: int, max_words: int,
-               use_semantic: bool = False, semantic_threshold: float = 0.6):
+               use_semantic: bool = False, semantic_threshold: float = 0.6, scope=None):
+    # scope: the website's include/exclude patterns (load_crawl_scope); None crawls the whole domain.
+    scope = scope or crawl_scope.CrawlScope()
     pages: list = []
     discovered_urls: set = set()
     checker = url_safety.PublicHostChecker()
@@ -970,18 +1057,16 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
 
     @crawler.pre_navigation_hook
     async def _guard(ctx) -> None:
-        await guard_navigation(ctx, checker, guarded_contexts)
+        await guard_navigation(ctx, checker, guarded_contexts, scope)
 
     @crawler.router.default_handler
     async def handler(ctx: PlaywrightCrawlingContext) -> None:
         url = ctx.request.url
 
-        # Request routing does not see the redirect hops of a navigation, so a
-        # public URL can redirect to an internal one: re-check where the page
-        # ended up and store nothing from a non-public final URL.
-        if not await checker.allows(ctx.page.url):
-            _log_blocked_host(ctx.page.url, checker)
-            print("  [ssrf] skipped page whose final URL is not public", file=sys.stderr)
+        # A public, in-scope URL can redirect to an internal or excluded one:
+        # re-check where the page ended up, and store nothing and follow no
+        # links from a final URL that fails either check.
+        if not await final_url_allowed(ctx.page.url, checker, scope):
             return
 
         discovered_urls.add(url)
@@ -1012,7 +1097,9 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
         view_ids = re.findall(r'[?&]view=([a-f0-9-]{36})', html)
         if view_ids:
             resource_urls = [f"https://{ctx.page.url.split('/')[2]}/resource?view={vid}" for vid in set(view_ids)]
-            resource_urls = [u for u in resource_urls if url_safety.is_crawlable_url(u)]
+            resource_urls = [
+                u for u in resource_urls if url_safety.is_crawlable_url(u) and scope.allows(u)
+            ]
             await ctx.add_requests(resource_urls)
             print(f"  [wix]  {url} — enqueued {len(resource_urls)} resource detail page(s)", file=sys.stderr)
 
@@ -1036,7 +1123,9 @@ async def crawl(seed_url: str, max_pages: int, max_words: int,
             print(f"  [ok]   {url} — {len(chunks)} chunk(s){video_note}", file=sys.stderr)
 
         await ctx.enqueue_links(
-            strategy="same-domain", selector="a[href]", transform_request_function=enqueue_filter
+            strategy="same-domain",
+            selector="a[href]",
+            transform_request_function=lambda options: enqueue_filter(options, scope),
         )
 
     await crawler.run([seed_url])
@@ -1081,6 +1170,16 @@ def main() -> None:
     # Validate before anything else runs; the original string is still passed
     # on unchanged (write_to_db matches data_sources.name against it).
     validate_seed_url(args.seed_url)
+    # The website's include/exclude patterns (CRAWL_INCLUDE_PATTERNS /
+    # CRAWL_EXCLUDE_PATTERNS, set by the Lambda). Malformed patterns, or a seed
+    # they exclude, fail the run here, before anything is fetched.
+    scope = load_crawl_scope(os.environ, args.seed_url)
+    if not scope.unrestricted:
+        print(
+            f"Crawl scope: {len(scope.include_patterns)} include / "
+            f"{len(scope.exclude_patterns)} exclude pattern(s)",
+            file=sys.stderr,
+        )
 
     # Resolve the embedding space once, before crawling: semantic splitting
     # embeds sentences and needs the space's model and split_threshold.
@@ -1093,7 +1192,8 @@ def main() -> None:
     pages, discovered_urls = asyncio.run(
         crawl(args.seed_url, args.max_pages, args.max_words,
               use_semantic=args.semantic,
-              semantic_threshold=semantic_threshold)
+              semantic_threshold=semantic_threshold,
+              scope=scope)
     )
 
     all_chunks = [c for p in pages for c in p["chunks"]]

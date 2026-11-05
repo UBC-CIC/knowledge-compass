@@ -33,6 +33,7 @@ import boto3
 
 from kc_shared.cors import get_cors_headers
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
+from helpers import crawl_scope
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -59,8 +60,29 @@ REJECTED_SEED_MESSAGE = (
 )
 
 
-class SeedURLRejected(Exception):
+REJECTED_PATTERNS_MESSAGE = (
+    "Website include/exclude patterns were rejected: a pattern is not a valid "
+    "regular expression, or the patterns exclude the website URL itself. "
+    "Delete this website and add it again with corrected patterns."
+)
+
+
+class LaunchRejected(Exception):
+    """The stored website cannot be crawled as configured; the run is failed, not retried."""
+
+    admin_message = REJECTED_SEED_MESSAGE
+    reason = "unsafe_seed_url"
+
+
+class SeedURLRejected(LaunchRejected):
     """The stored website seed is not a public http(s) URL; the crawler must not be launched."""
+
+
+class CrawlPatternsRejected(LaunchRejected):
+    """The stored include/exclude patterns are malformed or exclude the seed."""
+
+    admin_message = REJECTED_PATTERNS_MESSAGE
+    reason = "invalid_crawl_patterns"
 
 
 def _response(event, status_code: int, body: dict):
@@ -145,7 +167,9 @@ def _mark_run_running(connection, *, ingestion_run_id: str, ecs_task_arn: str, s
         )
 
 
-def _mark_run_failed(connection, *, ingestion_run_id: str, error_message: str, sync_session_id: str):
+def _mark_run_failed(
+    connection, *, ingestion_run_id: str, error_message: str, sync_session_id: str, rejected: str = "unsafe_seed_url"
+):
     """Mark a queued run failed without launching a task (same shape as handle_ecs_task_stopped)."""
     with connection.cursor() as cursor:
         cursor.execute(
@@ -164,7 +188,7 @@ def _mark_run_failed(connection, *, ingestion_run_id: str, error_message: str, s
                     {
                         "backend": "pgvector",
                         "sync_session_id": sync_session_id,
-                        "rejected": "unsafe_seed_url",
+                        "rejected": rejected,
                     }
                 ),
                 ingestion_run_id,
@@ -285,10 +309,20 @@ def _run_crawler_task(run: dict) -> str:
         check_public_url(run["name"])
     except (InvalidURL, BlockedURL) as e:
         raise SeedURLRejected(type(e).__name__) from e
+    # The crawler enforces the include/exclude patterns (crawl_scope.py). Rows
+    # staged before staging validated them are re-checked here so a pattern
+    # the crawler cannot compile never reaches it.
+    try:
+        scope = crawl_scope.CrawlScope.from_patterns(run["include_patterns"], run["exclude_patterns"])
+    except crawl_scope.InvalidPatterns as e:
+        raise CrawlPatternsRejected(str(e)) from e
+    if not scope.allows(run["name"]):
+        raise CrawlPatternsRejected("the patterns exclude the website URL")
     env = [
         {"name": "JOB_ID", "value": run["ingestion_run_id"]},
         {"name": "SEED_URL", "value": run["name"]},
         {"name": "WRITE_DB", "value": "true"},
+        *crawl_scope.to_env(scope.include_patterns, scope.exclude_patterns),
         *_container_db_overrides(),
     ]
     resp = ecs_client.run_task(
@@ -425,30 +459,33 @@ def process_crawler_batch(event, connection, sync_session_id: str, triggered_by_
             )
             connection.commit()
             launched.append({"ingestion_run_id": run["ingestion_run_id"], "type": run["type"], "ecs_task_arn": task_arn})
-        except SeedURLRejected as e:
+        except LaunchRejected as e:
             # Permanent: fail the run so it is not retried on every sync.
             connection.rollback()
             try:
                 _mark_run_failed(
                     connection,
                     ingestion_run_id=run["ingestion_run_id"],
-                    error_message=REJECTED_SEED_MESSAGE,
+                    error_message=e.admin_message,
                     sync_session_id=sync_session_id,
+                    rejected=e.reason,
                 )
                 connection.commit()
             except Exception as exc:  # noqa: BLE001
                 connection.rollback()
                 logger.error(
-                    "Could not mark run %s failed after rejecting its seed URL (%s)",
+                    "Could not mark run %s failed after rejecting it (%s, %s)",
                     run["ingestion_run_id"],
+                    e.reason,
                     type(exc).__name__,
                 )
             logger.warning(
-                "Refusing to launch crawler for run %s: stored seed URL is not a public http(s) URL (%s)",
+                "Refusing to launch crawler for run %s (%s: %s)",
                 run["ingestion_run_id"],
+                e.reason,
                 e,
             )
-            failures.append({"ingestion_run_id": run["ingestion_run_id"], "error": REJECTED_SEED_MESSAGE})
+            failures.append({"ingestion_run_id": run["ingestion_run_id"], "error": e.admin_message})
         except Exception as e:  # noqa: BLE001
             connection.rollback()
             logger.error("Failed to launch ingestion task for run %s: %s", run["ingestion_run_id"], e, exc_info=True)

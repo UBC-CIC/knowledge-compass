@@ -10,6 +10,7 @@ from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
 from helpers.video_transcription import start_transcription_job
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
+from helpers.crawl_scope import CrawlScope, InvalidPatterns
 from helpers.process_document_batch import trigger_uploaded_document
 from helpers.admin_audit import actor_from_event
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
@@ -580,11 +581,18 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
     if url_error:
         return _response(event, 400, {"error": url_error})
 
-    if not isinstance(include_patterns, list):
-        return _response(event, 400, {"error": "include_patterns must be an array"})
-
-    if not isinstance(exclude_patterns, list):
-        return _response(event, 400, {"error": "exclude_patterns must be an array"})
+    # The crawler enforces these patterns (helpers/crawl_scope.py); reject any
+    # it could not compile, and a seed they exclude, which would crawl nothing.
+    try:
+        scope = CrawlScope.from_patterns(include_patterns, exclude_patterns)
+    except InvalidPatterns as e:
+        return _response(event, 400, {"error": str(e)})
+    if not scope.allows(name):
+        return _response(
+            event,
+            400,
+            {"error": "The website URL must match an include pattern and no exclude pattern"},
+        )
 
     # Also match the raw spelling: rows staged before normalization store it.
     existing_id = _existing_website_row_id(connection, names=list(dict.fromkeys([name, raw_name])))

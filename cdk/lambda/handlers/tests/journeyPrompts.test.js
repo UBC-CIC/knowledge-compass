@@ -259,6 +259,26 @@ test("active versions cannot be deleted", async () => {
   assert.ok(!sql.calls.some((c) => c.text.includes("DELETE FROM")));
 });
 
+test("a concurrent prompt activation that hits the one-active index is a 409 (f-e1a8b540)", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+    if (text.includes("journey_prompt_versions WHERE id") && text.includes("FOR UPDATE")) {
+      return [{ id: UUID, field: "guidance", is_active: false, journey_id: UUID, cluster_id: null }];
+    }
+    if (text.includes("SET is_active = true")) {
+      const err = new Error("duplicate key value violates unique constraint");
+      err.code = "23505";
+      throw err;
+    }
+    return [];
+  });
+  const res = await call(sql, "POST /admin/journey-prompts/{version_id}/activate", adminEvent({ pathParameters: { version_id: UUID } }));
+  assert.equal(res.statusCode, 409);
+  const deactivate = sql.calls.findIndex((c) => c.text.includes("SET is_active = false"));
+  const activate = sql.calls.findIndex((c) => c.text.includes("SET is_active = true"));
+  assert.ok(deactivate >= 0 && deactivate < activate, "deactivates before activating");
+});
+
 test("missing tables give a 503 hint", async () => {
   const sql = fakeSql(() => {
     const err = new Error("relation does not exist");

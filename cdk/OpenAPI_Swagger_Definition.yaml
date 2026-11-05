@@ -683,12 +683,24 @@ paths:
                   example: https://example.com
                 include_patterns:
                   type: array
+                  maxItems: 20
+                  description: >-
+                    For type website: Python regular expressions matched (re.search)
+                    against each page URL. When present, only matching URLs are crawled.
                   items:
                     type: string
+                    minLength: 1
+                    maxLength: 300
                 exclude_patterns:
                   type: array
+                  maxItems: 20
+                  description: >-
+                    For type website: Python regular expressions matched (re.search)
+                    against each page URL. Matching URLs are never fetched or stored.
                   items:
                     type: string
+                    minLength: 1
+                    maxLength: 300
                 csv_file_name:
                   type: string
                   example: alumni_data_final.csv
@@ -801,7 +813,8 @@ paths:
         "400":
           description: >-
             Invalid request, including a website name, video_url or document_url
-            that is not a public http(s) URL
+            that is not a public http(s) URL, an include/exclude pattern that is not
+            a valid regular expression, or patterns that exclude the website name itself
         "404":
           description: Route not found
         "409":
@@ -1313,7 +1326,8 @@ paths:
                           { type: string, enum: [processing, ready, failed] }
                         error: { type: string, nullable: true }
                         section_count: { type: integer }
-                        journey_id: { type: string, format: uuid, nullable: true }
+                        journey_id:
+                          { type: string, format: uuid, nullable: true }
                         sections:
                           type: array
                           items:
@@ -2466,6 +2480,10 @@ paths:
           description: Forbidden - Not an admin
         "404":
           description: Admin user not found for email
+        "409":
+          description: >-
+            Another change to this message type was saved at the same time (only one
+            version per type can be active). Reload and try again.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -2759,6 +2777,10 @@ paths:
           description: Forbidden - Not an admin
         "404":
           description: Admin user not found or system message version not found
+        "409":
+          description: >-
+            Another change to this message type was saved at the same time (only one
+            version per type can be active). Reload and try again.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

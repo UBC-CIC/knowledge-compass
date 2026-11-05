@@ -59,6 +59,12 @@ const DEFAULT_CHARACTER_LIMITS = {
   disclaimer: 700,
 };
 
+// A create or activate that loses a race with another change to the same type
+// hits uq_system_messages_active or uq_system_messages_type_version (23505).
+const CONCURRENT_PROMPT_CHANGE =
+  "Another change to this prompt was saved at the same time. Reload and try again.";
+const isUniqueViolation = (err) => err?.code === "23505";
+
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
 
@@ -303,6 +309,18 @@ exports.handler = async (event) => {
         // Create new version, make it active, deactivate old
         try {
           const created = await sqlConnection.begin(async (tx) => {
+            // Lock the active row first, as the activate route does, so the two
+            // routes serialize on it; the version number is then read in a
+            // fresh snapshot. uq_system_messages_active (migration 050) catches
+            // any race this lock does not cover (409 below).
+            await tx`
+              SELECT id
+              FROM system_messages
+              WHERE type = ${messageType}::system_message_type
+                AND is_active = true
+              FOR UPDATE
+            `;
+
             const [{ next_version }] = await tx`
               SELECT COALESCE(MAX(version), 0) + 1 AS next_version
               FROM system_messages
@@ -411,6 +429,11 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(created.row);
           break;
         } catch (err) {
+          if (isUniqueViolation(err)) {
+            response.statusCode = 409;
+            response.body = JSON.stringify({ error: CONCURRENT_PROMPT_CHANGE });
+            break;
+          }
           console.error("POST /admin/system-messages/{system_message_type} failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to create system message version" });
@@ -710,6 +733,11 @@ exports.handler = async (event) => {
           });
           break;
         } catch (err) {
+          if (isUniqueViolation(err)) {
+            response.statusCode = 409;
+            response.body = JSON.stringify({ error: CONCURRENT_PROMPT_CHANGE });
+            break;
+          }
           console.error("POST /admin/system-messages/{system_message_type}/{version_id}/activate failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to activate system message version" });

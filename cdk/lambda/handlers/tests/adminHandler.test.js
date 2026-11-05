@@ -526,8 +526,10 @@ test("validation failures write no audit row", async () => {
 const MSG_ID = "9d4c1f6e-0000-4000-8000-000000000001";
 const PREV_ID = "9d4c1f6e-0000-4000-8000-000000000002";
 
-function systemMessageSql({ isActive = false } = {}) {
+function systemMessageSql({ isActive = false, fail = () => null } = {}) {
   return fakeSql((text) => {
+    const error = fail(text);
+    if (error) throw error;
     if (text.includes("FROM users")) return [{ id: "u1", role: "admin" }];
     if (text.includes("AS next_version")) return [{ next_version: 3 }];
     if (text.startsWith("SELECT character_limit")) return [{ character_limit: 700 }];
@@ -584,6 +586,70 @@ test("activating the already-active version writes no audit row", async () => {
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.status, "already_active");
   assert.equal(auditInserts(sql).length, 0);
+});
+
+// --- One active system_messages row per type (finding f-e1a8b540, migration 050) ---
+
+function uniqueViolation() {
+  const error = new Error('duplicate key value violates unique constraint "uq_system_messages_active"');
+  error.code = "23505";
+  error.constraint_name = "uq_system_messages_active";
+  return error;
+}
+
+const createEvent = () => ({
+  httpMethod: "POST",
+  resource: "/admin/system-messages/{system_message_type}",
+  pathParameters: { system_message_type: "welcome_message" },
+  requestContext: auditContext,
+  body: JSON.stringify({ content: "secret prompt text" }),
+});
+
+const activateEvent = () => ({
+  httpMethod: "POST",
+  resource: "/admin/system-messages/{system_message_type}/{version_id}/activate",
+  pathParameters: { system_message_type: "welcome_message", version_id: MSG_ID },
+  requestContext: auditContext,
+  body: "{}",
+});
+
+test("system message create locks the active row before numbering and deactivates before inserting", async () => {
+  const sql = systemMessageSql();
+  const res = await invoke(sql, createEvent());
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const texts = sql.queries().map((q) => q.text);
+  const lock = texts.findIndex((t) => /FROM system_messages .*is_active = true FOR UPDATE/.test(t));
+  const number = texts.findIndex((t) => t.includes("AS next_version"));
+  const deactivate = texts.findIndex((t) => t.startsWith("UPDATE system_messages SET is_active = false"));
+  const insert = texts.findIndex((t) => t.startsWith("INSERT INTO system_messages"));
+  assert.ok(lock >= 0, "the active row is locked FOR UPDATE");
+  assert.ok(lock < number, "MAX(version) is read after the lock, in a fresh snapshot");
+  assert.ok(number < deactivate && deactivate < insert, texts.join("\n"));
+});
+
+test("system message activate deactivates before activating the target", async () => {
+  const sql = systemMessageSql();
+  const res = await invoke(sql, activateEvent());
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const texts = sql.queries().map((q) => q.text);
+  const deactivate = texts.findIndex((t) => t.startsWith("UPDATE system_messages SET is_active = false"));
+  const activate = texts.findIndex((t) => t.startsWith("UPDATE system_messages SET is_active = true"));
+  assert.ok(deactivate >= 0 && deactivate < activate, texts.join("\n"));
+});
+
+test("a concurrent change to the same prompt type is a 409 with no success audit log, not a 500", async () => {
+  const cases = [
+    [createEvent(), (text) => text.startsWith("INSERT INTO system_messages")],
+    [activateEvent(), (text) => text.startsWith("UPDATE system_messages SET is_active = true")],
+  ];
+  for (const [event, failing] of cases) {
+    const sql = systemMessageSql({ fail: (text) => (failing(text) ? uniqueViolation() : null) });
+    const res = await invokeCapturing(sql, event);
+    assert.equal(res.statusCode, 409, `${event.resource} ${JSON.stringify(res.body)}`);
+    assert.match(res.body.error, /another change to this prompt/i);
+    assert.equal(res.audits.length, 0);
+    assert.ok(!JSON.stringify(res.body).includes("secret prompt text"));
+  }
 });
 
 test("admin session and transcript reads validate ids and cap the page size (f-5290289f)", async () => {

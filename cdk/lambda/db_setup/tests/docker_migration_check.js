@@ -509,6 +509,7 @@ function runChecks() {
   runServiceStatusChecks();
   if (RUN_DEFERRED) runDeferredChecks();
   else skip("deferred cleanup migration", "run with --deferred to apply it on top of 032/033 and revert it");
+  runSystemMessagesOneActiveChecks();
 }
 
 /** Migration 033 (embedding_jobs) and the re-embed work-list query. Runs on top of 032. */
@@ -771,6 +772,130 @@ function runServiceStatusChecks() {
     applyMigration("034_service_status.js", "down");   // a second down is a no-op
     applyMigration("034_service_status.js", "up");
     assert(count("SELECT count(*) FROM system_settings WHERE service_status = 'normal'") === count("SELECT count(*) FROM system_settings"), "rows do not default to normal after down/up");
+  });
+}
+
+/**
+ * Run two transactions concurrently in the container: `first` starts, takes its
+ * locks and sleeps before committing; `second` starts one second later. Returns
+ * both exit codes and the second session's output.
+ */
+function race(first, second) {
+  for (const [name, sql] of [["race_a.sql", first], ["race_b.sql", second]]) {
+    const written = docker(["exec", "-i", CONTAINER, "sh", "-c", `cat > /tmp/${name}`], { input: sql });
+    if (written.status !== 0) throw new Error(`could not write ${name}: ${written.stderr}`);
+  }
+  const run = `PGPASSWORD=${SUPERPASS} psql -h 127.0.0.1 -U ${SUPERUSER} -d ${DB} -X -q -A -t -v ON_ERROR_STOP=1`;
+  const result = docker(["exec", CONTAINER, "sh", "-c",
+    `${run} -f /tmp/race_a.sql > /tmp/race_a.out 2>&1 & A=$!; sleep 1; ` +
+    `${run} -f /tmp/race_b.sql > /tmp/race_b.out 2>&1; B=$?; wait $A; echo "$? $B"; cat /tmp/race_b.out`]);
+  const [codes, ...rest] = (result.stdout || "").trim().split("\n");
+  const [a, b] = codes.split(" ").map(Number);
+  return { a, b, out: rest.join("\n") };
+}
+
+/**
+ * Migration 050 (one active system_messages row per type, finding f-e1a8b540).
+ * Applies 035..049 first, reproduces the create-vs-activate race on the
+ * unconstrained table, then checks the repair, the index and the handler's
+ * statement order (adminHandler.js) under the same race.
+ */
+function runSystemMessagesOneActiveChecks() {
+  // Everything from 032 up to 049 that runChecks did not already apply.
+  const applied = new Set(["032_embedding_spaces.js", "033_embedding_jobs.js", "034_service_status.js"]);
+  const pending = migrationFiles().filter((f) => f >= "032" && f < "050" && !applied.has(f));
+  for (const file of pending) applyMigration(file, "up");
+
+  const TYPE = "disclaimer";
+  const maxVersion = () => count(`SELECT max(version) FROM system_messages WHERE type = '${TYPE}'`);
+  const activeIds = (type = TYPE) => mustPsql(`SELECT id FROM system_messages WHERE type = '${type}' AND is_active ORDER BY version`).split("\n").filter(Boolean);
+  const addVersion = (type, content, active) => mustPsql(`
+    INSERT INTO system_messages (type, content, character_limit, version, is_active, affects_text_generation, created_at)
+    SELECT '${type}', '${content}', 700, COALESCE(max(version), 0) + 1, ${active}, false, now()
+      FROM system_messages WHERE type = '${type}'
+    RETURNING id`).split("\n")[0];
+
+  // The activate route (adminHandler.js): lock target, lock active, deactivate, activate.
+  const activateSql = (targetId) => `
+    BEGIN;
+    SELECT id FROM system_messages WHERE id = '${targetId}' FOR UPDATE;
+    SELECT id FROM system_messages WHERE type = '${TYPE}' AND is_active = true FOR UPDATE;
+    UPDATE system_messages SET is_active = false WHERE type = '${TYPE}' AND is_active = true;
+    UPDATE system_messages SET is_active = true WHERE id = '${targetId}';
+    SELECT pg_sleep(2);
+    COMMIT;`;
+  // The create route, before (lockFirst = false) and after this change.
+  const createSql = (content, lockFirst) => `
+    BEGIN;
+    ${lockFirst ? `SELECT id FROM system_messages WHERE type = '${TYPE}' AND is_active = true FOR UPDATE;` : ""}
+    SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM system_messages WHERE type = '${TYPE}' \\gset
+    UPDATE system_messages SET is_active = false WHERE type = '${TYPE}' AND is_active = true;
+    INSERT INTO system_messages (type, content, character_limit, version, is_active, affects_text_generation, created_at)
+    VALUES ('${TYPE}', '${content}', 700, :next_version, true, false, now());
+    COMMIT;`;
+
+  check(`before 050: an activate racing a create leaves two active ${TYPE} rows (the finding)`, () => {
+    assert(activeIds().length === 1, `seed: ${activeIds().length} active rows`);
+    const older = addVersion(TYPE, "older version", false);
+    const result = race(activateSql(older), createSql("race create before 050", false));
+    assert(result.a === 0 && result.b === 0, `exit codes ${result.a}/${result.b}: ${result.out}`);
+    const active = activeIds();
+    assert(active.length === 2, `${active.length} active rows`);
+    return `${active.length} active rows for one type`;
+  });
+
+  let rowsBefore = 0;
+  check("before 050: a second active row per type is accepted", () => {
+    addVersion("welcome_message", "dup one", true);
+    addVersion("welcome_message", "dup two", true);
+    assert(activeIds("welcome_message").length >= 3, "duplicates not inserted");
+    rowsBefore = count("SELECT count(*) FROM system_messages");
+  });
+
+  check("050 up keeps the newest active version per type, deletes nothing, and adds the partial unique index", () => {
+    const expected = mustPsql(`SELECT DISTINCT ON (type) type || ':' || id FROM system_messages WHERE is_active ORDER BY type, version DESC`);
+    applyMigration("050_system_messages_one_active.js", "up");
+    const dupes = count("SELECT count(*) FROM (SELECT type FROM system_messages WHERE is_active GROUP BY type HAVING count(*) > 1) d");
+    assert(dupes === 0, `${dupes} types still have more than one active row`);
+    const kept = mustPsql(`SELECT type || ':' || id FROM system_messages WHERE is_active ORDER BY type`);
+    assert(kept === expected, `kept\n${kept}\nexpected (what readers served before)\n${expected}`);
+    assert(count("SELECT count(*) FROM system_messages") === rowsBefore, "rows were deleted");
+    const def = mustPsql("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_system_messages_active'");
+    assert(/UNIQUE INDEX .* \(type\) WHERE is_active/.test(def), def);
+  });
+
+  check("050: a second active row for a type is rejected by uq_system_messages_active", () => {
+    const dup = psql(`INSERT INTO system_messages (type, content, character_limit, version, is_active, affects_text_generation, created_at)
+                      SELECT '${TYPE}', 'dup', 700, max(version) + 1, true, false, now() FROM system_messages WHERE type = '${TYPE}'`);
+    assert(!dup.ok && /uq_system_messages_active/.test(dup.err), dup.err || "duplicate accepted");
+    const wrongOrder = psql(`BEGIN; UPDATE system_messages SET is_active = true WHERE type = '${TYPE}' AND NOT is_active AND version = (SELECT min(version) FROM system_messages WHERE type = '${TYPE}'); COMMIT;`);
+    assert(!wrongOrder.ok && /uq_system_messages_active/.test(wrongOrder.err), "activating before deactivating was accepted");
+  });
+
+  check("050 + new create order: the create waits for the activate and wins; exactly one active row", () => {
+    const older = addVersion(TYPE, "older version two", false);
+    const result = race(activateSql(older), createSql("race create after 050", true));
+    assert(result.a === 0 && result.b === 0, `exit codes ${result.a}/${result.b}: ${result.out}`);
+    const active = mustPsql(`SELECT content || '|' || (version = (SELECT max(version) FROM system_messages WHERE type = '${TYPE}')) FROM system_messages WHERE type = '${TYPE}' AND is_active`);
+    assert(active === "race create after 050|true", active);
+  });
+
+  check("050 + old create order: the index turns the race into a unique violation (handler returns 409)", () => {
+    const older = addVersion(TYPE, "older version three", false);
+    const before = maxVersion();
+    const result = race(activateSql(older), createSql("race create old order", false));
+    assert(result.a === 0, `activate failed: ${result.a}`);
+    assert(result.b !== 0 && /duplicate key value violates unique constraint "uq_system_messages_active"/.test(result.out), result.out);
+    assert(activeIds().length === 1 && activeIds()[0] === older, "the activated version is not the only active row");
+    assert(maxVersion() === before, "the failed create left a row");
+  });
+
+  check("050 down drops the index; up re-applies cleanly twice", () => {
+    applyMigration("050_system_messages_one_active.js", "down");
+    assert(count("SELECT count(*) FROM pg_indexes WHERE indexname = 'uq_system_messages_active'") === 0, "index left behind");
+    applyMigration("050_system_messages_one_active.js", "up");
+    applyMigration("050_system_messages_one_active.js", "up");
+    assert(count("SELECT count(*) FROM pg_indexes WHERE indexname = 'uq_system_messages_active'") === 1, "index missing");
   });
 }
 

@@ -664,9 +664,9 @@ Stage a new data source (website or CSV) for future syncing.
 {
   "type": "website",
   "created_by": "admin@example.com",
-  "name": "https://example.com",
-  "include_patterns": ["/docs/*"],
-  "exclude_patterns": ["/blog/*"]
+  "name": "https://example.com/docs/",
+  "include_patterns": ["^https://example\\.com/docs/"],
+  "exclude_patterns": ["^https://example\\.com/docs/private/"]
 }
 ```
 
@@ -688,7 +688,7 @@ Stage a new data source (website or CSV) for future syncing.
 - `type` (string, required): `website` or `csv`
 - `created_by` (string, required): Admin email
 - `name` (string, optional): URL for website sources
-- `include_patterns` / `exclude_patterns` (array, optional): URL path filters. Stored and shown in the dashboard, but not currently passed to the crawler, so they have no effect
+- `include_patterns` / `exclude_patterns` (array of strings, optional): Python regular expressions matched with `re.search` against each page URL. The crawler skips any URL an exclude pattern matches and, when include patterns exist, any URL none of them matches. At most 20 patterns per list and 300 characters per pattern. A malformed pattern, or patterns that exclude `name` itself, return `400`
 - `csv_file_name`, `csv_s3_bucket`, `csv_s3_key` (string): Required for CSV sources
 - `metadata_file_name`, `metadata_s3_bucket`, `metadata_s3_key` (string, optional): Metadata file for CSV sources
 
@@ -1118,7 +1118,7 @@ Create a new version of a system message and set it as active.
 - `content` (string, required): The full message content
 - `adminEmail` (string, required): Email of the admin creating this version
 
-**Response:** `200 OK` with the newly created version object (is_active: true)
+**Response:** `200 OK` with the newly created version object (is_active: true). `409 Conflict` when another change to the same type was saved at the same time; only one version per type can be active (migration 050). Reload and try again.
 
 **Example (cURL):**
 
@@ -1157,6 +1157,8 @@ Set a specific version as the active version for its type.
   "previous_active": { "id": "uuid", "version": 1 }
 }
 ```
+
+Returns `409 Conflict` when another change to the same type was saved at the same time.
 
 **Example (cURL):**
 

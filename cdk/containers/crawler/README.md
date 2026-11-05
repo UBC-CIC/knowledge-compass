@@ -108,7 +108,8 @@ Admin triggers crawl (frontend button)
 Lambda (proxy function)
   - Validates request
   - INSERT INTO ingestion_runs (source_id, status='queued') → returns job_id to frontend
-  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES, WRITE_DB
+  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES, WRITE_DB,
+    CRAWL_INCLUDE_PATTERNS, CRAWL_EXCLUDE_PATTERNS
          │
          ▼
 ECS Fargate Task (Docker container with Playwright + crawler.py)
@@ -154,6 +155,43 @@ Limits: Chromium resolves DNS again after the check (DNS rebinding), redirect
 hops of a navigation are not routed (the final URL is re-checked and nothing
 is stored from a non-public one), WebSockets are not guarded, and the
 Chromium sandbox is disabled on Fargate (see the Dockerfile).
+
+---
+
+## Include / Exclude Patterns
+
+A website's `include_patterns` and `exclude_patterns` limit what is crawled.
+Each is a list of Python regular expressions matched with `re.search` against
+the page URL (one per line in the admin form). A URL is in scope when no
+exclude pattern matches and, if include patterns exist, at least one include
+pattern matches. `common/crawl_scope.py` holds the rules; the Lambda copy
+`helpers/crawl_scope.py` must stay identical (a test compares them).
+
+- Staging rejects a malformed pattern, more than 20 patterns per list, a
+  pattern over 300 characters, and a seed URL the patterns would exclude, with
+  a 400. `process_crawler_batch.py` re-checks stored rows before `ecs:RunTask`
+  and fails the run instead of launching.
+- The Lambda passes the patterns as `CRAWL_INCLUDE_PATTERNS` and
+  `CRAWL_EXCLUDE_PATTERNS` (JSON arrays). Re-crawls go through the same launch.
+- In the container, the patterns apply to the seed (checked before anything is
+  fetched), to discovered links (not enqueued), to every navigation (refused in
+  the pre-navigation hook; page and frame navigations are also aborted in
+  `guard_route`), and to the URL a page ended on after redirects (nothing is
+  stored and no links are followed from it).
+- URLs are compared as given and in a canonical spelling (lowercase host,
+  default port dropped, unreserved percent-escapes decoded, `.`/`..` and
+  repeated slashes removed), so `/a/%70rivate/` cannot slip past an exclude
+  written for `/a/private/`. The path is case-sensitive; use `(?i)` to ignore case.
+
+Limit: a redirect hop is not routed, so an in-scope URL that redirects to an
+excluded one is loaded by the browser; its content is discarded.
+
+Nothing removes pages that were ingested before their patterns were enforced:
+a re-crawl only adds and refreshes pages, it never deletes one it skipped.
+Patterns cannot be edited on an existing website, so to apply or change them,
+delete the website (the pages it alone owns are deleted with their chunks and
+vectors, see `helpers/web_sources.py`) and add it again with the patterns. A
+page another website also crawled is kept while that website still owns it.
 
 ---
 
