@@ -10,6 +10,7 @@
  * create a user and read public settings.
  */
 import { API_ENDPOINT } from "@/lib/api";
+import { guestStartError } from "@/lib/guestCreation";
 
 const STORAGE_KEY = "knowledgeCompass_user_session";
 
@@ -75,6 +76,9 @@ async function requestToken(credential: string | null): Promise<string> {
     window.dispatchEvent(new Event(CREDENTIAL_REJECTED_EVENT));
     throw new CredentialRejectedError();
   }
+  // The token handler never sends 403 or 429; those come from WAF or API
+  // Gateway throttling, so tell the family to wait rather than "unavailable".
+  if (response.status === 403 || response.status === 429) throw await guestStartError(response);
   if (!response.ok) throw new Error("Failed to get public token");
   const { token, credential: rotated } = (await response.json()) as {
     token?: string;

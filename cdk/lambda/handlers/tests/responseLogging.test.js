@@ -40,10 +40,12 @@ async function capture(name, sql, event) {
 
 const text = (args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
 
-// adminHandler status lines also carry the acting admin's Cognito sub (actorSub).
-function assertStatusOnly({ response, lines }, { resource, statusCode = 200, sentinel, actorSub }) {
+// adminHandler status lines also carry the acting admin's Cognito sub (actorSub)
+// and the resolved path ids (target).
+function assertStatusOnly({ response, lines }, { resource, statusCode = 200, sentinel, actorSub, target }) {
   const expected = { statusCode, resource, requestId: REQUEST_ID };
   if (actorSub !== undefined) expected.actorSub = actorSub;
+  if (target !== undefined) expected.target = target;
   assert.equal(response.statusCode, statusCode);
   if (sentinel) assert.ok(response.body.includes(sentinel), "response carries the sentinel");
   for (const args of lines) {
@@ -143,7 +145,7 @@ test("adminHandler GET /admin/chat_sessions/{sessionId}/messages logs status onl
     pathParameters: { sessionId: SESSION },
     requestContext: adminContext,
   });
-  assertStatusOnly(result, { resource, sentinel: TRANSCRIPT, actorSub: ADMIN_SUB });
+  assertStatusOnly(result, { resource, sentinel: TRANSCRIPT, actorSub: ADMIN_SUB, target: { sessionId: SESSION } });
 });
 
 test("adminHandler database errors log a summary without detail", async () => {

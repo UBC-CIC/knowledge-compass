@@ -137,7 +137,56 @@ async function consumeGenerateAllowance(connectionId, { limit, windowSeconds }, 
   return false;
 }
 
+/**
+ * Count one generate_text frame against the bound guest's own window, shared by
+ * every socket that guest holds (finding f-177af79e: the per-connection window
+ * alone let one token open N sockets for N x the allowance). Kept on a
+ * `user#<userId>` item in the same table (connection ids never contain "#"),
+ * created on first use and removed by TTL after its window. Returns true when
+ * allowed, false when the window is full; throws on any other DynamoDB error.
+ */
+async function consumeUserGenerateAllowance(userId, { limit, windowSeconds }, nowMs = Date.now()) {
+  if (typeof userId !== "string" || !UUID_REGEX.test(userId)) return false;
+  const TableName = tableName();
+  const Key = { connectionId: { S: `user#${userId}` } };
+  const windowIndex = Math.floor(nowMs / 1000 / windowSeconds);
+  const window = String(windowIndex);
+  const expiresAt = String((windowIndex + 2) * windowSeconds);
+
+  const increment = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "ADD rlCount :one",
+        ConditionExpression: "rlWindow = :w AND rlCount < :max",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window }, ":max": { N: String(limit) } },
+      })
+    );
+  const startWindow = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "SET rlWindow = :w, rlCount = :one, expiresAt = :exp",
+        ConditionExpression: "attribute_not_exists(rlWindow) OR rlWindow < :w",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window }, ":exp": { N: expiresAt } },
+      })
+    );
+
+  for (const attempt of [increment, startWindow, increment]) {
+    try {
+      await attempt();
+      return true;
+    } catch (err) {
+      if (!isConditionalCheckFailed(err)) throw err;
+    }
+  }
+  return false;
+}
+
 module.exports = {
+  consumeUserGenerateAllowance,
   putConnection,
   getConnectionUserId,
   deleteConnection,

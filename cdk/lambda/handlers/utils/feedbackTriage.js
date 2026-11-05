@@ -20,6 +20,7 @@
 
 const { validateUUID } = require("./validation.js");
 const { errorSummary } = require("./logging.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./adminAudit.js");
 
 const TRIAGE_ROUTE = "PUT /admin/feedback/{chat_session_id}";
 const RATED_MESSAGE_ROUTE = "GET /admin/feedback/{chat_session_id}/message";
@@ -178,11 +179,23 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
     }
 
     const changes = validateTriageBody(parseJsonBody(event.body));
-    const saved = await updateTriage(sql, chatSessionId.trim(), changes);
+    // Triage and its admin_audit row commit together (finding f-c47d6990).
+    let audit;
+    const saved = await sql.begin(async (tx) => {
+      const row = await updateTriage(tx, chatSessionId.trim(), changes);
+      if (row) {
+        audit = auditEntry(event, "feedback.triage", {
+          chat_session_id: row.chat_session_id, starred: row.starred, dismissed: row.dismissed,
+        });
+        await insertAdminAudit(tx, audit);
+      }
+      return row;
+    });
     if (!saved) {
       send(404, { error: "Feedback not found" });
       return true;
     }
+    logAdminAudit(audit);
     send(200, saved);
   } catch (err) {
     if (err instanceof InputError) {

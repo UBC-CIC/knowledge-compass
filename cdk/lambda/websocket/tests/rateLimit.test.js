@@ -156,7 +156,8 @@ test("every limiter UpdateItem requires an existing record, so none can create o
   const { handler, dynamoCalls } = loadDefault(bound());
   await quietly(() => handler(generate()));
   await quietly(() => handler(generate()));
-  const updates = updateCalls(dynamoCalls);
+  // Connection-window updates; the per-user window is tested separately.
+  const updates = updateCalls(dynamoCalls).filter(({ input }) => !input.Key.connectionId.S.startsWith("user#"));
   assert.ok(updates.length >= 2);
   for (const { input } of updates) {
     assert.equal(input.TableName, "test-connections");
@@ -170,4 +171,24 @@ test("every limiter UpdateItem requires an existing record, so none can create o
   assert.equal(await consumeGenerateAllowance("conn-unknown", { limit: 10, windowSeconds: 60 }), false);
   assert.equal(rateState.has("conn-unknown"), false);
   assert.equal(connections.has("conn-unknown"), false);
+});
+
+test("one guest's sockets share one allowance, so more connections buy no frames (f-177af79e)", async (t) => {
+  clock(t);
+  const sockets = ["conn-1", "conn-2", "conn-3"];
+  const { handler, invocations, rateState } = loadDefault({ connections: new Map(sockets.map((c) => [c, USER])) });
+  const frameOn = (connectionId) => {
+    const event = generate();
+    event.requestContext = { ...event.requestContext, connectionId };
+    return quietly(() => handler(event));
+  };
+  const statuses = [];
+  for (let i = 0; i < 15; i += 1) statuses.push((await frameOn(sockets[i % sockets.length])).statusCode);
+  assert.equal(statuses.filter((s) => s === 200).length, 10);
+  assert.equal(statuses.filter((s) => s === 429).length, 5);
+  assert.equal(invocations.length, 10);
+  // The shared counter lives on the guest's own item and expires via TTL.
+  const shared = rateState.get(`user#${USER}`);
+  assert.equal(shared.rlCount, 10);
+  assert.ok(shared.expiresAt > T0 / 1000);
 });

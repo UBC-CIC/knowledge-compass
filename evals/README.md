@@ -24,6 +24,7 @@ trends across runs rather than single numbers.
 ```
 evals/
   scenarios/            committed: one YAML per user story + label_map.yaml
+  guardrails/           committed: F13 topic-scope cases (f13_cases.yaml)
   harness/              API client, signed eval tags, parent simulator, runner
   judge/                routing metrics, LLM judge (+ rubrics/), Bedrock Evaluations
   extract.py            user-story Markdown -> draft scenarios
@@ -157,6 +158,18 @@ call, so `eval` fields from other clients cost nothing.
 
    Output goes to `results/<run_id>/`: `report.md`, `report.json`, `probes/`, `journeys/`,
    `judge/` and `bedrock/`.
+   **Guardrail cases (F13).** `guardrails/f13_cases.yaml` holds 20 one-message topic-scope cases:
+   10 sensitive questions the assistant must answer (keeping the location and age given), 6 off-topic
+   requests it must decline politely, 3 harmful requests it must refuse while offering support routes,
+   and 1 prompt injection it must refuse. Each case has an `id`, `category`, `expected`
+   (`help`, `decline` or `refuse`), `message` and `expectations` (checks for a reviewer). `validate`
+   checks the file and prints the case count. Run them with:
+   ```powershell
+   evals/.venv/Scripts/python -m evals --env-file evals/.env guardrails --yes
+   ```
+   Each case gets a fresh anonymous user and a tagged standard-mode session, which is deleted afterwards.
+   Output goes to `results/<run_id>/guardrails/<case_id>.json` and `guardrails.md`. Nothing is scored:
+   read each reply in `guardrails.md` against its expected behaviour and checks.
 7. You can re-score or rebuild an existing run:
    - `judge --run <id> [--force]`
    - `bedrock-eval --run <id> [--wait]` starts the Bedrock jobs. It refuses if the run already

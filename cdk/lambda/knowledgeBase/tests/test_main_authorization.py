@@ -12,6 +12,7 @@ import _setup  # noqa: F401  (must be first)
 from _setup import TEST_INVOKE_TOKEN
 
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -118,11 +119,36 @@ class AdminGateTests(unittest.TestCase):
         self.assertEqual(self.main.handler(api_event(role="admin")), {"statusCode": 200})
         self.guideline.assert_called_once()
 
+    def test_authorization_header_is_never_logged(self):
+        event = api_event(role="admin")
+        event["headers"] = {"Authorization": "Bearer admin-id-token-secret"}
+        event["multiValueHeaders"] = {"Authorization": ["Bearer admin-id-token-secret"]}
+        with self.assertLogs(level="INFO") as logs:
+            self.main.handler(event)
+        output = "\n".join(logs.output)
+        self.assertNotIn("admin-id-token-secret", output)
+        self.assertIn("/admin/guideline", output)
+
     def test_presigned_url_route_is_gated_too(self):
         with mock.patch.object(self.main, "generate_presigned_url") as presign:
             response = self.main.handler(api_event(role="user", resource="/admin/generate-presigned-url"))
         self.assertEqual(response["statusCode"], 403)
         presign.assert_not_called()
+
+
+class DbTlsTests(unittest.TestCase):
+    """The DB connection verifies the server certificate and hostname, not just encryption."""
+
+    def test_connect_uses_verify_full_with_a_real_ca_bundle(self):
+        main = _import_main()
+        secret = {"dbname": "d", "username": "u", "password": "p", "port": 5432}
+        with mock.patch.object(main, "connection", None), \
+                mock.patch.object(main, "_get_secret", return_value=secret), \
+                mock.patch.object(main.psycopg2, "connect", create=True) as connect:
+            main._connect_to_db()
+        kwargs = connect.call_args.kwargs
+        self.assertEqual(kwargs["sslmode"], "verify-full")
+        self.assertTrue(os.path.isfile(kwargs["sslrootcert"]))
 
 
 if __name__ == "__main__":

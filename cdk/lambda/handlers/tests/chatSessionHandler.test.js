@@ -30,6 +30,10 @@ function sessionSql(owner = USER, extra = () => []) {
     if (text.startsWith("SELECT id, user_id FROM chat_sessions")) {
       return owner ? [{ id: SESSION, user_id: owner }] : [];
     }
+    // checkSessionOwnership: the row only when the caller owns it.
+    if (text.startsWith("SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?")) {
+      return owner && values[1] === owner ? [{ id: SESSION }] : [];
+    }
     return extra(text, values);
   });
 }
@@ -164,7 +168,7 @@ test("rename and delete refuse another user's session", async () => {
       queryStringParameters: { user_id: USER },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.equal(mutations(sql).length, 0, `${httpMethod} must not modify data`);
   }
 });
@@ -196,6 +200,32 @@ test("owner can delete; messages are removed before the session", async () => {
   assert.match(deletes[1], /DELETE FROM chat_sessions/);
 });
 
+test("session titles are strings capped at 120 characters on create and rename", async () => {
+  const long = "x".repeat(5000);
+  const insertedTitle = async (title) => {
+    const sql = createSql();
+    assert.equal((await post(sql, { title })).statusCode, 201);
+    const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+    return insert.values.filter((v) => typeof v === "string" && v.startsWith("x")).concat(
+      insert.values.filter((v) => v && typeof v === "object" && !Array.isArray(v) && "nested" in v),
+    );
+  };
+  assert.deepEqual(await insertedTitle(long), ["x".repeat(120)]);
+  assert.deepEqual(await insertedTitle({ nested: long }), []); // non-strings are dropped
+
+  const sql = sessionSql(USER, (text, values) =>
+    text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],
+  );
+  const renamed = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/chat_sessions/{chat_session_id}",
+    pathParameters: { chat_session_id: SESSION },
+    body: JSON.stringify({ title: long }),
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.title.length, 120);
+});
+
 test("owner can rename; the title is trimmed", async () => {
   const sql = sessionSql(USER, (text, values) =>
     text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],
@@ -222,7 +252,8 @@ test("feedback validates the session id and ownership", async () => {
 
   assert.equal((await get(sessionSql(), "bad-id")).statusCode, 400);
   assert.equal((await get(sessionSql(null))).statusCode, 404);
-  assert.equal((await get(sessionSql(OTHER_USER))).statusCode, 403);
+  // A foreign session answers exactly like a missing one (no existence oracle).
+  assert.deepEqual(await get(sessionSql(OTHER_USER)), await get(sessionSql(null)));
   assert.equal((await get(sessionSql(USER))).statusCode, 200);
 });
 
@@ -236,7 +267,7 @@ test("another user's feedback cannot be read or overwritten", async () => {
       pathParameters: { chat_session_id: SESSION },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.ok(!sql.queries().some((q) => q.text.includes("session_feedback")));
   }
 });
@@ -289,4 +320,18 @@ test("removed chat_history route is no longer served here", async () => {
   });
   assert.equal(res.statusCode, 500);
   assert.deepEqual(res.body, { error: "Internal server error" });
+});
+
+test("malformed, null, array and scalar bodies are a 400 on every body route (f-5290289f)", async () => {
+  const routes = [
+    { httpMethod: "POST", resource: "/chat_sessions" },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}", pathParameters: { chat_session_id: SESSION } },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}/feedback", pathParameters: { chat_session_id: SESSION } },
+  ];
+  for (const route of routes) {
+    for (const body of ["{not json", "null", "[]", "42", '"text"']) {
+      const res = await invoke(sessionSql(), { ...route, body });
+      assert.equal(res.statusCode, 400, `${route.httpMethod} ${route.resource} ${body}`);
+    }
+  }
 });

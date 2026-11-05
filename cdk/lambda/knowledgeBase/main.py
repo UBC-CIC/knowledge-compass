@@ -1,9 +1,10 @@
 import os
 import json
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 import boto3
 import logging
 import psycopg2
+from botocore.httpsession import get_cert_path
 
 from helpers.stage_data_sources import stage_data_sources
 from helpers.stage_data_sources_batch import stage_data_sources_batch
@@ -75,8 +76,11 @@ def _connect_to_db():
                 'user': db_secret["username"],
                 'password': db_secret["password"],
                 'host': RDS_PROXY_ENDPOINT,
-                'port': db_secret["port"], 
-                'sslmode': 'require'
+                'port': db_secret["port"],
+                # verify-full against botocore's public CA bundle: RDS Proxy
+                # serves an ACM (Amazon Trust Services) certificate.
+                'sslmode': 'verify-full',
+                'sslrootcert': get_cert_path(True),
             }
             connection = psycopg2.connect(**connection_params)
             logger.info("Connected to the database!")
@@ -118,10 +122,23 @@ def _parse_body(event):
 
     return body
 
+def _event_summary(event):
+    """Allow-listed routing fields only. Never the whole event: headers carry
+    the admin's Authorization ID token, task payloads carry the worker invoke
+    token, and bodies carry uploaded content."""
+    request_context = event.get("requestContext") or {}
+    return {
+        "resource": event.get("resource"),
+        "httpMethod": event.get("httpMethod"),
+        "requestId": request_context.get("requestId"),
+        "source": event.get("source"),
+        "detailType": event.get("detail-type"),
+        "task": str(event["task"])[:64] if event.get("task") else None,
+    }
+
+
 def handler(event, context=None):
-    # Never log the body or the worker invoke token.
-    safe_event = {k: v for k, v in event.items() if k not in ('body', INVOKE_TOKEN_FIELD)}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event))
+    logger.info("Event: %s", json.dumps(_event_summary(event), default=str))
     
     try:
         # Self-invoked {task} payloads rewrite the corpus and move the live
@@ -130,7 +147,10 @@ def handler(event, context=None):
         # a generated Secrets Manager value only this function's role can read.
         # Checked before any dispatch or logging of the payload's actor.
         # EventBridge events (aws.transcribe / aws.ecs via transcribeRelay)
-        # never carry "task" and are handled below without a token.
+        # never carry "task" and are handled below without a token: anyone
+        # able to invoke this function can forge one, so their handlers take
+        # only the job name / task ARN from the event and read the state back
+        # from Transcribe / ECS.
         if "task" in event and not verify_worker_event(event):
             logger.warning(
                 "Rejected worker invocation without a valid invoke token: task=%s",

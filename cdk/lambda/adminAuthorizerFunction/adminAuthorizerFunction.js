@@ -57,8 +57,12 @@ exports.handler = async (event) => {
       throw new Error("Unauthorized");
     }
 
-    const parts = event.methodArn.split("/");
-    const resource = parts.slice(0, 2).join("/") + "*";
+    // Cached per token and reused across routes, so cover the admin tier only:
+    // this stage's /admin/* routes. (The old `apiId/stage*` matched every
+    // method on the stage and any stage whose name starts with this one.)
+    // methodArn format: arn:aws:execute-api:region:account:apiId/stage/METHOD/resource
+    const stageArn = event.methodArn.split("/").slice(0, 2).join("/");
+    const resource = `${stageArn}/*/admin/*`;
 
     return {
       principalId: payload.sub,
@@ -74,7 +78,9 @@ exports.handler = async (event) => {
       },
       context: {
         userId: payload.sub,
-        email: payload.email,
+        // Only a verified address may attribute audit rows (admin_audit.actor_email)
+        // and staff users.email; identity and authorization key on sub alone.
+        email: payload.email_verified === true || payload.email_verified === "true" ? payload.email : "",
         role: "admin",
       },
     };

@@ -1,4 +1,4 @@
-"""Unit tests for helpers/eval_scoring.py and the golden-set loader in tests/eval/run_eval.py."""
+"""Unit tests for kc_shared/eval_scoring.py and the golden-set loader in tests/eval/run_eval.py."""
 
 import collections
 import importlib.util
@@ -10,11 +10,12 @@ import unittest
 
 _TG = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _TG)
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
-from helpers import eval_scoring  # noqa: E402
+from kc_shared import eval_scoring  # noqa: E402
 
 _EVAL_DIR = os.path.join(_TG, "tests", "eval")
-_GOLDEN = os.path.join(_EVAL_DIR, "golden_queries.json")
+_GOLDEN = os.path.join(os.path.dirname(eval_scoring.__file__), "golden_queries.json")
 _EXAMPLE = os.path.join(_EVAL_DIR, "questions.example.json")
 
 

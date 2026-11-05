@@ -1,5 +1,5 @@
 """
-Unit tests for helpers/embeddings.py (shared embedding interface).
+Unit tests for kc_shared/embeddings.py (shared embedding interface).
 
 No AWS access: a fake bedrock-runtime client records invoke_model calls, and
 the throttling test drives a real botocore client through an in-process fake
@@ -22,9 +22,10 @@ import urllib3.response
 
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
-from helpers import embeddings  # noqa: E402
-from helpers.embeddings import (  # noqa: E402
+from kc_shared import embeddings  # noqa: E402
+from kc_shared.embeddings import (  # noqa: E402
     DEFAULT_SPEC,
     EmbeddingDimensionError,
     EmbeddingError,

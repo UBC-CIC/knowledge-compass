@@ -55,12 +55,18 @@ const createResponse = async (event) => ({
     body: "",
 });
 
+// A JSON object, or "Invalid JSON body" (400 at every call site). Literal
+// null, arrays and scalars are refused too, so no route reads a property of a
+// non-object (finding f-5290289f).
 const parseBody = (body) => {
+  let parsed;
   try {
-    return JSON.parse(body || "{}");
+    parsed = JSON.parse(body || "{}");
   } catch {
     throw new Error("Invalid JSON body");
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid JSON body");
+  return parsed;
 };
 
 // New chat sessions one user may create per UTC day (finding F19, decision
@@ -76,6 +82,10 @@ const nextUtcMidnight = (now) =>
 
 const FEEDBACK_RATINGS = ["up", "down"];
 const FEEDBACK_COMMENT_MAX_LENGTH = 1000;
+// chat_sessions.title is an unbounded varchar; the auto-titler writes at most
+// 80 characters (textGeneration/helpers/chat.py). Guest titles are capped too,
+// with room for a longer hand-written name (finding f-3406ec2a).
+const TITLE_MAX_LENGTH = 120;
 
 // The acting user always comes from the verified token (resolveCaller). A
 // user_id the client still sends (query or body, for older clients) must match
@@ -84,26 +94,23 @@ const queryUserId = (event) =>
   event.queryStringParameters?.user_id || event.queryStringParameters?.user_session_id;
 
 // Validates the session id and confirms `userId` (the token's user) owns it.
-// Returns null on success, or { statusCode, error } to send back.
-const checkSessionOwnership = async (chatSessionId, userId, forbiddenMessage) => {
+// Returns null on success, or { statusCode, error } to send back. A missing
+// and a foreign session get the same 404, so no guest can tell whether
+// another family's session id exists (as in textGeneration's
+// session_security.py, finding f-c5ba1a1b).
+const SESSION_NOT_FOUND = { statusCode: 404, error: "Chat session not found" };
+
+const checkSessionOwnership = async (chatSessionId, userId) => {
   const sessionCheck = validateUUID(chatSessionId, "chat_session_id");
   if (!sessionCheck.valid) return { statusCode: 400, error: sessionCheck.error };
 
   const chatSession = await sqlConnection`
-    SELECT id, user_id
+    SELECT id
     FROM chat_sessions
-    WHERE id = ${chatSessionId}
+    WHERE id = ${chatSessionId} AND user_id = ${userId}
   `;
 
-  if (chatSession.length === 0) {
-    return { statusCode: 404, error: "Chat session not found" };
-  }
-
-  if (chatSession[0].user_id !== userId) {
-    return { statusCode: 403, error: forbiddenMessage };
-  }
-
-  return null;
+  return chatSession.length === 0 ? SESSION_NOT_FOUND : null;
 };
 
 const reject = (response, failure) => {
@@ -164,7 +171,7 @@ exports.handler = async (event) => {
         }
         const userId = caller.userId;
 
-        const title = body.title || null;
+        const title = sanitizeString(body.title, TITLE_MAX_LENGTH);
 
         // Server-authored keys (journey_state, guide_state, routing) reach the
         // model prompt, so clients may only set allow-listed keys.
@@ -267,8 +274,15 @@ exports.handler = async (event) => {
           break;
         }
 
-        const body = parseBody(event.body);
-        const title = typeof body.title === "string" ? body.title.trim() : "";
+        let body;
+        try {
+          body = parseBody(event.body);
+        } catch (error) {
+          response.statusCode = 400;
+          response.body = JSON.stringify({ error: error.message });
+          break;
+        }
+        const title = sanitizeString(body.title, TITLE_MAX_LENGTH);
 
         if (!title) {
           response.statusCode = 400;
@@ -276,9 +290,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only rename your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -313,9 +325,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only delete your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -347,9 +357,7 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;
@@ -398,9 +406,7 @@ exports.handler = async (event) => {
         }
         const comment = sanitizeString(body.comment, FEEDBACK_COMMENT_MAX_LENGTH);
 
-        const ownershipError = await checkSessionOwnership(
-          chatSessionId, caller.userId, "You can only give feedback on your own chat sessions"
-        );
+        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
         if (ownershipError) {
           reject(response, ownershipError);
           break;

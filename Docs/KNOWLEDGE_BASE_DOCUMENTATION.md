@@ -1,392 +1,181 @@
 # Knowledge Base
 
-This document explains how the Knowledge Base ingestion Lambda works in the Specialization Explorer project. It focuses on the state machine logic that moves uploaded files and websites from staged records into Bedrock Knowledge Base ingestion jobs.
+How content gets into the Knowledge Compass knowledge base and how it is searched: the admin routes, how each kind of data source is staged and ingested, the ingestion-run state machine, embedding spaces, and how to debug a source that will not ingest.
 
-The goal of this document is to help a new developer understand the full lifecycle of a data source: how it is uploaded or registered, how it is staged, how it becomes queued, how it is assigned to either the S3 or website ingestion path, how schedulers poll Bedrock, and how terminal states and retries are handled.
+Everything is stored in PostgreSQL with **pgvector**: source text, chunks, and one vector per chunk per embedding space. There is no Bedrock Knowledge Base or OpenSearch collection; those were retired (see the historical [migration plan](./PGVECTOR_MIGRATION_PLAN.md)).
 
 ## Table of Contents
 
-1. [Introduction](#introduction)
-2. [Overview](#overview)
-3. [Implementation Files](#implementation-files)
-4. [Request Entry Points](#request-entry-points)
-5. [Admin Dashboard Behavior](#admin-dashboard-behavior)
-6. [Presigned Upload Flow](#presigned-upload-flow)
-7. [Staging Data Sources](#staging-data-sources)
-8. [Sync Sessions](#sync-sessions)
-9. [State Machine Logic](#state-machine-logic)
-10. [S3 Ingestion Phase](#s3-ingestion-phase)
-11. [Website Ingestion Phase](#website-ingestion-phase)
-12. [Polling and Workflow Continuation](#polling-and-workflow-continuation)
-13. [Retry Behavior](#retry-behavior)
-14. [Error Handling](#error-handling)
-15. [Monitoring and Debugging](#monitoring-and-debugging)
-16. [Configuration and Environment Variables](#configuration-and-environment-variables)
-17. [Design Notes](#design-notes)
-18. [References](#references)
-19. [Glossary](#glossary)
-
-## Introduction
-
-### What is the Knowledge Base?
-
-The Knowledge Base is the retrieval layer used by the application to ground LLM responses in project-managed content. Administrators can add content to the Knowledge Base by uploading files or registering websites. Amazon Bedrock Knowledge Bases handles ingestion, chunking, embedding, and retrieval, while this Lambda controls when and how data sources are staged and synced.
-
-### What this Lambda does
-
-The Lambda acts as the orchestration layer between the admin UI, Amazon S3, Amazon Bedrock Knowledge Bases, Amazon RDS, and EventBridge Scheduler.
-
-It is responsible for:
-
-* Generating presigned S3 upload URLs for file uploads
-* Staging websites and file pairs in the database
-* Creating `ingestion_runs` rows that represent the state of each staged source
-* Promoting staged work from `pending` to `queued` when an admin clicks Sync
-* Starting Bedrock ingestion jobs for S3-backed files and website crawlers
-* Creating polling schedules so long-running Bedrock jobs can be checked later
-* Updating database run statuses after Bedrock jobs complete or fail
-* Continuing the workflow from S3 ingestion into website ingestion
-* Retrying single website crawls when a crawler fails because it reached capacity
-
-### When to use this document
-
-Use this document if you need to:
-
-* Understand the Knowledge Base ingestion workflow end to end
-* Add support for a new source type
-* Modify the status lifecycle for `ingestion_runs`
-* Debug why a source is stuck in `pending`, `queued`, or `running`
-* Change the S3 or website batching behavior
-* Update scheduler payloads or polling behavior
-* Understand how Bedrock data sources are selected, updated, or created
+- [Knowledge Base](#knowledge-base)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Components](#components)
+  - [Admin Routes](#admin-routes)
+  - [Uploads](#uploads)
+  - [Data Source Types](#data-source-types)
+  - [Ingestion Runs and Sync](#ingestion-runs-and-sync)
+  - [Ingestion Paths](#ingestion-paths)
+    - [Websites](#websites)
+    - [Videos](#videos)
+    - [CSV, Markdown and documents](#csv-markdown-and-documents)
+    - [CSV row resources and linked content](#csv-row-resources-and-linked-content)
+      - [Storage and chunk layout](#storage-and-chunk-layout)
+      - [Citation and status semantics](#citation-and-status-semantics)
+    - [PDF text extraction](#pdf-text-extraction)
+  - [Retry and Delete](#retry-and-delete)
+  - [Embedding Spaces](#embedding-spaces)
+  - [Retrieval](#retrieval)
+  - [Monitoring and Debugging](#monitoring-and-debugging)
+    - [Logs](#logs)
+    - [Useful metadata](#useful-metadata)
+    - [Common questions](#common-questions)
+  - [Configuration](#configuration)
+  - [Glossary](#glossary)
 
 ## Overview
 
-The system is built around two database tables:
+Two tables describe what an administrator added and where it is in its lifecycle:
 
-* `data_sources`: stores the source itself, such as a website URL, CSV file, Markdown file, or metadata JSON file
-* `ingestion_runs`: stores the ingestion state for a data source
+* `data_sources` — *what* to ingest: a website, an uploaded file, or a video
+* `ingestion_runs` — *where it is*: one row per attempt, with a `status`
 
-The important idea is that `data_sources` describes *what* should be ingested, while `ingestion_runs` describes *where it is in the ingestion lifecycle*.
+Ingestion writes three tables that retrieval reads:
 
-The state machine is implemented through the `status` column on `ingestion_runs`.
+* `sources` — one row per retrievable source (a crawled page, a video, a document, a CSV row or a page it links to)
+* `chunks` — the chunk text and metadata for each source
+* `chunk_embeddings` — one vector per chunk in each embedding space
 
-| Status      | Meaning                                                                                                        |
-| ----------- | -------------------------------------------------------------------------------------------------------------- |
-| `pending`   | The source has been staged but has not yet been selected for syncing.                                          |
-| `queued`    | The admin clicked Sync and the source is ready to be picked up by an ingestion batch.                          |
-| `running`   | A Bedrock ingestion job has started for this source or for a batch containing this source.                     |
-| `completed` | Bedrock reported that the ingestion job completed successfully.                                                |
-| `failed`    | Bedrock reported that the ingestion job failed, or the system marked the run as failed after a terminal error. |
-
-At a high level, the normal flow is:
+The normal flow:
 
 ```text
-Admin stages source
+Admin uploads a file (presigned S3 PUT) or enters a website URL
         ↓
-data_sources row created
+POST /admin/data_sources stages it: data_sources row + pending ingestion run
         ↓
-ingestion_runs row created as pending
+Documents start right away; a video starts an Amazon Transcribe job
         ↓
-Admin clicks Sync
+Admin clicks Sync now: pending runs become queued, then running
         ↓
-latest pending runs become queued
+Website → crawler ECS task      Video (transcribed) → transcriber ECS task
+CSV / Markdown → document worker (async self-invocation of the Lambda)
         ↓
-S3 phase starts first, if any queued file sources exist
-        ↓
-S3 scheduler polls until Bedrock completes or fails
-        ↓
-website phase starts after S3 completes, or immediately if no S3 work exists
-        ↓
-website scheduler polls until Bedrock completes or fails
-        ↓
-next website batch starts until no queued websites remain
+The worker chunks, embeds with the active embedding model, writes
+sources/chunks/chunk_embeddings, and marks its run completed or failed
 ```
 
-## Implementation Files
+## Components
 
-The Knowledge Base ingestion workflow is split across several helper modules.
+| Component | Location | Role |
+| --- | --- | --- |
+| Knowledge base Lambda | `cdk/lambda/knowledgeBase/main.py` | Admin routes, async workers (documents, CSV links, guideline documents, embedding jobs), and the Transcribe and ECS events forwarded by the relay |
+| Shared layer | `cdk/layers/shared_python/python/kc_shared/` | CORS, embeddings, retrieval core and eval scoring, shared with text generation |
+| Crawler | `cdk/containers/crawler/` | ECS Fargate task: Playwright crawl of one website, chunk, embed, write |
+| Transcriber | `cdk/containers/transcriber/` | ECS Fargate task: chunk a Transcribe output by timestamp, embed, write |
+| Transcribe relay | `cdk/lambda/transcribeRelay/` | Forwards Transcribe job and ECS task-stopped events from EventBridge to the knowledge base Lambda |
+| Ingest bucket | `cdk/lib/ingestion-stack.ts` | Uploads, Transcribe outputs, Textract staging and cache |
 
-| File                                                               | Responsibility                                                                                   |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `cdk/lambda/lambdaKnowledgeBase/main.py`                           | Main Lambda entry point. Routes API Gateway requests and scheduler events.                       |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/cors.py`                   | Builds CORS response headers from the configured allowed origins.                                |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/generate_presigned_url.py` | Creates short-lived S3 PUT URLs for admin uploads.                                               |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/stage_data_sources.py`     | Validates and stages websites, CSV/JSON pairs, and Markdown/JSON pairs.                          |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/start_ingestion_job.py`    | Starts a sync session by promoting pending runs to queued and starting the first eligible phase. |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/process_s3_batch.py`       | Starts the S3 ingestion phase for queued CSV, Markdown, and JSON sources.                        |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/process_website_batch.py`  | Starts website ingestion batches using Bedrock web crawler data sources.                         |
-| `cdk/lambda/lambdaKnowledgeBase/helpers/update_status.py`          | Polls Bedrock ingestion jobs, updates run status, deletes schedules, and advances the workflow.  |
+The knowledge base Lambda has 1024 MiB and a 600-second timeout; long work runs in async self-invocations that continue themselves when they run low on time. Every self-invocation carries a token from Secrets Manager (`helpers/worker_envelope.py`) that only this function's role can read, so permission to invoke the function is not enough to run a worker.
 
-## Request Entry Points
+Main helper modules (`cdk/lambda/knowledgeBase/helpers/`):
 
-The Lambda handles two types of events:
+| File | Responsibility |
+| --- | --- |
+| `generate_presigned_url.py`, `generate_presigned_urls_batch.py` | Presigned S3 PUT URLs, recorded per admin in `upload_issuances` |
+| `stage_data_sources.py`, `stage_data_sources_batch.py` | Validate and stage websites, CSV/Markdown pairs, documents and videos |
+| `start_ingestion_job.py` | Sync now: promote pending runs to queued and launch them |
+| `process_crawler_batch.py` | Launch crawler and transcriber ECS tasks; fail runs whose task stops early |
+| `process_document_batch.py` | Chunk and embed CSV, Markdown and documents |
+| `csv_links.py`, `process_csv_links.py`, `link_fetcher.py` | Fetch and index the pages a CSV's rows link to |
+| `pdf_text.py` | PDF text through Amazon Textract with a pypdf fallback |
+| `video_transcription.py` | Start Transcribe jobs and handle their completion |
+| `retry_ingestion_run.py`, `delete_data_source.py`, `data_source_cleanup.py`, `web_sources.py` | Retry and delete |
+| `embedding_admin.py`, `embedding_jobs.py`, `reembed_space.py`, `validate_space.py`, `cutover.py`, `ingestion_lock.py` | Embedding spaces and the cutover lock |
+| `guideline_admin.py`, `guideline_document.py`, `guideline_extract.py` | Journey guideline documents |
+| `url_safety.py` | Public-URL checks for websites and fetched links (mirrored in `cdk/containers/common/`) |
+| `admin_audit.py` | Records privileged actions in `admin_audit` |
 
-1. API Gateway requests from the admin UI
-2. EventBridge Scheduler polling events created by the Lambda itself
+## Admin Routes
 
-### API Gateway routes
+Every route is under `/admin` behind the admin authorizer, and `main.py` refuses any request whose authorizer role is not `admin`. `GET /admin/data_sources` is served by `adminHandler.js`; the rest by this Lambda. The routes are listed in [API_DOCUMENTATION.md, Knowledge Base / Data Sources](./API_DOCUMENTATION.md#knowledge-base--data-sources).
 
-The Lambda handles the following admin routes:
+The request identity (`created_by`, audit actor) always comes from the authorizer context, never from the request body. Any route that can start ingestion answers `409 CUTOVER_LOCKED` while an embedding-space cutover runs.
 
-| Method | Route                           | Handler                  | Purpose                                                               |
-| ------ | ------------------------------- | ------------------------ | --------------------------------------------------------------------- |
-| `GET`  | `/admin/generate-presigned-url` | `generate_presigned_url` | Create a presigned S3 PUT URL for an admin file upload.               |
-| `POST` | `/admin/data_sources`           | `stage_data_sources`     | Stage a website, CSV/JSON pair, or Markdown/JSON pair.                |
-| `POST` | `/admin/data_sources/sync`      | `start_ingestion_job`    | Promote pending sources to queued and start the next ingestion phase. |
+## Uploads
 
-### Scheduler events
+The dashboard asks for a presigned URL, uploads the file directly to the ingest bucket with HTTP `PUT`, then stages it. Generating a URL records an `upload_issuances` row binding the S3 key to the requesting admin; staging claims that row once, so one administrator cannot stage another's upload.
 
-Scheduler events are identified by this payload field:
+| Prefix | Files | URL lifetime |
+| --- | --- | --- |
+| `uploads/csv` | CSV | 300 s |
+| `uploads/markdown` | Markdown | 300 s |
+| `uploads/json` | Metadata JSON | 300 s |
+| `uploads/document` | PDF, DOCX, TXT | 3600 s |
+| `uploads/video` | Video and audio (mp4, m4v, webm, mp3, m4a, wav, flac, ogg, amr) | 3600 s |
+| `uploads/files` | Anything else | 300 s |
 
-```json
-{
-  "task": "poll_ingestion_run"
-}
-```
+Batch URLs (`POST /admin/generate-presigned-urls/batch`) last 600 s and accept CSV, Markdown, JSON and `application/octet-stream` only.
 
-When the Lambda sees this task, it skips API Gateway routing and calls `update_status(event, connection)` directly.
+Keys have the form `{prefix}/{timestamp}_{random}_{file_name}`. Uploading a file again under the same name replaces that data source in place, and only chunks whose text changed are re-embedded.
 
-Scheduler events are created after an ingestion job starts. They carry enough information for the Lambda to poll Bedrock later:
+## Data Source Types
 
-```json
-{
-  "task": "poll_ingestion_run",
-  "phase": "s3",
-  "knowledge_base_id": "...",
-  "bedrock_data_source_id": "...",
-  "bedrock_ingestion_job_id": "...",
-  "db_ingestion_run_ids": ["..."],
-  "sync_session_id": "...",
-  "schedule_name": "..."
-}
-```
+| `type` | Staged with | Ingested by | Starts |
+| --- | --- | --- | --- |
+| `website` | `name` (seed URL), optional `include_patterns` / `exclude_patterns` | Crawler ECS task | On Sync now |
+| `csv` | CSV file + `{file}.metadata.json`, optional row-resource columns | Document worker, then the CSV link phase if `url_column` is set | On Sync now |
+| `markdown` | Markdown file + `{file}.metadata.json` | Document worker | On Sync now |
+| `document` | PDF, DOCX or TXT file + `document_url` (required public link used as the citation) | Document worker | Immediately on staging |
+| `video` | Video or audio file + `video_url` (required public link used for citations and timestamp deep links) | Amazon Transcribe, then the transcriber ECS task | Transcription immediately; the transcriber when Transcribe finishes |
 
-The `phase` is either `s3` or `website`.
+Rules worth knowing:
 
-## Admin Dashboard Behavior
+* **Websites.** The seed URL must be a public http(s) URL; it is checked when staged, again before the task launches, and in the container before crawling (see [URL safety](../cdk/containers/crawler/README.md)). The crawler follows same-domain links up to 50 pages. `include_patterns` and `exclude_patterns` are stored and shown in the dashboard but are **not** currently passed to the crawler, so they have no effect on what is crawled. Each crawled page becomes its own `sources` row, linked to its website through `web_source_owners`.
+* **CSV and Markdown** need a companion metadata file named exactly `{primary_file_name}.metadata.json`. The metadata file has no content of its own: its run completes immediately and its JSON is attached to the primary source's metadata. The dashboard shows it as a child row of its file.
+* **Markdown** is split into sections by heading, then into ~300-word chunks with sentence overlap. **CSV** rows are rendered as `column: value` lines and grouped into ~175-word chunks of whole rows, with content-defined boundaries so editing one row only changes the chunks around it.
+* **Documents** are split into ~300-word chunks with sentence overlap; PDFs are read as described in [PDF text extraction](#pdf-text-extraction). Uploads are never served to public users, so the citation is always `document_url`.
+* **Videos** are chunked by Transcribe's sentence segments, with each chunk's start and end time stored for deep links. A `video_url` already used by a crawled page or another source is rejected.
 
-The admin dashboard is the main UI that drives this workflow. It does not change the backend state machine, but it is important for understanding what an administrator sees and how dashboard actions map to Lambda routes.
+## Ingestion Runs and Sync
 
-### Dashboard read model
+`ingestion_runs.status` is the state machine:
 
-The dashboard loads data sources by calling:
+| Status | Meaning |
+| --- | --- |
+| `pending` | Staged, or re-queued by a retry; waiting for Sync now |
+| `queued` | Selected by a Sync now and about to launch |
+| `running` | An ECS task or the document worker owns the run |
+| `completed` | The worker finished and committed its chunks |
+| `failed` | The worker, the launch, or the task failed; `error_message` says why |
 
-```text
-GET /admin/data_sources
-```
+**Sync now** (`POST /admin/data_sources/sync`, `start_ingestion_job.py`):
 
-The response is expected to return each `data_sources` row together with its latest ingestion run:
+1. Creates a `sync_session_id` and promotes the latest `pending` run of each data source to `queued`. A video whose transcription has not completed is skipped; it is launched when Transcribe finishes.
+2. Launches the queued work: one crawler task per website (`process_crawler_batch.py`) and one async document-worker invocation for the CSV, Markdown and JSON runs (`trigger_document_batch`). Each launched run is marked `running`.
+3. Returns `200` if anything started, otherwise `409`.
 
-```json
-{
-  "items": [
-    {
-      "data_source": { ... },
-      "latest_ingestion_run": { ... }
-    }
-  ]
-}
-```
+Each worker finalizes its own run as `completed` or `failed`; nothing polls. Safety nets for runs that would otherwise stay `running`:
 
-This means the dashboard is a latest-status view, not a full ingestion history view. Historical retry attempts can still exist in `ingestion_runs`, but the table displays the latest run for each data source.
+* An ECS task that stops without updating its run (crash, out of memory) is reported by EventBridge through the relay, and `handle_ecs_task_stopped` fails the run with the stop reason and exit codes.
+* The document worker hands remaining runs to a fresh invocation when it runs low on time, up to a fixed number of continuations.
+* A CloudWatch alarm fires when an async invocation of the knowledge base Lambda is dropped.
 
-### Dashboard actions
+## Ingestion Paths
 
-| UI Action                   | Backend Route                                                                  | Result                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| Add Web URL                 | `POST /admin/data_sources`                                                     | Stages a website as `pending`.                                                           |
-| Add Data (CSV or Markdown)  | `GET /admin/generate-presigned-url`, S3 `PUT`, then `POST /admin/data_sources` | Uploads the primary file and metadata JSON, then stages both as `pending`.               |
-| Sync                        | `POST /admin/data_sources/sync`                                                | Promotes latest `pending` runs to `queued` and starts the next eligible ingestion phase. |
-| Refresh table after actions | `GET /admin/data_sources`                                                      | Reloads the data source table and latest run statuses.                                   |
+### Websites
 
-### UI validation rules
+The crawler task receives `JOB_ID` (the run), `SEED_URL`, and database settings (`DB_AUTH=secret`). It renders pages with Playwright, extracts the main text with trafilatura, chunks at headings, embeds with the active embedding space's model, and writes through RDS Proxy. Unchanged chunks (same content hash) are not re-embedded. See [`cdk/containers/crawler/README.md`](../cdk/containers/crawler/README.md).
 
-The dashboard applies some validation before requests reach the Lambda:
+### Videos
 
-| Input              | Dashboard Rule                                                |
-| ------------------ | ------------------------------------------------------------- |
-| Website URL        | Must start with `http://` or `https://`.                      |
-| Include patterns   | Optional. Entered as one regex per line and sent as an array. |
-| Exclude patterns   | Optional. Entered as one regex per line and sent as an array. |
-| Primary file       | Must be CSV or Markdown.                                      |
-| Metadata file      | Must be JSON.                                                 |
-| File size          | Primary and metadata files must each be less than 50 MB.      |
-| Metadata file name | Must exactly match `{primary_file_name}.metadata.json`.       |
+1. Staging starts an Amazon Transcribe job on the uploaded file, writing its JSON to `transcripts/` in the ingest bucket.
+2. When the job finishes, EventBridge invokes the relay, which forwards the event to the knowledge base Lambda (`handle_transcribe_complete`). A failed job fails the run.
+3. On success the Lambda launches the transcriber task with the transcript location, `VIDEO_URL` and the run id, unless a cutover is in progress, in which case the run goes back to `pending` for the next Sync now.
 
-The backend still performs its own validation. The UI validation exists to give administrators faster feedback before making API calls.
+See [`cdk/containers/transcriber/README.md`](../cdk/containers/transcriber/README.md).
 
-### Metadata JSON display
+### CSV, Markdown and documents
 
-The dashboard hides metadata JSON rows from the main table. Instead, it displays each metadata JSON file as an expandable child row under its matching CSV or Markdown file.
-
-This display behavior depends on the naming rule:
-
-```text
-{primary_file_name}.metadata.json
-```
-
-For example:
-
-| Main Row        | Child Metadata Row            |
-| --------------- | ----------------------------- |
-| `courses.csv`   | `courses.csv.metadata.json`   |
-| `admissions.md` | `admissions.md.metadata.json` |
-
-This is why the naming rule is enforced by both the frontend and backend.
-
-### Sync button behavior
-
-The Sync button is enabled only when the dashboard sees at least one latest ingestion run with status:
-
-* `pending`
-* `queued`
-
-If all latest runs are `running`, `completed`, or `failed`, the Sync button is disabled. This is a UI guardrail only; the backend still validates the sync request and returns an error if there are no pending runs to queue.
-
-### Search and pagination
-
-Search and pagination are frontend-only table features. The dashboard filters visible rows by data source name or type and paginates the table in groups of five rows. These features do not affect ingestion state or backend batch selection.
-
-## Presigned Upload Flow
-
-File ingestion starts before the database staging step. The admin UI first asks the Lambda for a presigned upload URL.
-
-### Supported content types
-
-The upload URL generator accepts these content types:
-
-| Content Type               | Used For              |
-| -------------------------- | --------------------- |
-| `text/csv`                 | CSV source files      |
-| `text/markdown`            | Markdown source files |
-| `application/json`         | Metadata JSON files   |
-| `text/json`                | Metadata JSON files   |
-| `application/octet-stream` | Fallback content type |
-
-### S3 key prefixes
-
-The upload helper chooses an S3 prefix based on the file name and content type.
-
-| Source      | Prefix             |
-| ----------- | ------------------ |
-| CSV         | `uploads/csv`      |
-| Markdown    | `uploads/markdown` |
-| JSON        | `uploads/json`     |
-| Other files | `uploads/files`    |
-
-The generated S3 key uses this format:
-
-```text
-{prefix}/{timestamp}_{file_name}
-```
-
-The presigned URL expires after 300 seconds. The admin UI uploads the file directly to S3 using HTTP `PUT`.
-
-Important: generating the presigned URL does not create any database records. The file must still be staged through `POST /admin/data_sources` after upload.
-
-## Staging Data Sources
-
-Staging is handled by `stage_data_sources(event, body, connection)`.
-
-A staged source is not ingested immediately. Staging only records the source in the database and creates an initial `pending` ingestion run.
-
-### Supported source types
-
-The staging endpoint supports:
-
-| Request `type` | Staged records                                                                                                 |
-| -------------- | -------------------------------------------------------------------------------------------------------------- |
-| `website`      | One `data_sources` row and one `pending` `ingestion_runs` row                                                  |
-| `csv`          | One CSV `data_sources` row, one metadata JSON `data_sources` row, and two `pending` `ingestion_runs` rows      |
-| `markdown`     | One Markdown `data_sources` row, one metadata JSON `data_sources` row, and two `pending` `ingestion_runs` rows |
-
-CSV and Markdown sources require a companion metadata JSON file. The primary file and metadata file are staged as separate `data_sources` rows because both files must be visible to the shared S3 Knowledge Base data source.
-
-### Website staging
-
-For a website source, the request must include:
-
-| Field              | Description                              |
-| ------------------ | ---------------------------------------- |
-| `type`             | Must be `website`                        |
-| `created_by`       | Admin email address                      |
-| `name`             | Website URL                              |
-| `include_patterns` | Optional list of crawler include filters |
-| `exclude_patterns` | Optional list of crawler exclude filters |
-
-The function validates that:
-
-* `created_by` is present
-* the admin exists in the `users` table
-* `name` is present
-* `include_patterns`, if provided, is a list
-* `exclude_patterns`, if provided, is a list
-* the same website URL does not already exist in `data_sources`
-
-If validation passes, it inserts:
-
-1. A `data_sources` row with `type = 'website'`
-2. An `ingestion_runs` row with `status = 'pending'`
-
-The website is now staged but not yet queued for ingestion.
-
-### CSV and Markdown staging
-
-CSV and Markdown staging follow the same pattern. The only difference is the primary source type.
-
-For CSV, the request must include:
-
-| Field                | Description                            |
-| -------------------- | -------------------------------------- |
-| `type`               | Must be `csv`                          |
-| `created_by`         | Admin email address                    |
-| `csv_file_name`      | Uploaded CSV file name                 |
-| `csv_s3_bucket`      | S3 bucket containing the CSV           |
-| `csv_s3_key`         | S3 key for the CSV                     |
-| `metadata_file_name` | Companion metadata JSON file name      |
-| `metadata_s3_bucket` | S3 bucket containing the metadata JSON |
-| `metadata_s3_key`    | S3 key for the metadata JSON           |
-
-For Markdown, the primary fields are:
-
-| Field                | Description                            |
-| -------------------- | -------------------------------------- |
-| `markdown_file_name` | Uploaded Markdown file name            |
-| `markdown_s3_bucket` | S3 bucket containing the Markdown file |
-| `markdown_s3_key`    | S3 key for the Markdown file           |
-
-The metadata JSON file name must exactly match this format:
-
-```text
-{primary_file_name}.metadata.json
-```
-
-Examples:
-
-| Primary File        | Required Metadata File            |
-| ------------------- | --------------------------------- |
-| `courses.csv`       | `courses.csv.metadata.json`       |
-| `admissions.md`     | `admissions.md.metadata.json`     |
-| `programs.markdown` | `programs.markdown.metadata.json` |
-
-The function validates that:
-
-* the admin exists
-* all primary file details are present
-* all metadata JSON details are present
-* the primary file extension matches the source type
-* the metadata file ends with `.json`
-* the metadata file name matches the required naming convention
-* both uploaded objects exist in S3 using `head_object`
-* neither S3 object has already been staged
-
-If validation passes, it inserts:
-
-1. A `data_sources` row for the primary file
-2. A `data_sources` row for the metadata JSON file
-3. A `pending` `ingestion_runs` row for the primary file
-4. A `pending` `ingestion_runs` row for the metadata JSON file
+`process_document_batch.py` runs as an async self-invocation (`"task": "process_document_batch"`), so it is not bound by API Gateway's 29-second limit. Re-ingesting a source moves chunks whose text is unchanged, with their stored vectors, instead of embedding them again. A CSV with `url_column` is then handed to the link phase, described next.
 
 ### CSV row resources and linked content
 
@@ -404,13 +193,11 @@ All configured roles require `url_column` and are resolved against the CSV heade
 
 #### Storage and chunk layout
 
-Three layers intentionally coexist:
+- The uploaded CSV stays a `document` source with its grouped whole-row chunks.
+- Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source, fetched once per CSV and sync, and hidden from answer retrieval once row variants exist.
+- Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` holds the row's descriptive columns (not the fetch URL, citation URL or stable ID); chunks `1+` are the canonical fetched chunks with the row description prepended. Row-only chunks may be shorter than the normal 20-word minimum.
 
-1. The uploaded CSV remains a `document` source with its existing grouped whole-row chunks.
-2. Each normalized fetch URL has one canonical `csvlink://<normalized-url>` source. It is fetched once per CSV/session, preserves SSRF and robots protections, supports unchanged-content reuse, and is hidden from answer retrieval after row variants are available.
-3. Each row owns a private `csvrow://<data-source-id>/<row-key-hash>` source (`source_type = 'csv_row'`). Chunk `0` contains all non-empty descriptive columns except the fetch URL, citation URL, and stable ID. Chunks `1+` contain canonical fetched chunks with the row description prepended. Short row-only chunks are intentionally allowed below the normal 20-word document minimum.
-
-The row source stores the mapped title, description, columns, normalized fetch URL, resolved citation, CSV identity, and canonical chunk identity in source/chunk metadata. Multiple rows can therefore share one network fetch while remaining independently searchable and citeable. This duplicates row-specific fetched chunk/vector rows: for `R` rows sharing a page with `C` chunks, storage is approximately `R × C` row chunks plus the canonical `C` chunks. The writer deduplicates identical effective Cohere inputs within a batch and reuses unchanged vectors on re-ingest, but PostgreSQL/HNSW storage still scales with the duplicated chunk count.
+Rows that share a page share one fetch but each get their own copies of its chunks, so storage grows with rows × chunks per page.
 
 #### Citation and status semantics
 
@@ -443,10 +230,6 @@ Limits (environment variables on the knowledge base Lambda):
 | `LINK_MAX_CRAWL_DELAY_SECONDS`  | 10       | Cap on a robots.txt `Crawl-delay`.                                       |
 | `LINK_MAX_CONTINUATIONS`        | 20       | Times the worker re-invokes itself when out of time before giving up.    |
 
-#### Deployment and rollback
-
-Migration `017_csv_row_resources.js` is additive. Deploy and verify DBFlow first, then deploy the API/worker stack, then the frontend; re-sync existing configured CSVs to materialize their row resources. `cdk/bin/cdk.ts` declares the API stack's dependency on DBFlow so `cdk deploy --all` respects this order, but a phased production deployment is still preferred. CloudFormation does not run migration downs during rollback, PostgreSQL enum values are intentionally retained, and the migration down deletes row-resource content. Production recovery should therefore roll application code forward rather than invoke the down migration. Snapshot the database before any destructive future contract migration.
-
 ### PDF text extraction
 
 Uploaded PDF documents and PDFs linked from CSV rows are read by `helpers/pdf_text.py`. Amazon Textract document analysis with the `LAYOUT` feature OCRs scanned and image-only pages, returns paragraphs in reading order across columns, and drops running headers, footers, and page numbers. pypdf's embedded text layer is the fallback, so a PDF that indexed before Textract still indexes when Textract is unavailable.
@@ -473,597 +256,81 @@ Each PDF document run records `ingestion_runs.metadata.pdf_extraction`: `engine`
 
 Textract bills per page analyzed (see [Amazon Textract pricing](https://aws.amazon.com/textract/pricing/)). The cache avoids repeat charges for unchanged PDFs, and `auto` limits OCR to the PDFs that need it. Default request quotas are low outside the largest regions (for example 2 `StartDocumentAnalysis` and 1 `AnalyzeDocument` request per second), so the client retries throttled calls adaptively and large CSV link crawls slow down rather than fail.
 
-The shared `lambdaRole` is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
+The knowledge base Lambda's own role (`knowledgeBaseRole`) is granted `textract:AnalyzeDocument`, `textract:StartDocumentAnalysis`, and `textract:GetDocumentAnalysis`. Textract reads S3 objects with the caller's own permissions, so no Textract service role is needed. No database migration is required.
 
-## Sync Sessions
+## Retry and Delete
 
-A sync session starts when an admin calls:
+**Retry** (`POST /admin/data_sources/{id}/retry`) only accepts a source whose latest run is `failed`. It inserts a new `pending` run (`metadata.action = "manual_retry"`, `retry_of_ingestion_run_id` pointing at the failed run) and leaves the failed run as history. The admin then clicks Sync now. The dashboard shows only the latest run of each source.
 
-```text
-POST /admin/data_sources/sync
-```
+**Delete** (`DELETE /admin/data_sources/{id}`) removes the data source, its chunks and vectors (for a website, the pages it crawled that no other website also owns), and its S3 objects, and records the action in `admin_audit`. Deleting a CSV removes its row resources; a linked page is deleted once no row references it.
 
-The request must include the admin email in `created_by`.
+## Embedding Spaces
 
-The sync handler creates a new `sync_session_id` using `uuid4().hex`. This ID is written into the metadata of all newly queued runs so the system can track work that belongs to the same admin sync action.
+An embedding space is one model + dimension. Vectors live in `chunk_embeddings` per space, and `embedding_active_space` names the space that retrieval reads and ingestion writes. New installs start on Amazon Titan Text Embeddings V2 (`titan-v2-1024`); deployments created before migration 049 stay on Cohere Embed English v3 until an administrator switches.
 
-### Pending to queued promotion
+From the admin dashboard (**Search index**) an administrator can create a space for another model, dry-run and rebuild it next to the live one, validate it against the golden question set, then activate it. Activation sets the cutover lock, waits for in-flight ingestion to finish, embeds anything still missing, revalidates, flips the pointer, and releases the lock. Rollback flips back to a retired space; purge deletes a retired space's vectors. Jobs persist their progress in `embedding_jobs`, so a crashed invocation resumes.
 
-The first state transition in a sync session is:
+The full procedure is in the [embedding model swap runbook](./runbooks/embedding-model-swap.md).
 
-```text
-pending → queued
-```
+## Retrieval
 
-This is done by `_promote_pending_to_queued(connection, sync_session_id=...)`.
-
-The query only promotes the latest pending ingestion run for each data source. This prevents old historical runs from being re-queued accidentally.
-
-After promotion, the run metadata contains:
-
-```json
-{
-  "sync_session_id": "..."
-}
-```
-
-If no pending runs are found, the endpoint returns `409` with:
-
-```json
-{
-  "error": "No pending data sources found to queue."
-}
-```
-
-### Phase selection
-
-After pending runs are queued, the sync handler tries phases in this order:
-
-1. S3 phase
-2. Website phase
-
-This means file-based sources are always processed before website sources within the same sync session.
-
-The handler first calls:
-
-```python
-process_s3_batch(...)
-```
-
-If S3 work starts, the API returns immediately. Website work will be attempted later by the scheduler after the S3 ingestion job reaches a terminal state.
-
-If no S3 work is eligible, the handler calls:
-
-```python
-process_website_batch(...)
-```
-
-If neither phase can start, the endpoint returns `409` with diagnostic details from both attempted phases.
-
-## State Machine Logic
-
-The `ingestion_runs.status` field is the core state machine.
-
-### State transition table
-
-| From      | To          | Trigger                                         | Code Path                                            |
-| --------- | ----------- | ----------------------------------------------- | ---------------------------------------------------- |
-| none      | `pending`   | Admin stages a source                           | `stage_data_sources`                                 |
-| `pending` | `queued`    | Admin clicks Sync                               | `start_ingestion_job` → `_promote_pending_to_queued` |
-| `queued`  | `running`   | Bedrock ingestion job starts                    | `process_s3_batch` or `process_website_batch`        |
-| `running` | `completed` | Bedrock returns `COMPLETE`                      | `update_status`                                      |
-| `running` | `failed`    | Bedrock returns `FAILED`                        | `update_status`                                      |
-| `failed`  | `queued`    | Single website capacity retry creates a new run | `update_status` → `_insert_retry_ingestion_run`      |
-
-The retry case does not mutate the failed row back to queued. Instead, it preserves the failed run for history and creates a brand new queued run for the same website `data_sources` row.
-
-### Bedrock status mapping
-
-`update_status` maps Bedrock ingestion statuses into internal statuses.
-
-| Bedrock Status | Internal Status |
-| -------------- | --------------- |
-| `STARTING`     | `running`       |
-| `IN_PROGRESS`  | `running`       |
-| `STOPPING`     | `running`       |
-| `COMPLETE`     | `completed`     |
-| `FAILED`       | `failed`        |
-
-Unsupported or unknown Bedrock statuses do not update the database. The polling invocation returns a 200 response explaining that the status is unsupported or unknown.
-
-## S3 Ingestion Phase
-
-The S3 phase is handled by `process_s3_batch`.
-
-This phase processes file-backed sources:
-
-* CSV files
-* Markdown files
-* Metadata JSON files
-
-### Why there is one shared S3 data source
-
-The Bedrock Knowledge Base uses a single shared S3 data source for file ingestion. All uploaded CSV, Markdown, and JSON files are placed in the same S3 bucket and ingested through that shared Bedrock data source.
-
-Because of this design, `process_s3_batch` expects exactly one Bedrock data source with `dataSourceConfiguration.type == 'S3'`.
-
-If there are zero or multiple S3 data sources, the S3 phase does not start and returns:
-
-```json
-{
-  "started": false,
-  "phase": "s3",
-  "error": "Expected exactly one S3 data source in the knowledge base."
-}
-```
-
-### Selecting queued S3 runs
-
-The S3 phase queries the latest ingestion run for each data source and selects runs where:
-
-* latest run status is `queued`
-* data source type is one of `csv`, `markdown`, or `json`
-
-The selected rows are ordered by the source creation time. All eligible queued file runs are attached to a single Bedrock S3 ingestion job.
-
-### Starting the S3 job
-
-Once queued file runs are found, the helper:
-
-1. Locates the shared Bedrock S3 data source
-2. Calls `bedrock_agent.start_ingestion_job(...)`
-3. Creates a 5-minute EventBridge Scheduler schedule
-4. Marks all selected `ingestion_runs` rows as `running`
-5. Stores job metadata on the runs
-
-The run metadata is updated with:
-
-```json
-{
-  "phase": "s3",
-  "sync_session_id": "...",
-  "bedrock_ingestion_job_id": "...",
-  "schedule_name": "..."
-}
-```
-
-The schedule name uses this format:
-
-```text
-kb-s3-{sync_session_id}-{random_suffix}
-```
-
-The scheduler invokes the same Lambda every 5 minutes until the job reaches a terminal state.
-
-## Website Ingestion Phase
-
-The website phase is handled by `process_website_batch`.
-
-This phase processes data sources with:
-
-```text
-type = 'website'
-```
-
-Unlike S3 ingestion, website ingestion requires assigning URLs to Bedrock web crawler data sources. A crawler can contain multiple seed URLs, but it also has practical capacity limits.
-
-### Website crawler limits
-
-The website phase uses these constants:
-
-| Constant                        | Value  | Purpose                                                                     |
-| ------------------------------- | ------ | --------------------------------------------------------------------------- |
-| `MAX_TOTAL_DATA_SOURCES`        | `5`    | Maximum Bedrock data sources expected for the Knowledge Base.               |
-| `RESERVED_NON_WEB_DATA_SOURCES` | `1`    | One data source slot is reserved for the shared S3 source.                  |
-| `MAX_WEB_DATA_SOURCES`          | `4`    | Maximum number of web crawler data sources.                                 |
-| `WEBSITE_BATCH_SIZE`            | `5`    | Default number of websites added to one crawler batch.                      |
-| `LOW_REMAINING_PAGES_THRESHOLD` | `5000` | If a crawler has 5,000 or fewer remaining pages, only one website is added. |
-
-### Classifying Bedrock web crawlers
-
-Before starting a website batch, the helper lists all Bedrock data sources and filters for web crawlers where:
-
-```text
-dataSourceConfiguration.type == 'WEB'
-```
-
-For each web crawler, it fetches the latest Bedrock ingestion job and classifies the crawler as one of:
-
-| State       | Meaning                                                                              |
-| ----------- | ------------------------------------------------------------------------------------ |
-| `available` | The crawler is not currently syncing and has remaining page capacity.                |
-| `syncing`   | The latest Bedrock job is `STARTING`, `IN_PROGRESS`, or `STOPPING`.                  |
-| `full`      | The crawler reached `maxPages`, or the latest failure looks like a capacity failure. |
-
-The helper chooses the available crawler with the most remaining pages.
-
-### Capacity detection
-
-A crawler is considered full if either:
-
-* the number of documents scanned is greater than or equal to the crawler `maxPages`, or
-* the latest failure reason looks like a max-pages/capacity failure
-
-The capacity failure check looks for terms such as:
-
-* `maxpages`
-* `max pages`
-* `25,000`
-* `25000`
-* `page limit`
-* `crawl limit`
-* `exceeded`
-* `too many pages`
-* `max capacity`
-* `capacity reached`
-
-### Website batch selection
-
-The website phase selects queued website runs using the latest run per data source. A website run is eligible when:
-
-* its latest run status is `queued`
-* its data source type is `website`
-
-The batch starts with the oldest queued website. Additional websites are only added to the same batch if they have the same include/exclude pattern configuration.
-
-This is important because include and exclude filters are crawler-level settings. Websites with different filter rules should not be mixed into the same crawler update.
-
-The grouping key is based on:
-
-```json
-{
-  "include_patterns": [...],
-  "exclude_patterns": [...]
-}
-```
-
-### Batch size rules
-
-The selected batch size depends on crawler capacity:
-
-| Condition                                             | Batch Size       |
-| ----------------------------------------------------- | ---------------- |
-| Selected crawler has more than 5,000 remaining pages  | Up to 5 websites |
-| Selected crawler has 5,000 or fewer remaining pages   | 1 website        |
-| No available crawler and a new crawler may be created | Up to 5 websites |
-
-### Updating an existing crawler
-
-If an available crawler exists, the helper updates that Bedrock data source by appending new seed URLs.
-
-It also applies the effective include/exclude filters for the batch:
-
-* If the staged website batch has include patterns, those are applied
-* Otherwise, the existing crawler include filters are preserved
-* If the staged website batch has exclude patterns, those are applied
-* Otherwise, the existing crawler exclude filters are preserved
-
-After updating the crawler, the helper starts a Bedrock ingestion job for that crawler.
-
-### Creating a new crawler
-
-If no available crawler exists, the helper may create a new web crawler data source.
-
-A new crawler can only be created if the current number of web crawlers is less than `MAX_WEB_DATA_SOURCES`.
-
-The new crawler is built from an existing template crawler. It inherits the template's vector ingestion configuration and crawler settings, then replaces the seed URL list with the current website batch.
-
-If the system already has the maximum number of web crawlers, the phase returns:
-
-```json
-{
-  "started": false,
-  "phase": "website",
-  "error": "No available web crawler capacity for queued websites."
-}
-```
-
-### Starting the website job
-
-After selecting or creating a target crawler, the helper:
-
-1. Starts a Bedrock ingestion job for the web crawler
-2. Creates a 30-minute EventBridge Scheduler schedule
-3. Marks the selected website runs as `running`
-4. Stores job metadata on the runs
-
-The run metadata is updated with:
-
-```json
-{
-  "phase": "website",
-  "sync_session_id": "...",
-  "bedrock_ingestion_job_id": "...",
-  "schedule_name": "..."
-}
-```
-
-The schedule name uses this format:
-
-```text
-kb-web-{sync_session_id}-{random_suffix}
-```
-
-The scheduler invokes the same Lambda every 30 minutes until the job reaches a terminal state.
-
-## Polling and Workflow Continuation
-
-Polling is handled by `update_status`.
-
-A polling invocation happens when EventBridge Scheduler invokes the Lambda with `task = 'poll_ingestion_run'`.
-
-### Required scheduler payload fields
-
-The scheduler payload must include:
-
-| Field                      | Purpose                                                 |
-| -------------------------- | ------------------------------------------------------- |
-| `task`                     | Must be `poll_ingestion_run`                            |
-| `phase`                    | Either `s3` or `website`                                |
-| `knowledge_base_id`        | Bedrock Knowledge Base ID                               |
-| `bedrock_data_source_id`   | Bedrock data source ID being ingested                   |
-| `bedrock_ingestion_job_id` | Bedrock ingestion job ID to poll                        |
-| `db_ingestion_run_ids`     | Database ingestion run IDs affected by this Bedrock job |
-| `sync_session_id`          | Sync session this job belongs to                        |
-| `schedule_name`            | EventBridge schedule to delete when the job finishes    |
-
-If `db_ingestion_run_ids` is missing, the code also supports the older single-run field `db_ingestion_run_id` and converts it into a list.
-
-### Running jobs
-
-If Bedrock returns a running status, the function does not update the database. It returns a response saying the ingestion job is still running.
-
-The schedule remains active and will invoke the Lambda again later.
-
-### Terminal jobs
-
-If Bedrock returns `COMPLETE` or `FAILED`, the function:
-
-1. Updates all matching `ingestion_runs` rows
-2. Sets `completed_at = NOW()` for terminal states
-3. Stores Bedrock failure reasons in `error_message` if present
-4. Commits the database transaction
-5. Deletes the polling schedule
-6. Attempts to continue the workflow
-
-### Continuing after S3 completion
-
-When an S3 job completes, `update_status` calls:
-
-```python
-process_website_batch(..., triggered_by_scheduler=True)
-```
-
-This is how the system moves from file ingestion into website ingestion within the same sync session.
-
-S3 completion does not automatically mark website runs as completed. It only gives the website phase a chance to start if queued websites exist.
-
-### Continuing after website completion
-
-When a website job completes, `update_status` calls `process_website_batch` again.
-
-This allows the system to process multiple website batches in sequence. Each completed website batch can start the next queued website batch until no queued website runs remain.
-
-## Retry Behavior
-
-The retry logic only applies to a specific case:
-
-```text
-phase = website
-status = failed
-batch size = 1
-failure looks like a capacity failure
-```
-
-This case means the system tried to ingest a single website into a crawler that appeared to have room, but Bedrock reported that the crawler was actually full or over its page limit.
-
-### Retry steps
-
-When this happens, `update_status`:
-
-1. Marks the original run as `failed`
-2. Reads the failed run and its `data_sources` row
-3. Gets the failed website URL from `data_sources.name`
-4. Removes that URL from the full Bedrock web crawler's seed URL list
-5. Creates a new `queued` `ingestion_runs` row for the same website data source
-6. Preserves the failed run for history
-7. Calls `process_website_batch` again so the website can be tried on another crawler
-
-The retry run metadata includes:
-
-```json
-{
-  "phase": "website",
-  "sync_session_id": "...",
-  "retry_of_ingestion_run_id": "...",
-  "action": "retry_after_capacity_failure"
-}
-```
-
-### Why retries create a new run
-
-The failed run is not overwritten. This preserves a clear audit trail:
-
-```text
-original run: running → failed
-retry run: queued → running → completed or failed
-```
-
-This makes the admin dashboard and debugging logs easier to reason about because every Bedrock attempt has its own database record.
-
-## Error Handling
-
-### API-level errors
-
-The Lambda returns structured JSON errors for common request failures.
-
-| Scenario                              | Response |
-| ------------------------------------- | -------- |
-| Missing `file_name` for presigned URL | `400`    |
-| Unsupported upload content type       | `400`    |
-| Invalid JSON request body             | `400`    |
-| Missing `created_by`                  | `400`    |
-| Admin email not found                 | `400`    |
-| Duplicate website or file source      | `409`    |
-| No pending sources to queue           | `409`    |
-| No eligible batch can start           | `409`    |
-| Database connection failure           | `500`    |
-| Knowledge Base ID lookup failure      | `500`    |
-| Unhandled exception                   | `500`    |
-
-### S3 staging errors
-
-For file sources, staging validates that both the primary file and companion metadata JSON file exist in S3. If either object is missing, staging returns:
-
-```json
-{
-  "error": "One or both uploaded files do not exist in S3"
-}
-```
-
-### Scheduler errors
-
-If a scheduler payload is missing required fields, `update_status` returns `400` with the fields it received. This helps debug malformed schedules or older payload formats.
-
-If schedule deletion fails after a terminal Bedrock status, the error is logged but the Lambda continues. This avoids blocking database status updates just because schedule cleanup failed.
+Text generation embeds the router's rewritten query with the active space's model and runs the similarity search in `kc_shared/retrieval_core.py`, which space validation also uses, so both run the same SQL. Each space has its own partial HNSW index, and a vector only counts if it was computed from the chunk's current text. Results are de-duplicated, filtered by the space's `min_score` when one is set, and passed to the model marked as untrusted data. Only guidance turns retrieve; clarifying (detective) turns do not.
 
 ## Monitoring and Debugging
 
-### CloudWatch logs
+### Logs
 
-The Lambda logs:
+| Log group | What to look for |
+| --- | --- |
+| `/aws/lambda/<prefix>-Api-lambdaKnowledgeBase` | Staging, Sync now, worker progress, Transcribe and ECS events |
+| Crawler and transcriber ECS log streams (prefixes `crawler` and `transcriber`) | Per-page crawl and transcript processing |
+| `/aws/lambda/<prefix>-Ingestion-transcribeRelay` | Events forwarded to the knowledge base Lambda |
 
-* Incoming events
-* Database connection failures
-* Secret lookup failures
-* Presigned URL generation failures
-* S3 object validation failures
-* Bedrock ingestion job polling results
-* Schedule deletion failures
-* Workflow continuation failures
-* Website capacity retry behavior
+Logs never contain document text, queries or request bodies; only ids, counts and statuses.
 
-### Important metadata fields
+### Useful metadata
 
-When debugging, inspect the `metadata` column on `ingestion_runs`.
+| Field | Where | Meaning |
+| --- | --- | --- |
+| `sync_session_id` | `ingestion_runs.metadata` | Which Sync now launched the run |
+| `action`, `retry_of_ingestion_run_id` | `ingestion_runs.metadata` | Manual retry history |
+| `pdf_extraction` | `ingestion_runs.metadata` | How a PDF was read |
+| `link_summary`, `link_error` | `ingestion_runs.metadata` | CSV link phase outcome |
+| `transcribe_job_name`, `transcribe_status` | `data_sources.metadata` | Video transcription state |
 
-Important fields include:
+### Common questions
 
-| Field                       | Meaning                                                           |
-| --------------------------- | ----------------------------------------------------------------- |
-| `sync_session_id`           | Groups runs created or processed by the same Sync click.          |
-| `phase`                     | Indicates whether the run belongs to the `s3` or `website` phase. |
-| `bedrock_ingestion_job_id`  | Bedrock job associated with the run.                              |
-| `schedule_name`             | EventBridge schedule polling the job.                             |
-| `retry_of_ingestion_run_id` | Original failed run that caused a retry.                          |
-| `action`                    | Describes why the run was created or updated.                     |
+**A source is stuck in `pending`.** Staging does not start websites, CSVs or Markdown; click Sync now. A video stays pending until its transcription completes. A run deferred by a cutover returns to pending.
 
-### Common debugging questions
+**Sync now returns 409.** Nothing was pending, or a cutover is in progress (`CUTOVER_LOCKED`).
 
-#### Why is a source stuck in `pending`?
+**A source is stuck in `running`.** Check the ECS task in the cluster and its log stream. If the task stopped, the ECS event should have failed the run; check the relay's logs. For documents, check the knowledge base Lambda logs for the worker's continuations.
 
-The admin has staged it, but no sync has been started yet. The admin must click Sync, which calls `POST /admin/data_sources/sync`.
+**A website indexed fewer pages than expected.** The crawler stops at 50 same-domain pages and skips non-public addresses. Include/exclude patterns are not applied.
 
-#### Why is a source stuck in `queued`?
+**Answers do not use new content.** Confirm the run is `completed` and that the content was embedded in the active space (**Search index** shows coverage per space).
 
-The source has been selected for a sync session, but no eligible phase has picked it up yet. Check:
+## Configuration
 
-* whether an S3 job is still running before website work can start
-* whether all web crawlers are syncing or full
-* whether the website batch is blocked by crawler capacity
-* whether there are no available web data source slots left
+Set on the knowledge base Lambda in `cdk/lib/api-stack.ts` (and `ingestionEnv()` in `cdk/lib/ingestion-stack.ts`):
 
-#### Why is a source stuck in `running`?
-
-The Bedrock ingestion job has started, but the polling scheduler has not marked it terminal yet. Check:
-
-* whether the EventBridge schedule exists
-* whether the schedule target ARN points to this Lambda
-* whether the scheduler role can invoke the Lambda
-* whether Bedrock still reports `STARTING`, `IN_PROGRESS`, or `STOPPING`
-
-#### Why did a website fail and then become queued again?
-
-The original website run did not become queued again. A new retry run was created because the website failed as a single-item batch and the failure looked like a crawler capacity issue.
-
-#### Why did website ingestion not start after S3 finished?
-
-Check the result returned by `process_website_batch` in the `next_step` field of the polling response. Common reasons include:
-
-* no queued website runs exist
-* no web crawler template exists
-* all crawlers are syncing or full
-* maximum web crawler data source count has been reached
-
-## Configuration and Environment Variables
-
-The Lambda depends on several environment variables.
-
-| Variable                     | Purpose                                                          |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `SM_DB_CREDENTIALS`          | Secrets Manager secret containing database credentials.          |
-| `KB_SECRET_NAME`             | Secrets Manager secret containing the Bedrock Knowledge Base ID. |
-| `REGION`                     | AWS region used for clients.                                     |
-| `RDS_PROXY_ENDPOINT`         | RDS Proxy endpoint for PostgreSQL connections.                   |
-| `KNOWLEDGE_BASE_BUCKET_NAME` | S3 bucket used for uploaded Knowledge Base files.                |
-| `ALLOWED_ORIGIN_PARAM`       | Optional SSM parameter containing allowed CORS origins.          |
-| `SCHEDULER_ROLE_ARN`         | IAM role used by EventBridge Scheduler to invoke the Lambda.     |
-| `SCHEDULER_TARGET_ARN`       | Lambda ARN invoked by EventBridge Scheduler.                     |
-
-## Design Notes
-
-### Why S3 runs before websites
-
-S3 ingestion is attempted first because all queued file sources can be handled by a single shared S3 data source and a single Bedrock ingestion job. Website ingestion is more complex because it depends on crawler capacity, seed URL grouping, include/exclude filters, and sequential batches.
-
-Running S3 first gives the system a simple deterministic first phase before moving into crawler allocation.
-
-### Why websites are grouped by include/exclude patterns
-
-Include and exclude patterns are crawler-level settings in Bedrock. If two websites require different filters, they should not be added to the same crawler update. Grouping websites by filter configuration prevents one website's filters from accidentally affecting another website.
-
-### Why schedulers are used
-
-Bedrock ingestion jobs are asynchronous and may run longer than a single Lambda invocation. EventBridge Scheduler lets the system poll periodically without keeping the Lambda running.
-
-The scheduler intervals are:
-
-| Phase   | Polling Interval |
-| ------- | ---------------- |
-| S3      | 5 minutes        |
-| Website | 30 minutes       |
-
-### Why the same Lambda handles API and polling events
-
-Using one Lambda keeps the ingestion workflow centralized. API requests start work, and scheduler events continue work. The event shape determines which path the handler follows.
-
-### Why failed retry runs are preserved
-
-Retries create new `ingestion_runs` rows instead of mutating failed rows back to queued. This preserves the full history of Bedrock attempts and makes failures auditable.
-
-## References
-
-* Main Lambda router: `cdk/lambda/lambdaKnowledgeBase/main.py`
-* CORS helper: `cdk/lambda/lambdaKnowledgeBase/helpers/cors.py`
-* Presigned upload helper: `cdk/lambda/lambdaKnowledgeBase/helpers/generate_presigned_url.py`
-* Staging helper: `cdk/lambda/lambdaKnowledgeBase/helpers/stage_data_sources.py`
-* Sync session helper: `cdk/lambda/lambdaKnowledgeBase/helpers/start_ingestion_job.py`
-* S3 batch helper: `cdk/lambda/lambdaKnowledgeBase/helpers/process_s3_batch.py`
-* Website batch helper: `cdk/lambda/lambdaKnowledgeBase/helpers/process_website_batch.py`
-* Polling and retry helper: `cdk/lambda/lambdaKnowledgeBase/helpers/update_status.py`
-
----
+| Variable | Meaning |
+| --- | --- |
+| `KNOWLEDGE_BASE_BUCKET_NAME` | The ingest bucket |
+| `ECS_CLUSTER_ARN`, `CRAWLER_TASK_DEF_ARN`, `TRANSCRIBER_TASK_DEF_ARN` | Where crawler and transcriber tasks run |
+| `INGESTION_SUBNET_IDS`, `INGESTION_SECURITY_GROUP_IDS` | Task networking |
+| `TRANSCRIBE_DATA_ACCESS_ROLE_ARN`, `TRANSCRIBE_OUTPUT_PREFIX` | Amazon Transcribe output |
+| `WORKER_INVOKE_SECRET_ARN` | Token that authenticates async self-invocations |
+| `PDF_TEXTRACT_MODE` | `always` (default), `auto` or `off` |
+| `LINK_*` | CSV link-fetch limits (see [CSV row resources](#csv-row-resources-and-linked-content)) |
+| `HAIKU_ARN`, `LLM_REGION` | Model used to label guideline document sections |
 
 ## Glossary
 
-* **Knowledge Base:** Bedrock Knowledge Base used to ingest, embed, and retrieve project content for RAG.
-* **Data source:** A row in `data_sources` representing a website URL, CSV file, Markdown file, or metadata JSON file.
-* **Ingestion run:** A row in `ingestion_runs` representing the ingestion lifecycle state for one data source.
-* **Sync session:** A group of queued ingestion runs created by one admin Sync action, identified by `sync_session_id`.
-* **S3 phase:** The ingestion phase that processes queued CSV, Markdown, and JSON files through the shared Bedrock S3 data source.
-* **Website phase:** The ingestion phase that processes queued website URLs through Bedrock web crawler data sources.
-* **Bedrock data source:** A Bedrock Knowledge Base data source, either the shared S3 source or a web crawler source.
-* **Bedrock ingestion job:** An asynchronous Bedrock job that ingests content from a Bedrock data source into the Knowledge Base.
-* **EventBridge Scheduler:** AWS service used to periodically invoke the Lambda while Bedrock ingestion jobs are running.
-* **Capacity failure:** A website crawler failure that appears to be caused by reaching `maxPages` or a similar crawl/page limit.
-* **Retry run:** A new queued `ingestion_runs` row created after a single-website capacity failure.
+* **Data source:** A row in `data_sources`: a website, CSV, Markdown file, metadata JSON, document or video an administrator added.
+* **Ingestion run:** A row in `ingestion_runs` holding one attempt's status.
+* **Sync session:** The runs launched by one Sync now, sharing a `sync_session_id`.
+* **Source:** A row in `sources`, the unit retrieval cites: a crawled page, video, document, CSV row, or a page a CSV row links to.
+* **Embedding space:** One embedding model + dimension; its vectors live in `chunk_embeddings`.
+* **Active space:** The space named in `embedding_active_space`, read by retrieval and written by ingestion.
+* **Cutover lock:** Set while a space is activated or rolled back; ingestion routes answer 409 until it clears.

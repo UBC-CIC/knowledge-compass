@@ -37,7 +37,7 @@ import os
 
 import boto3
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.url_safety import InvalidURL, normalize_citation_url, normalize_url
 from helpers.worker_envelope import worker_payload
 

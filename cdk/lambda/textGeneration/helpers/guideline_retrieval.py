@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from helpers.embedding_space import get_active_space
 from helpers.retrieval import EMBED_MODEL_ID, _rollback_quietly, _space_spec, _vector_literal, embed_query
-from helpers.retrieval_core import space_literals
+from kc_shared.retrieval_core import space_literals
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

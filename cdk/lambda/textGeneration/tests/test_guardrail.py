@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import guardrail  # noqa: E402
 
@@ -37,7 +38,7 @@ class InvokeGuardrailTests(unittest.TestCase):
     def _invoke(self, response, text):
         client = mock.Mock()
         client.apply_guardrail.return_value = response
-        with mock.patch.object(guardrail.boto3, "client", return_value=client):
+        with mock.patch.object(guardrail, "bedrock_runtime", return_value=client):
             result = guardrail.invoke_guardrail(text, "ca-central-1")
         return result, client
 
@@ -109,7 +110,7 @@ class InvokeOutputGuardrailTests(unittest.TestCase):
     def _invoke(self, response, text=ANSWER):
         client = mock.Mock()
         client.apply_guardrail.return_value = response
-        with mock.patch.object(guardrail.boto3, "client", return_value=client):
+        with mock.patch.object(guardrail, "bedrock_runtime", return_value=client):
             result = guardrail.invoke_output_guardrail(text, "ca-central-1")
         return result, client
 
@@ -154,7 +155,7 @@ class InvokeOutputGuardrailTests(unittest.TestCase):
     def test_errors_are_raised(self):
         client = mock.Mock()
         client.apply_guardrail.side_effect = RuntimeError("throttled")
-        with mock.patch.object(guardrail.boto3, "client", return_value=client):
+        with mock.patch.object(guardrail, "bedrock_runtime", return_value=client):
             with self.assertRaises(RuntimeError):
                 guardrail.invoke_output_guardrail(ANSWER, "ca-central-1")
 

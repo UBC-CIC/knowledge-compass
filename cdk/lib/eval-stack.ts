@@ -1,6 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
@@ -151,8 +152,9 @@ export class EvalStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EvalStackProps) {
     super(scope, id, props);
 
-    // Generated value only; never set in code. Rotate by updating the secret
-    // value; the Lambda re-reads it within 5 minutes.
+    // Generated value only; never set in code. Rotated every 90 days by
+    // lambda/appSecretRotation, which keeps the outgoing key as
+    // previousSigningKey; the API verifies tags against both (evalTag.js).
     this.signingSecret = new secretsmanager.Secret(this, "SigningSecret", {
       secretName: evalSigningSecretName(props.stackPrefix),
       description: "HMAC key that signs evaluation-harness session tags (evals/)",
@@ -163,6 +165,19 @@ export class EvalStack extends cdk.Stack {
         excludePunctuation: true,
       },
       removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    // Never on deploy, so a rotation cannot run before the two-key verifier is live.
+    this.signingSecret.addRotationSchedule("SigningSecretRotation", {
+      rotationLambda: new lambda.Function(this, "SigningSecretRotationFunction", {
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: lambda.Code.fromAsset("lambda/appSecretRotation"),
+        timeout: Duration.seconds(30),
+        memorySize: 128,
+      }),
+      automaticallyAfter: Duration.days(90),
+      rotateImmediatelyOnUpdate: false,
     });
 
     new cdk.CfnOutput(this, "EvalSigningSecretName", { value: this.signingSecret.secretName });

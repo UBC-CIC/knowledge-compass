@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import config, crud  # noqa: E402
 from test_chat_guideline_mode import ChatModeTestBase, GUIDELINE_REPLY  # noqa: E402

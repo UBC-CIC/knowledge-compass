@@ -16,6 +16,7 @@ from unittest import mock
 
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import routing  # noqa: E402
 from helpers.routing import (  # noqa: E402
@@ -272,7 +273,8 @@ class PromptAssemblyTests(unittest.TestCase):
     def test_detective_prompt_includes_focus(self):
         route = _route(mode="ASK", confidence="LOW", info_needed="how long this has happened")
         _, count, phase, instructions, model = logic.get_current_prompt(DETECTIVE, 0, None, route)
-        self.assertEqual((count, phase, model), (5, "DETECTIVE", "haiku"))
+        # No library retrieval: a detective turn has nothing to link.
+        self.assertEqual((count, phase, model), (0, "DETECTIVE", "haiku"))
         self.assertIn(FOCUS_BLOCK + " how long this has happened", instructions)
         self.assertIn(config.OUTPUT_FORMAT_DETECTIVE, instructions)
         self.assertIn("CURRENT STATUS: Exchange 1.", instructions)

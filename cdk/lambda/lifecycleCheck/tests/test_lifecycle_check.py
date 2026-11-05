@@ -336,5 +336,21 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(names, ["/KC/LLM/HaikuArn", "/KC/LLM/SonnetArn"])
 
 
+class DbTlsTests(unittest.TestCase):
+    def test_connect_uses_verify_full_with_a_real_ca_bundle(self):
+        psycopg2 = mock.Mock()
+        secrets = mock.Mock()
+        secrets.get_secret_value.return_value = {
+            "SecretString": json.dumps({"dbname": "d", "username": "u", "password": "p", "port": 5432})
+        }
+        with mock.patch.dict(sys.modules, {"psycopg2": psycopg2}), \
+                mock.patch.object(lc, "_secrets_client", return_value=secrets), \
+                mock.patch.dict(os.environ, {"SM_DB_CREDENTIALS": "s", "RDS_PROXY_ENDPOINT": "proxy.example"}):
+            lc._connect_to_db()
+        kwargs = psycopg2.connect.call_args.kwargs
+        self.assertEqual(kwargs["sslmode"], "verify-full")
+        self.assertTrue(os.path.isfile(kwargs["sslrootcert"]))
+
+
 if __name__ == "__main__":
     unittest.main()

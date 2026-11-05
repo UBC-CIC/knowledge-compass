@@ -28,10 +28,16 @@ import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as crypto from 'crypto';
+
+/** Fail-closed seed for the CORS allow-list: an origin no browser page can have. */
+export const UNCONFIGURED_ALLOWED_ORIGIN = "https://origin-not-configured.invalid";
 import * as path from "path";
 
 // REST stage name. The WAF association and execute-api ARNs also use "prod".
 export const REST_API_STAGE_NAME = "prod";
+// WebSocket stage name. Text gen's ManageConnections grant names it without
+// referencing the WebSocket API (see the cycle note at the end of the stack).
+export const WEBSOCKET_STAGE_NAME = "prod";
 // OpenAPI gateway responses and OPTIONS mocks read this stage variable.
 // gatewayCorsOrigin copies the deployed SPA origin into it; never "*".
 export const GATEWAY_ALLOWED_ORIGIN_VARIABLE = "allowedOrigin";
@@ -120,6 +126,20 @@ export const GUARDRAIL_CONTENT_FILTERS_CONFIG: bedrock.CfnGuardrail.ContentFilte
   { type: 'VIOLENCE',      inputStrength: 'NONE', outputStrength: 'LOW' },
   { type: 'MISCONDUCT',    inputStrength: 'NONE', outputStrength: 'LOW' },
 ];
+
+// Generation model (finding A-02). Every chat, router, grounding, title and
+// guideline-labelling call uses this US cross-region inference profile.
+export const GENERATION_INFERENCE_PROFILE = 'us.anthropic.claude-haiku-5-5';
+export const GENERATION_FOUNDATION_MODEL = 'anthropic.claude-haiku-5-5';
+// Destination regions of the us. profile, from `aws bedrock
+// get-inference-profile` in ca-central-1 (2026-10-27). Re-check when the
+// profile or the deployment region changes: a missing region fails the call.
+export const GENERATION_PROFILE_DESTINATION_REGIONS = ['us-east-1', 'us-east-2', 'us-west-2', 'ca-central-1'];
+
+/** Regions whose foundation-model ARN the generation grant names: the profile's destinations plus the calling region. */
+export function generationModelRegions(callingRegion: string): string[] {
+  return [...new Set([...GENERATION_PROFILE_DESTINATION_REGIONS, callingRegion])];
+}
 
 export const GUARDRAIL_BLOCKED_INPUT_MESSAGE =
   "Sorry, I can't help with that. I'm Knowledge Compass, here to help families navigate inclusive education in Canada.";
@@ -374,14 +394,29 @@ export class ApiGatewayStack extends cdk.Stack {
       description: "Lambda layer containing the psycopg2 Python library",
     });
 
-    // Create Allowed Origin Parameters
+    // Python code shared by lambdaTextGen and lambdaKnowledgeBase (CORS, embeddings,
+    // retrieval SQL, eval scoring and the golden set), imported as kc_shared.* from
+    // /opt/python. One copy instead of one per package (A-13); see
+    // layers/shared_python/python/kc_shared/__init__.py.
+    const sharedPythonLayer = new lambda.LayerVersion(this, "sharedPythonLayer", {
+      code: lambda.Code.fromAsset("./layers/shared_python", { exclude: ["**/__pycache__"] }),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
+      description: "kc_shared: Python modules shared by the text generation and knowledge base Lambdas",
+    });
+
+    // Create Allowed Origin Parameters. Seeded fail-closed (finding f-9ff3f181):
+    // `.invalid` never resolves (RFC 2606), so no page has this origin and no
+    // cross-origin read is allowed until the Amplify stack writes the SPA origin
+    // (or an operator adds one; Docs/DEPLOYMENT_GUIDE.md). It is still a valid
+    // http(s) origin, which gatewayCorsOrigin requires. An existing parameter
+    // is left as it is (ParameterAlreadyExists).
       this.allowedOriginsParamName = `/${id}/API/AllowedOrigins`;
       const crParams = {
           service: 'SSM',
           action: 'putParameter',
           parameters: {
             Name: this.allowedOriginsParamName,
-            Value: 'http://localhost:5173/',
+            Value: UNCONFIGURED_ALLOWED_ORIGIN,
             Type: 'String',
             Description: 'List of allowed CORS origins for the API',
           },
@@ -535,6 +570,12 @@ export class ApiGatewayStack extends cdk.Stack {
         userSrp: true,
       },
       preventUserExistenceErrors: true,
+      // Signed-in staff must not rewrite their own email (UpdateUserAttributes):
+      // it attributes audit rows and staff users rows (finding f-eb536a80). The
+      // frontend writes no attributes, and admins are provisioned through the
+      // admin API, which this list does not restrict. `locale` keeps the list
+      // non-empty, since an unset list leaves every attribute writable.
+      writeAttributes: new cognito.ClientAttributes().withStandardAttributes({ locale: true }),
     });
 
     this.identityPool = new cognito.CfnIdentityPool(
@@ -733,7 +774,9 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
     gatewayCorsOriginFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["apigateway:GET", "apigateway:PATCH"],
+      // Only PATCH is needed: the handler sets the stage variable with a
+      // "replace" UpdateStage op and no longer reads the stage (GetStage removed).
+      actions: ["apigateway:PATCH"],
       resources: [
         `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/${REST_API_STAGE_NAME}`,
       ],
@@ -1072,65 +1115,11 @@ export class ApiGatewayStack extends cdk.Stack {
       ],
     });
 
-    // Shared by systemMessagesFunction, chatSessionFunction and adminFunction only.
-    const lambdaRole = new iam.Role(this, `${id}-postgresLambdaRole`, {
-      roleName: `${id}-postgresLambdaRole`,
-      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-      permissionsBoundary: requestHandlerBoundary,
-    });
-
-
-    // Grant access to specific secrets instead of '*'
-    db.secretPathUser.grantRead(lambdaRole);
-
-    // Grant access to EC2
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface",
-          "ec2:AssignPrivateIpAddresses",
-          "ec2:UnassignPrivateIpAddresses",
-        ],
-        resources: ["*"], // must be *
-      })
-    );
-
-    // Grant access to log
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          //Logs
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-        ],
-        resources: ["arn:aws:logs:*:*:*"],
-      })
-    );
-
-    // Grant X-Ray tracing permissions
-    lambdaRole.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          "xray:PutTraceSegments",
-          "xray:PutTelemetryRecords",
-          "xray:GetSamplingRules",
-          "xray:GetSamplingTargets",
-        ],
-        resources: ["*"],
-      })
-    );
-
-    // Dedicated roles for the functions split off lambdaRole. VPC functions get
-    // AWSLambdaVPCAccessExecutionRole (ENIs + logs), the out-of-VPC user authorizer
-    // AWSLambdaBasicExecutionRole (logs). Traced functions get the same X-Ray statement
-    // as lambdaRole. Remaining grants are added per function below (addToRolePolicy /
-    // grantRead on the function follow its role).
+    // One execution role per request-handling function; none is shared. VPC functions
+    // get AWSLambdaVPCAccessExecutionRole (ENIs + logs), the out-of-VPC user authorizer
+    // AWSLambdaBasicExecutionRole (logs). Traced functions also get the X-Ray statement.
+    // Remaining grants are added per function below (addToRolePolicy / grantRead on the
+    // function follow its role).
     const newExecutionRole = (name: string, opts: { vpc: boolean; xray: boolean }) => {
       const role = new iam.Role(this, `${id}-${name}`, {
         roleName: `${id}-${name}`,
@@ -1174,6 +1163,12 @@ export class ApiGatewayStack extends cdk.Stack {
     // reaches only the handler that verifies eval tags (finding f-7277748f).
     const chatSessionRole = newExecutionRole("chatSessionRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(chatSessionRole);
+    // systemMessagesFunction (public member routes) and adminFunction no longer share
+    // one role, so a bug in either does not carry the other's grants (finding A-07).
+    const systemMessagesRole = newExecutionRole("systemMessagesRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(systemMessagesRole);
+    const adminFunctionRole = newExecutionRole("adminFunctionRole", { vpc: true, xray: true });
+    db.secretPathUser.grantRead(adminFunctionRole);
     const knowledgeBaseRole = newExecutionRole("knowledgeBaseRole", { vpc: true, xray: true });
     db.secretPathUser.grantRead(knowledgeBaseRole);
     // Shared token that authenticates lambdaKnowledgeBase self-invocations
@@ -1282,6 +1277,29 @@ export class ApiGatewayStack extends cdk.Stack {
         passwordLength: 128,
       },
     });
+    // Rotation for the JWT signing secret and the worker invoke token (finding
+    // f-440374a2). lambda/appSecretRotation keeps the outgoing key as the
+    // previous key and every verifier accepts both, so a scheduled rotation
+    // invalidates nothing live: 90 days exceeds the 30-day guest credential
+    // lifetime. Never on deploy (rotateImmediatelyOnUpdate: false), so a
+    // rotation cannot run before the two-key verifiers are live. To revoke a
+    // leaked key, rotate twice (Docs/runbooks/app-secret-rotation.md).
+    const appSecretRotation = new lambda.Function(this, `${id}-AppSecretRotation`, {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset("lambda/appSecretRotation"),
+      timeout: Duration.seconds(30),
+      memorySize: 128,
+      functionName: `${id}-AppSecretRotation`,
+    });
+    for (const [name, secret] of [["JwtSecretRotation", jwtSecret], ["WorkerInvokeSecretRotation", workerInvokeSecret]] as const) {
+      secret.addRotationSchedule(name, {
+        rotationLambda: appSecretRotation,
+        automaticallyAfter: Duration.days(90),
+        rotateImmediatelyOnUpdate: false,
+      });
+    }
+
     // iss claim of every public token (userCredential.js); each verifier checks it.
     // Not secret and not account-specific: it names this deployment.
     const jwtIssuer = `${id}/public-auth`;
@@ -1300,7 +1318,7 @@ export class ApiGatewayStack extends cdk.Stack {
           SM_COGNITO_CREDENTIALS: this.secret.secretName,
         },
         functionName: `${id}-adminLambdaAuthorizer`,
-        memorySize: 512,
+        memorySize: 256,
         layers: [jwt],
         role: adminAuthorizerRole,
       }
@@ -1499,7 +1517,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // Main chat (answer) model: a US cross-region inference profile id. Same value as the
     // documented /KC/LLM/SonnetArn parameter (Haiku 5.5, same as /KC/LLM/HaikuArn); also
     // the ModelId dimension of the Bedrock token alarms below.
-    const generationModelId = 'us.anthropic.claude-haiku-5-5';
+    const generationModelId = GENERATION_INFERENCE_PROFILE;
 
     const lambdaTextGen = new lambda.Function(
       this,
@@ -1511,7 +1529,7 @@ export class ApiGatewayStack extends cdk.Stack {
         timeout: cdk.Duration.seconds(60),
         role: textGenRole,
         reservedConcurrentExecutions: reservedConcurrency(50),
-        layers: [psycopgLayer, powertoolsLayer],
+        layers: [psycopgLayer, powertoolsLayer, sharedPythonLayer],
         vpc: vpcStack.vpc,
         tracing: lambda.Tracing.ACTIVE,
         memorySize: 512,
@@ -1780,7 +1798,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // within 90 days. The same topic is the action of the two embedding alarms above.
     //
     // Circular-dependency note: everything here is NEW and self-contained. The function has its
-    // OWN role (not the shared lambdaRole), and the alarms reference the topic only; nothing
+    // OWN role, and the alarms reference the topic only; nothing
     // takes a token from lambdaKnowledgeBase or lambdaTextGen. No stack output is exported.
     const lifecycleTopic = new sns.Topic(this, 'ModelLifecycleAlerts', {
       topicName: `${id}-ModelLifecycleAlerts`,
@@ -1927,22 +1945,46 @@ export class ApiGatewayStack extends cdk.Stack {
         `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
         // Candidate embedding models. Model ids / inference-profile ARNs are
         // configuration on the embedding_spaces row; these grants enable
-        // candidates and do not assert availability in this region. Wildcard
-        // region on the foundation-model ARNs covers the destination regions of
-        // cross-region profiles. Manual ARNs on purpose (no CDK token
-        // references; see the documented circular-dependency notes).
+        // candidates and do not assert availability in this region. Embedding
+        // calls are made from this region (REGION), so profile ARNs are pinned
+        // to it and this account. The foundation-model ARNs keep a wildcard
+        // region on purpose: Cohere Embed v4 is offered only through the
+        // global.cohere.embed-v4:0 profile, which may run in any region (AWS
+        // authorizes it against a region-less foundation-model ARN). Manual
+        // ARNs on purpose (no CDK token references; see the documented
+        // circular-dependency notes).
         `arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`,
-        `arn:aws:bedrock:*:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*amazon.titan-embed-text-v2*`,
         // Cohere Embed v4 (model id suffix not verified: grant both forms)
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4`,
         `arn:aws:bedrock:*::foundation-model/cohere.embed-v4:0`,
-        `arn:aws:bedrock:*:${this.account}:inference-profile/*cohere.embed-v4*`,
-        // Claude Haiku 5.5: every generation call (both /KC/LLM params point here)
-        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5`,
-        `arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-5-5`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*cohere.embed-v4*`,
+        // Claude Haiku 5.5: every generation call (both /KC/LLM params point
+        // here). Called from LLM_REGION (this region) through this account's
+        // us. profile, which runs the model in one of its destination regions.
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${GENERATION_INFERENCE_PROFILE}`,
+        ...generationModelRegions(this.region).map(
+          (r) => `arn:aws:bedrock:${r}::foundation-model/${GENERATION_FOUNDATION_MODEL}`,
+        ),
       ],
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
+
+    // AWS Marketplace permissions for the text-gen role only. The Anthropic
+    // Claude models are Marketplace-backed, so Bedrock verifies/completes the
+    // Marketplace subscription at invoke time. Without these actions,
+    // ConverseStream fails with AccessDeniedException ("not authorized to
+    // perform the required AWS Marketplace actions"). Marketplace subscription
+    // actions do not support resource-level permissions, so resources is ["*"].
+    const textGenMarketplacePolicyStatement = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe",
+      ],
+      resources: ["*"],
+    });
+    lambdaTextGen.addToRolePolicy(textGenMarketplacePolicyStatement);
 
     // textGenRole reads db.secretPathUser (granted where the role is created).
 
@@ -1969,8 +2011,11 @@ export class ApiGatewayStack extends cdk.Stack {
       // work that doesn't fit continues in a fresh self-invocation.
       timeout: Duration.seconds(600),
       role: knowledgeBaseRole,
-      layers: [psycopgLayer],
-      memorySize: 512,
+      layers: [psycopgLayer, sharedPythonLayer],
+      // The document worker reads each upload whole from S3, and the pypdf fallback
+      // and DOCX/CSV parsing hold the parsed copy too. Check "Max Memory Used" in the
+      // REPORT log lines before changing this.
+      memorySize: 1024,
       vpc: vpcStack.vpc,
       tracing: lambda.Tracing.ACTIVE,
       environment: {
@@ -2072,6 +2117,22 @@ export class ApiGatewayStack extends cdk.Stack {
     const cfnLambdaKnowledgeBase = lambdaKnowledgeBase.node.defaultChild as lambda.CfnFunction;
     cfnLambdaKnowledgeBase.overrideLogicalId("lambdaKnowledgeBase");
 
+    // Worker self-invocations that Lambda gives up on (retries exhausted or event
+    // too old) are lost, so alarm on them (A-15). No DLQ or onFailure destination:
+    // both store the whole request payload, which carries the worker invoke token
+    // (helpers/worker_envelope.py), so a queue would hold copies of that secret.
+    new cloudwatch.Alarm(this, 'KnowledgeBaseAsyncEventsDroppedAlarm', {
+      metric: lambdaKnowledgeBase.metric('AsyncEventsDropped', {
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'Knowledge base worker dropped an async invocation; an ingestion or embedding batch did not finish. Check lambdaKnowledgeBase logs',
+    }).addAlarmAction(opsAlarmAction);
+
     lambdaKnowledgeBase.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
@@ -2128,13 +2189,6 @@ export class ApiGatewayStack extends cdk.Stack {
       sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
     });
 
-    //Allows Invoking Functions Easily for Testing Purposes
-    lambdaUserFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
-    });
-
     const cfnLambda_user = lambdaUserFunction.node
       .defaultChild as lambda.CfnFunction;
     cfnLambda_user.overrideLogicalId("userFunction");
@@ -2159,7 +2213,7 @@ export class ApiGatewayStack extends cdk.Stack {
       functionName: `${id}-systemMessagesFunction`,
       memorySize: 512,
       layers: [postgres],
-      role: lambdaRole,
+      role: systemMessagesRole,
       tracing: lambda.Tracing.ACTIVE,
     });
 
@@ -2175,12 +2229,6 @@ export class ApiGatewayStack extends cdk.Stack {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
       action: "lambda:InvokeFunction",
       sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/member*`,
-    });
-
-    lambdaSystemMessagesFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
     });
 
     const cfnLambda_systemMessages = lambdaSystemMessagesFunction.node
@@ -2305,7 +2353,7 @@ export class ApiGatewayStack extends cdk.Stack {
         functionName: `${id}-adminFunction`,
         memorySize: 512,
         layers: [postgres],
-        role: lambdaRole,
+        role: adminFunctionRole,
         tracing: lambda.Tracing.ACTIVE,
       }
     );
@@ -2323,13 +2371,6 @@ export class ApiGatewayStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
     }));
 
-
-    //allows invoking admin Lambda from API Gateway test stage for easier testing
-    lambdaAdminFunction.addPermission("AllowTestInvoke", {
-      principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
-      action: "lambda:InvokeFunction",
-      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/test-invoke-stage/*/*`,
-    });
 
     const cfnLambda_admin = lambdaAdminFunction.node
       .defaultChild as lambda.CfnFunction;
@@ -2514,8 +2555,9 @@ export class ApiGatewayStack extends cdk.Stack {
         JWT_ISSUER: jwtIssuer,
         SM_DB_CREDENTIALS: db.secretPathUser.secretName,
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
-        // Per-connection generate_text limit (fixed window, stored on the
-        // WsConnections item). default.js applies the same defaults.
+        // generate_text limit (fixed window) applied per connection and per
+        // bound guest across all of its sockets, both stored in WsConnections.
+        // default.js applies the same defaults.
         WS_GENERATE_RATE_LIMIT: "10",
         WS_GENERATE_RATE_WINDOW_SECONDS: "60",
       },
@@ -2550,18 +2592,20 @@ export class ApiGatewayStack extends cdk.Stack {
     }));
 
 
-    // Grant permissions to post to connections
-    const wsPolicy = new iam.PolicyStatement({
+    // Text gen streams answers back with PostToConnection only. The API id stays a
+    // wildcard because a reference from lambdaTextGen to the WebSocket API closes
+    // the KC-Api dependency cycle (see the note at the end of this stack), so the
+    // grant is pinned to this account, the WebSocket stage name and POST instead.
+    // connect.js and disconnect.js never call the management API, so they get no
+    // ManageConnections grant (A-12). defaultFunction gets a statement scoped to
+    // this API's stage below.
+    lambdaTextGen.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
       actions: ["execute-api:ManageConnections"],
       resources: [
-        `arn:aws:execute-api:${this.region}:${this.account}:*/*/@connections/*`,
+        `arn:aws:execute-api:${this.region}:${this.account}:*/${WEBSOCKET_STAGE_NAME}/POST/@connections/*`,
       ],
-    });
-
-    lambdaTextGen.addToRolePolicy(wsPolicy);
-    connectFunction.addToRolePolicy(wsPolicy);
-    disconnectFunction.addToRolePolicy(wsPolicy);
-    // defaultFunction gets a statement scoped to this API's stage below.
+    }));
 
     // Connection binding store: each function gets only the actions it uses.
     // Each has its own role (no shared `role:`), so these grants stay per function.
@@ -2634,11 +2678,11 @@ export class ApiGatewayStack extends cdk.Stack {
     // Stage (using CfnStage to enable access log settings for WebSocket API)
     this.wsStage = new apigatewayv2.CfnStage(this, `${id}-ProdCfnStage`, {
       apiId: this.webSocketApi?.apiId,
-      stageName: "prod",
+      stageName: WEBSOCKET_STAGE_NAME,
       autoDeploy: true,
       // Stage-wide backstop against anonymous message floods (all routes, all clients).
       // These throttles are aggregate, not per client. WAFv2 cannot attach to a
-      // WebSocket API, so per-client protection is the per-connection generate_text
+      // WebSocket API, so per-client protection is the per-guest generate_text
       // limit in lambda/websocket/default.js (WS_GENERATE_RATE_* above).
       defaultRouteSettings: {
         throttlingRateLimit: 20,
@@ -2679,8 +2723,8 @@ export class ApiGatewayStack extends cdk.Stack {
     this.wsStage.node.addDependency(connectRoute, defaultRoute);
 
     // $default posts error events and closes sockets that have no connection record
-    // (DeleteConnection), on this API's stage only. Same manual ARN template as wsPolicy
-    // above; the only token is this WebSocket API's own id. The Api resource references
+    // (DeleteConnection), on this API's stage only. Same manual ARN template as text
+    // gen's grant above; the only token is this WebSocket API's own id. The Api resource references
     // nothing, so this adds no cycle (lambdaTextGen gets no new reference; see note below).
     defaultFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,

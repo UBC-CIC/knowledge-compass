@@ -275,6 +275,7 @@ def _secrets_client():
 
 def _connect_to_db():
     import psycopg2  # imported here: the layer provides it in Lambda
+    from botocore.httpsession import get_cert_path
 
     secret = json.loads(_secrets_client().get_secret_value(SecretId=os.environ["SM_DB_CREDENTIALS"])["SecretString"])
     return psycopg2.connect(
@@ -283,7 +284,10 @@ def _connect_to_db():
         password=secret["password"],
         host=os.environ["RDS_PROXY_ENDPOINT"],
         port=secret["port"],
-        sslmode="require",
+        # verify-full against botocore's public CA bundle: RDS Proxy serves an
+        # ACM (Amazon Trust Services) certificate.
+        sslmode="verify-full",
+        sslrootcert=get_cert_path(True),
     )
 
 

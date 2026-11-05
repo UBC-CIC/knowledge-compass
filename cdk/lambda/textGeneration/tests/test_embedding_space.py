@@ -17,6 +17,7 @@ from unittest import mock
 
 _TG = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _TG)
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import crud, embedding_space as es  # noqa: E402
 

@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 import helpers.config as config  # noqa: E402
 from helpers import crud, guideline_prompt as gp, logic  # noqa: E402

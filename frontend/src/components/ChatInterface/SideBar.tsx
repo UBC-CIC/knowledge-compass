@@ -163,7 +163,7 @@ function SidebarContent({ setMobileOpen }: SidebarContentProps) {
       </div>
 
       <div className="shrink-0 border-t border-foreground/10 px-[22px] py-4 text-[12.5px] leading-snug text-foreground/80">
-        Nothing is sent to your school or school board.
+        To protect your privacy, conversations are cleared after 90 days without a visit.
         {isAdmin || isDemoMode ? (
           <button
             type="button"
@@ -206,7 +206,7 @@ export default function SideBar() {
         />
         <div
           className={cn(
-            "absolute left-0 h-full w-[316px] transform bg-muted transition-transform",
+            "absolute left-0 h-full w-[min(316px,85vw)] transform bg-muted transition-transform",
             mobileOpen ? "translate-x-0" : "-translate-x-full"
           )}
         >

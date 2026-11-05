@@ -9,14 +9,19 @@ can read. main.handler calls verify_worker_event before dispatching any task,
 so holding lambda:InvokeFunction alone is not enough to rewrite the corpus or
 move the embedding pointer.
 
-The token is read on first use and cached for the container lifetime. It is
-never logged; failures log the error class only.
+The secret is rotated by appSecretRotation, which keeps the outgoing token as
+"previousToken": payloads are signed with the current token and either is
+accepted, so a rotation does not fail workers already in flight. The secret is
+cached for CACHE_TTL_SECONDS, and a token matching neither cached value
+refetches it (at most every REFRESH_MIN_INTERVAL_SECONDS) in case it just
+rotated. The token is never logged; failures log the error class only.
 """
 
 import hmac
 import json
 import logging
 import os
+import time
 
 import boto3
 
@@ -24,8 +29,11 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 INVOKE_TOKEN_FIELD = "invoke_token"
+CACHE_TTL_SECONDS = 300
+REFRESH_MIN_INTERVAL_SECONDS = 30
 
-_cached_token: str | None = None
+_cached_tokens: list[str] | None = None
+_cached_at = 0.0
 _secrets_client = None
 
 
@@ -36,20 +44,34 @@ def _secrets_manager():
     return _secrets_client
 
 
-def _invoke_token() -> str:
-    """The shared invoke token; read once from Secrets Manager, then cached."""
-    global _cached_token
-    if _cached_token:
-        return _cached_token
+def _invoke_tokens(refresh: bool = False) -> list[str]:
+    """[current, previous] invoke tokens from Secrets Manager, cached."""
+    global _cached_tokens, _cached_at
+    age = time.monotonic() - _cached_at
+    if _cached_tokens and age < CACHE_TTL_SECONDS and not (refresh and age > REFRESH_MIN_INTERVAL_SECONDS):
+        return _cached_tokens
     secret_arn = os.environ.get("WORKER_INVOKE_SECRET_ARN")
     if not secret_arn:
         raise RuntimeError("worker invoke secret is not configured")
-    secret_string = _secrets_manager().get_secret_value(SecretId=secret_arn)["SecretString"]
-    token = json.loads(secret_string).get("token")
+    secret = json.loads(_secrets_manager().get_secret_value(SecretId=secret_arn)["SecretString"])
+    token = secret.get("token")
     if not isinstance(token, str) or not token:
         raise RuntimeError("worker invoke secret has no token")
-    _cached_token = token
-    return token
+    previous = secret.get("previousToken")
+    _cached_tokens = [token] + ([previous] if isinstance(previous, str) and previous else [])
+    _cached_at = time.monotonic()
+    return _cached_tokens
+
+
+def _invoke_token() -> str:
+    """The current invoke token, which every outgoing payload carries."""
+    return _invoke_tokens()[0]
+
+
+def _matches(provided: str, tokens: list[str]) -> bool:
+    # Compare against every token, so timing does not tell which one matched.
+    results = [hmac.compare_digest(provided.encode("utf-8"), t.encode("utf-8")) for t in tokens]
+    return any(results)
 
 
 def worker_payload(payload: dict) -> bytes:
@@ -58,13 +80,12 @@ def worker_payload(payload: dict) -> bytes:
 
 
 def verify_worker_event(event) -> bool:
-    """True only when the event carries the invoke token (constant-time compare)."""
+    """True only when the event carries the current or previous invoke token (constant-time compare)."""
     provided = (event or {}).get(INVOKE_TOKEN_FIELD)
     if not isinstance(provided, str) or not provided:
         return False
     try:
-        expected = _invoke_token()
+        return _matches(provided, _invoke_tokens()) or _matches(provided, _invoke_tokens(refresh=True))
     except Exception as e:  # noqa: BLE001 - fail closed on any secret error
         logger.error("Worker invoke secret unavailable: %s", type(e).__name__)
         return False
-    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))

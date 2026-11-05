@@ -21,9 +21,9 @@ import uuid
 import boto3
 from botocore.config import Config
 
-from helpers.admin_audit import with_actor
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit, with_actor
 from helpers.admin_user import normalize_email
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
 from helpers.guideline_extract import file_kind
 from helpers.ingestion_lock import reject_if_locked
@@ -388,6 +388,12 @@ def register_document(event, body, connection):
 def delete_document(event, connection, document_id):
     if not _is_uuid(document_id):
         return _response(event, 400, {"error": "Invalid document id."})
+    # Destroys a guide and its chunks and vectors: audited in the same
+    # transaction, never run without a verified admin (finding f-c47d6990).
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
+    audit_target = {"document_id": document_id}
     with connection.cursor() as cur:
         cur.execute(
             "SELECT s3_key FROM guideline_documents WHERE id = %s::uuid",
@@ -399,7 +405,9 @@ def delete_document(event, connection, document_id):
         # chunks cascade from sources; guideline_sections cascade from the document.
         cur.execute("DELETE FROM sources WHERE url = %s", (guideline_source_url(document_id),))
         cur.execute("DELETE FROM guideline_documents WHERE id = %s::uuid", (document_id,))
+        insert_admin_audit(cur, actor, "guideline_document.delete", audit_target)
     connection.commit()
+    log_admin_audit(actor, "guideline_document.delete", audit_target)
     _delete_object_quietly(row[0])
     return _response(event, 200, {"id": document_id, "deleted": True})
 
@@ -452,6 +460,10 @@ def set_mode(event, body, connection):
     mode = (body or {}).get("mode")
     if mode not in MODES:
         return _response(event, 400, {"error": "Mode must be 'standard' or 'guideline'."})
+    # Switches prompting for every conversation: audited (finding f-c47d6990).
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     admin = _admin_email(event)
     with connection.cursor() as cur:
         cur.execute(
@@ -465,6 +477,7 @@ def set_mode(event, body, connection):
             """,
             (mode, admin),
         )
+        insert_admin_audit(cur, actor, "guideline.mode_set", {"mode": mode})
     connection.commit()
-    logger.info("Guideline prompt_mode set to %s", mode)
+    log_admin_audit(actor, "guideline.mode_set", {"mode": mode})
     return _response(event, 200, {"mode": mode})

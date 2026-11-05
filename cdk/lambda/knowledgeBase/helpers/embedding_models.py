@@ -2,7 +2,7 @@
 Resolve the Bedrock model id and invoke target for the embedding adapters this
 app can call.
 
-The catalog is the three providers in helpers/embeddings.py. Whether a model
+The catalog is the three providers in kc_shared/embeddings.py. Whether a model
 can be called, and the id or inference-profile ARN to send, comes from the
 Bedrock control plane in this region (`list_foundation_models` and
 `list_inference_profiles`). A model is callable when it is on demand here or
@@ -20,7 +20,7 @@ import logging
 import os
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from helpers import embeddings
+from kc_shared import embeddings
 
 logger = logging.getLogger()
 

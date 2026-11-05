@@ -5,6 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers.bedrock import format_context_for_prompt  # noqa: E402
 

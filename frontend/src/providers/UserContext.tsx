@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { UserContext } from "./user";
 import { DEMO_USER_ID, isDemoMode } from "@/lib/demo";
@@ -10,12 +10,15 @@ import {
   saveUserSession,
 } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
+import { GuestStartError, guestStartError, guestStartErrorFrom } from "@/lib/guestCreation";
 
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(isDemoMode ? DEMO_USER_ID : null);
   const [isLoading, setIsLoading] = useState(!isDemoMode);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<GuestStartError | null>(null);
+  // The effect's shared createUser, so retry joins any creation in flight.
+  const createUserRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -53,6 +56,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
       });
       return creating;
     };
+    createUserRef.current = createUser;
 
     const createUserOnce = async () => {
       try {
@@ -75,7 +79,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         });
 
         if (!response.ok) {
-          throw new Error("Failed to create user");
+          throw await guestStartError(response);
         }
 
         const data = await response.json();
@@ -93,8 +97,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
         });
 
         setUserId(id);
+        setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err : new Error("Failed to create user"));
+        console.error("Error creating user:", err);
+        setError(guestStartErrorFrom(err));
       } finally {
         setIsLoading(false);
       }
@@ -114,7 +120,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         // create a new user only if none valid
         await createUser();
       } catch (e) {
-        setError(e instanceof Error ? e : new Error("Failed to initialize user"));
+        setError(guestStartErrorFrom(e));
         setIsLoading(false);
       }
     };
@@ -132,8 +138,14 @@ export function UserProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(CREDENTIAL_REJECTED_EVENT, onCredentialRejected);
   }, []); // Only run once when the app starts
 
+  const retry = () => {
+    setError(null);
+    setIsLoading(true);
+    void createUserRef.current?.();
+  };
+
   return (
-    <UserContext.Provider value={{ userId, isLoading, error }}>
+    <UserContext.Provider value={{ userId, isLoading, error, retry }}>
       {children}
     </UserContext.Provider>
   );

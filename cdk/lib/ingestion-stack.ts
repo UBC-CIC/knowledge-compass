@@ -93,6 +93,9 @@ export class IngestionStack extends Stack {
     this.ingestSecurityGroup.addEgressRule(ec2.Peer.ipv4(vpcStack.vpcCidrString), ec2.Port.tcp(53), "DNS TCP fallback");
 
     // ── S3 ingest bucket (uploads, transcript outputs, Textract artifacts) ────
+    // DESTROY + autoDeleteObjects on purpose: uploaded content must not outlive the
+    // deployment. See "Ingest buckets are deleted with the stack" in
+    // Docs/SECURITY_OVERVIEW.md section 9.1 before changing this to RETAIN.
     const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -171,14 +174,10 @@ export class IngestionStack extends Stack {
         actions: ["bedrock:InvokeModel"],
         resources: embeddingModelArns,
       }));
-      // RDS IAM auth (DB_AUTH=iam in the containers). Scope to the app DB user.
-      // NOTE: dbi-resource-id is only known post-deploy; scope tightened during synth review.
-      role.addToPolicy(new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["rds-db:connect"],
-        resources: [`arn:aws:rds-db:${region}:${account}:dbuser:*/app_rw`],
-      }));
-      // Read the DB credentials secret (fallback path / bootstrap).
+      // No rds-db:connect (A-08). The containers reach the DB through RDS Proxy,
+      // which takes no IAM tokens, and process_crawler_batch.py forces
+      // DB_AUTH=secret on every RunTask. The secret below is the only DB credential.
+      // Read the DB credentials secret.
       db.secretPathUser.grantRead(role);
       // Logs.
       role.addToPolicy(new iam.PolicyStatement({
@@ -199,7 +198,8 @@ export class IngestionStack extends Stack {
     // Keep these env vars stable. Changing an ECS task definition replaces the
     // resource and updates KC-Ingestion's task-def ARN export, which CloudFormation
     // refuses while KC-Api still imports it. Secret DB auth is injected at RunTask
-    // time in process_crawler_batch.py (overrides DB_AUTH=iam below).
+    // time in process_crawler_batch.py (overrides DB_AUTH=iam below; the task
+    // roles have no rds-db:connect, so IAM auth would fail if the override were lost).
     const containerDbEnv: { [key: string]: string } = {
       DB_HOST: db.rdsProxyEndpoint,
       DB_NAME: "KC",
@@ -361,9 +361,11 @@ export class IngestionStack extends Stack {
         this.cluster.clusterArn,
       ],
     });
-    const tagTaskStatement = new iam.PolicyStatement({
+    // DescribeTasks: handle_ecs_task_stopped re-reads a stopped task's state
+    // from ECS instead of trusting the forwarded event.
+    const taskStatement = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ["ecs:TagResource"],
+      actions: ["ecs:TagResource", "ecs:DescribeTasks"],
       resources: [
         `arn:aws:ecs:${this.region}:${this.account}:task/${this.cluster.clusterName}/*`,
       ],
@@ -381,7 +383,7 @@ export class IngestionStack extends Stack {
     });
     if (principal.addToRolePolicy) {
       principal.addToRolePolicy(runTaskStatement);
-      principal.addToRolePolicy(tagTaskStatement);
+      principal.addToRolePolicy(taskStatement);
       principal.addToRolePolicy(passRoleStatement);
       principal.addToRolePolicy(
         new iam.PolicyStatement({

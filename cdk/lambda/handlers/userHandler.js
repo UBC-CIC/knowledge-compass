@@ -5,7 +5,7 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
-const { sanitizeString, validateUUID } = require("./utils/validation.js");
+const { parsePositiveInt, sanitizeString, validateUUID } = require("./utils/validation.js");
 const { toPublicMessage } = require("./utils/publicSources.js");
 const { resolveCaller } = require("./utils/callerIdentity.js");
 const {
@@ -263,25 +263,22 @@ exports.handler = async (event) => {
           break;
         }
 
-        // Validate chat session exists AND belongs to user
+        // The session must belong to the caller. Missing and foreign sessions
+        // get the same 404, so no guest can probe another family's session ids.
         const chatSession = await sqlConnection`
-          SELECT id, user_id
+          SELECT id
           FROM chat_sessions
-          WHERE id = ${chatSessionId}
+          WHERE id = ${chatSessionId} AND user_id = ${userId}
         `;
         if (chatSession.length === 0) {
           response.statusCode = 404;
           response.body = JSON.stringify({ error: "Chat session not found" });
           break;
         }
-        if (chatSession[0].user_id !== userId) {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "You can only access your own chat sessions" });
-          break;
-        }
 
-        const limit = Math.min(parseInt(event.queryStringParameters?.limit) || 200, 1000);
-        const offset = parseInt(event.queryStringParameters?.offset) || 0;
+        // Negative or junk values fall back to the defaults instead of reaching SQL.
+        const limit = parsePositiveInt(event.queryStringParameters?.limit, 200, 1000);
+        const offset = parsePositiveInt(event.queryStringParameters?.offset, 0);
 
         const rows = await sqlConnection`
           SELECT

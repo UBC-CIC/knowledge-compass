@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 # psycopg2 / aws_lambda_powertools are not installed locally; main only needs
 # get_db_connection, which every test patches.
@@ -28,7 +29,7 @@ if "helpers.db_connection" not in sys.modules:
 
 import main  # noqa: E402
 from helpers import chat  # noqa: E402
-from helpers.guardrail import ACTION_ANONYMIZED, ACTION_BLOCKED, ACTION_NONE  # noqa: E402
+from helpers.guardrail import ACTION_ANONYMIZED, ACTION_BLOCKED, ACTION_NONE, BLOCKED_INPUT_PLACEHOLDER  # noqa: E402
 
 USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11"
 SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99"
@@ -100,6 +101,26 @@ class MainGuardrailTests(unittest.TestCase):
         self.assertEqual(len(complete), 1)
         self.assertEqual(complete[0]["response"], DENIAL)
 
+    def test_blocked_message_is_stored_as_a_placeholder_not_raw_text(self):
+        # History is replayed into Bedrock unscreened on the next turn, so a
+        # blocked message must never be persisted verbatim.
+        with mock.patch.object(chat, "insert_message") as insert:
+            main.handler(make_event({"query": QUERY}))
+
+        user_rows = [c.args[3] for c in insert.call_args_list if c.args[2] == "user"]
+        self.assertEqual(user_rows, [BLOCKED_INPUT_PLACEHOLDER])
+        self.assertTrue(all(QUERY not in str(c) for c in insert.call_args_list))
+
+    def test_authorization_header_and_body_are_never_logged(self):
+        event = make_event({"query": QUERY})
+        event["headers"] = {"Authorization": "Bearer guest-access-token-secret"}
+        event["multiValueHeaders"] = {"Authorization": ["Bearer guest-access-token-secret"]}
+        with self.assertLogs(main.logger, level="INFO") as logs:
+            main.handler(event)
+        output = "\n".join(logs.output)
+        self.assertNotIn("guest-access-token-secret", output)
+        self.assertNotIn(QUERY, output)
+
     def test_guardrail_runs_without_the_flag(self):
         main.handler(make_event({"query": QUERY}))
 
@@ -158,6 +179,22 @@ class MainGuardrailTests(unittest.TestCase):
         self.prepare.assert_not_called()
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(json.loads(result["body"])["response"], DENIAL)
+
+    def test_websocket_request_streams(self):
+        get_response = mock.MagicMock(return_value={"response": "ok", "sources_used": [], "sessionId": SESSION})
+        with mock.patch.object(main, "get_response", get_response):
+            main.handler(make_event({"query": QUERY}))
+
+        self.assertTrue(callable(get_response.call_args.kwargs["stream_callback"]))
+
+    def test_rest_request_does_not_stream(self):
+        # No socket to stream to: no stream screening calls either.
+        get_response = mock.MagicMock(return_value={"response": "ok", "sources_used": [], "sessionId": SESSION})
+        with mock.patch.object(main, "get_response", get_response), \
+                mock.patch.object(main, "_get_ws_client", return_value=(None, None)):
+            main.handler(make_event({"query": QUERY}))
+
+        self.assertIsNone(get_response.call_args.kwargs["stream_callback"])
 
     def test_get_response_has_no_guardrail_bypass_parameter(self):
         self.assertNotIn("is_intro_message", inspect.signature(chat.get_response).parameters)

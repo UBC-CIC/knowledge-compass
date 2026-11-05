@@ -34,9 +34,10 @@ const historyEvent = (overrides = {}) => ({
 
 // Rows for the history route keyed on the SQL text.
 function historySql({ userExists = true, owner = USER, messages = [] } = {}) {
-  return fakeSql((text) => {
+  return fakeSql((text, values) => {
     if (text.startsWith("SELECT id FROM users")) return userExists ? [{ id: USER }] : [];
-    if (text.includes("FROM chat_sessions")) return owner ? [{ id: SESSION, user_id: owner }] : [];
+    // The ownership check filters on the caller (AND user_id = ?).
+    if (text.includes("FROM chat_sessions")) return owner && values.at(-1) === owner ? [{ id: SESSION }] : [];
     if (text.includes("FROM chat_messages")) return messages;
     return [];
   });
@@ -60,7 +61,9 @@ test("chat history returns 404 for unknown user or session", async () => {
 test("chat history refuses sessions owned by another user without reading messages", async () => {
   const sql = historySql({ owner: OTHER_USER });
   const res = await invoke(sql, historyEvent());
-  assert.equal(res.statusCode, 403);
+  assert.equal(res.statusCode, 404);
+  // A foreign session answers exactly like a missing one (no existence oracle).
+  assert.deepEqual(res, await invoke(historySql({ owner: null }), historyEvent()));
   assert.ok(!sql.queries().some((q) => q.text.includes("FROM chat_messages")));
 });
 
@@ -218,5 +221,15 @@ test("removed and unknown routes fail without leaking details", async () => {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource });
     assert.equal(res.statusCode, 500);
     assert.deepEqual(res.body, { error: "Internal server error" });
+  }
+});
+
+test("chat history ignores negative or junk pagination instead of failing (f-5290289f)", async () => {
+  for (const qs of [{ limit: "-1" }, { offset: "-5" }, { limit: "abc", offset: "x" }]) {
+    const sql = historySql();
+    const res = await invoke(sql, historyEvent({ queryStringParameters: qs }));
+    assert.equal(res.statusCode, 200, JSON.stringify(qs));
+    const page = sql.queries().find((q) => q.text.includes("FROM chat_messages"));
+    assert.ok(page.values.every((v) => typeof v !== "number" || v >= 0), JSON.stringify(page.values));
   }
 });

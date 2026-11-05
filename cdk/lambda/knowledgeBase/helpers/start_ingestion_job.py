@@ -8,7 +8,7 @@ from helpers.admin_user import (
     admin_sub_from_request,
     get_or_create_admin_user_id,
 )
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
 from helpers.process_crawler_batch import process_crawler_batch
 from helpers.process_document_batch import trigger_document_batch

@@ -31,7 +31,7 @@ import os
 
 import boto3
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 
 logger = logging.getLogger()
@@ -218,13 +218,23 @@ def handle_ecs_task_stopped(event, connection) -> dict:
     Successful tasks finalize the row themselves (completed/failed) before exit;
     this only catches crashes that never reached the DB.
     """
-    detail = event.get("detail") or {}
+    # The event reaches this Lambda with no authorization check, so only the
+    # task ARN is taken from it; the task's state is read back from ECS in this
+    # deployment's cluster.
+    task_arn = (event.get("detail") or {}).get("taskArn")
+    if not isinstance(task_arn, str) or not task_arn:
+        return {"ignored": True, "reason": "missing_task_arn"}
+
+    try:
+        described = ecs_client.describe_tasks(cluster=ECS_CLUSTER_ARN, tasks=[task_arn]).get("tasks") or []
+    except Exception:
+        logger.exception("Could not describe ECS task %s", task_arn)
+        return {"ignored": True, "reason": "describe_failed", "task_arn": task_arn}
+    if not described:
+        return {"ignored": True, "reason": "unknown_task", "task_arn": task_arn}
+    detail = described[0]
     if (detail.get("lastStatus") or "").upper() != "STOPPED":
         return {"ignored": True, "reason": "not_stopped"}
-
-    task_arn = detail.get("taskArn")
-    if not task_arn:
-        return {"ignored": True, "reason": "missing_task_arn"}
 
     stopped_reason = detail.get("stoppedReason") or "ECS task stopped"
     container_bits = []

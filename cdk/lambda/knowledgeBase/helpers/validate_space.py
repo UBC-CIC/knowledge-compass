@@ -19,8 +19,8 @@ only; never chunk text or query text):
 
 On a pass the space moves building -> validated (validated stays validated). On a fail
 the status is unchanged and the report is kept on the job. The golden set is the
-synthetic helpers/golden_queries.json (a byte-identical copy of the textGeneration
-eval file; tests/test_shared_module_parity.py keeps them equal).
+synthetic kc_shared/golden_queries.json from the shared layer (the same file the
+textGeneration eval runs against).
 
 `run_validation` is the reusable core; helpers/cutover.py calls it again right before the
 pointer flips.
@@ -31,7 +31,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from helpers import embeddings, eval_scoring, retrieval_core
+from kc_shared import embeddings, eval_scoring, retrieval_core
 from helpers.embedding_jobs import (
     TERMINAL_STATUSES,
     error_summary,
@@ -46,7 +46,7 @@ from helpers.embedding_space import fetch_space
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-GOLDEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden_queries.json")
+GOLDEN_PATH = os.path.join(os.path.dirname(os.path.abspath(eval_scoring.__file__)), "golden_queries.json")
 K_VALUES = (5, 15)
 NUM_RESULTS = max(K_VALUES)
 DEFAULT_TOLERANCE = 0.05

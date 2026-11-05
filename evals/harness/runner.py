@@ -4,6 +4,7 @@ anonymous user per probe/journey, strictly sequentially (concurrency 1).
 
 Results go to evals/results/<run_id>/:
   probes/<story_id>.json            single-message routing probes
+  guardrails/<case_id>.json         F13 topic-scope cases (guardrails command)
   journeys/<story_id>_<mode>.json   multi-turn transcripts
   run.json                          run manifest (settings, selection, cleanup)
 
@@ -21,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from evals.guardrail_cases import GuardrailCase
 from evals.harness.client import ApiClient, ApiError, EvalUser, TurnResult
 from evals.harness.signing import SigningKeyProvider, make_tag
 from evals.harness.simulator import ParentSimulator
@@ -203,6 +205,26 @@ class Runner:
         }
         _write_json(self.out / "probes" / f"{scenario.story_id}.json", out)
         return out
+
+    # -- guardrail cases (F13) -------------------------------------
+
+    def run_guardrail_case(self, case: GuardrailCase) -> Dict[str, Any]:
+        """One message in a fresh standard-mode session; records the reply for review."""
+        record: Dict[str, Any] = {
+            "run_id": self.config.run_id, "case_id": case.id, "category": case.category,
+            "expected": case.expected, "description": case.description, "expectations": case.expectations,
+            "message": case.message, "mode": "standard", "started_at": _now(),
+        }
+        user = self._new_user()
+        session_id = self._new_session(user, "standard", f"eval guardrail {case.id}")
+        try:
+            with self.client.chat(user) as chat:
+                result = chat.send(session_id, case.message)
+            record.update(self._turn_record(0, case.message, result, {}))
+        finally:
+            record["cleaned_up"] = self._cleanup(user, session_id)
+            _write_json(self.out / "guardrails" / f"{case.id}.json", record)
+        return record
 
     # -- journeys --------------------------------------------------
 

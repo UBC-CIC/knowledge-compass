@@ -21,9 +21,9 @@ export interface SpaConnectOrigins {
 /**
  * Security headers for every file Amplify serves (finding F12 / M6).
  *
- * The CSP ships as Content-Security-Policy-Report-Only first (decision D8):
- * violations show in the browser console without blocking anything. Once a
- * dev deploy shows none, rename the header to Content-Security-Policy.
+ * The CSP is enforced (finding f-9ff3f181). It first shipped as
+ * Content-Security-Policy-Report-Only (decision D8); if a change ever needs a
+ * new source, add it here rather than reverting to Report-Only.
  *
  * - script-src 'self': Vite emits only same-origin module scripts.
  * - style-src 'unsafe-inline': Radix Dialog/Select inject <style> tags
@@ -62,7 +62,7 @@ export function spaSecurityHeaders(origins: SpaConnectOrigins): Record<string, s
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-    "Content-Security-Policy-Report-Only": csp,
+    "Content-Security-Policy": csp,
   };
 }
 

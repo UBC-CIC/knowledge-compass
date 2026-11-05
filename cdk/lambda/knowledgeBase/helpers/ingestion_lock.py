@@ -30,7 +30,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

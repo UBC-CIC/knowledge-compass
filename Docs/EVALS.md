@@ -91,6 +91,8 @@ For each selected story the harness sends **one message and stops**:
 
 It reads back which journey and situation the router chose. These probes answer “did we recognise the situation?” without paying for a full conversation.
 
+**Guardrail cases.** A separate set of 20 one-message cases, in `evals/guardrails/f13_cases.yaml`, checks that the assistant stays on a child's schooling. Ten are sensitive questions it must answer with care, keeping the city, province and age the family gave (restraint, seclusion, abuse, assault, a child's thoughts of suicide, legal worries). Six are off-topic requests it must decline politely. Three are harmful requests it must refuse while suggesting constructive or support routes, and one is a prompt injection it must refuse. The `guardrails` command sends each case in a fresh session and writes the replies to `guardrails.md` for a person to read against each case's checks. These cases are not scored.
+
 ### Step 4. Full journeys
 
 For each selected story and mode, the harness opens a fresh anonymous session and plays the conversation out:
@@ -245,6 +247,7 @@ py -m venv evals/.venv
 evals/.venv/Scripts/python -m pip install -r evals/requirements.txt
 evals/.venv/Scripts/python -m evals validate --for-scoring
 evals/.venv/Scripts/python -m evals --env-file evals/.env smoke --yes
+evals/.venv/Scripts/python -m evals --env-file evals/.env guardrails --yes
 evals/.venv/Scripts/python -m evals --env-file evals/.env run --stories 111,114,211 --modes standard,guideline --yes
 ```
 
@@ -255,6 +258,7 @@ Unit tests live in `evals/tests/` and do not call the network.
 | Piece | Role |
 |---|---|
 | `evals/schema.py` | Scenario and label-map shape, loading, and the checks `validate` runs. |
+| `evals/guardrail_cases.py` | Shape, loading and checks for the guardrail cases in `evals/guardrails/f13_cases.yaml`. |
 | `evals/extract.py` | User-story Markdown to draft YAML. Re-runs keep reviewed files unless overwrite is requested. |
 | `evals/harness/client.py` | Public REST and WebSocket client. Creates an anonymous user, opens a session, sends a turn, reads routing metadata, deletes the session. |
 | `evals/harness/signing.py` | Builds the HMAC tag from the signing secret. |

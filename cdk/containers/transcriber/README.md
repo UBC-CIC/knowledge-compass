@@ -12,7 +12,7 @@
 1. Reads `results.audio_segments` from an **AWS Transcribe job output JSON** (produced from a video file)
 2. Converts float-second timestamps to `HH:MM:SS.mmm` format
 3. Chunks segments by word count or **semantic similarity** (topic boundary detection)
-4. Embeds each chunk via **Cohere embed-english-v3** through Amazon Bedrock
+4. Embeds each chunk through Amazon Bedrock with the model of the **active embedding space** (read from the database)
 5. Writes to the unified **`sources` + `chunks`** tables in RDS PostgreSQL with timestamp metadata for deep-linking into the video
 
 ---
@@ -84,7 +84,7 @@ python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Vid
 
 **Default (fixed-size with overlap):** accumulate segments up to `max_words`, carry last `overlap` segments into the next chunk.
 
-**Semantic (`--semantic`):** embed all segment texts in one batched Cohere call, find cosine similarity drops between adjacent segments (topic changes), group segments between boundaries into chunks. `max_words` enforced as hard cap.
+**Semantic (`--semantic`):** embed all segment texts in one batched embedding call, find cosine similarity drops between adjacent segments (topic changes), group segments between boundaries into chunks. `max_words` enforced as hard cap.
 
 `embed_text` (what gets embedded) = `"Video: {name}\n[HH:MM:SS - HH:MM:SS]\n\nbody text"` — the title + timestamp prefix ensures the embedding captures which video and where in it the content appears.
 
@@ -92,9 +92,9 @@ python transcrbe.py asrOutput.json "https://youtube.com/watch?v=..." --name "Vid
 
 ## DB Write Details
 
-One video → one `sources` row (`source_type='video'`, `url=youtube_url`).
+One video → one `sources` row (`source_type='video'`, `url=video_url`).
 Each chunk → one `chunks` row with:
-- `embedding vector(1024)`
+- one `chunk_embeddings` row holding its vector in the active embedding space
 - `metadata = {"chunk_start": "00:01:23.000", "chunk_end": "00:03:45.000"}` — used for deep-linking
 - `content_hash` for change detection on re-ingest
 
@@ -102,14 +102,8 @@ Each chunk → one `chunks` row with:
 
 ## How to Generate the Transcribe JSON
 
-```
-Admin uploads video file (mp4, mov, webm, etc.) to S3
-    → AWS Console or CLI: start a Transcribe job pointing at the S3 file
-    → Transcribe outputs JSON to a specified S3 output bucket
-    → Download the JSON and pass it to transcrbe.py
-```
+Local testing only: production starts Transcribe automatically (see [Production Flow](#production-flow)). To get a JSON to pass to `transcrbe.py`:
 
-AWS CLI example:
 ```bash
 # Start job
 aws transcribe start-transcription-job \
@@ -125,33 +119,29 @@ aws s3 cp s3://my-output-bucket/my-job.json ./asrOutput.json
 
 ---
 
-## Production Automation Architecture
+## Production Flow
 
 ```
-Admin uploads video + provides source URL (frontend)
+Admin uploads a video or audio file (presigned URL) and stages it with a public video_url
          │
          ▼
-S3 PutObject event → EventBridge rule
+lambdaKnowledgeBase (helpers/video_transcription.py)
+  - Starts an Amazon Transcribe job on the upload; output goes to transcripts/ in the ingest bucket
+  - Records transcribe_job_name on the data source; the ingestion run stays pending
          │
          ▼
-Lambda (ingestion trigger)
-  - Starts Transcribe job pointing at uploaded video
-  - INSERT INTO ingestion_jobs (source_url, status='transcribing') → job_id to frontend
+Transcribe completes → EventBridge rule → transcribeRelay Lambda → lambdaKnowledgeBase
+  - FAILED: the run is marked failed
+  - COMPLETED: launches the transcriber ECS task with JOB_ID, TRANSCRIPT_JSON,
+    VIDEO_URL and VIDEO_NAME (deferred to the next Sync now during an embedding cutover)
          │
          ▼
-Transcribe completes → EventBridge completion event
-         │
-         ▼
-Lambda (embedding trigger)
-  - Downloads Transcribe JSON from S3
-  - Runs transcrbe.py logic (chunking + embedding + DB write)
-  - UPDATE ingestion_jobs SET status='completed' WHERE id=job_id
+transcrbe.py (this container)
+  - Reads the Transcribe JSON from S3, chunks, embeds, writes sources/chunks/chunk_embeddings
+  - Marks the ingestion run completed or failed
 ```
 
-The two Lambdas can be the same function with different event triggers, or separate functions — both are small enough to run within Lambda's timeout.
-
-**IAM role requirements:**
-- `transcribe:StartTranscriptionJob`, `transcribe:GetTranscriptionJob`
-- `s3:GetObject` (Transcribe output bucket), `s3:PutObject` (video upload bucket)
-- `bedrock:InvokeModel` (Cohere embed)
-- `rds-db:connect` (IAM auth to RDS)
+**Permissions** (`cdk/lib/ingestion-stack.ts`):
+- Transcriber task role: `bedrock:InvokeModel` on the embedding models the spaces can use, read access to the ingest bucket and to the database secret. In ECS, `DB_AUTH=secret` is set on every `RunTask`; there is no `rds-db:connect`
+- Transcribe data access role: read/write on the ingest bucket
+- `lambdaKnowledgeBase`: starts Transcribe jobs and passes the data access role

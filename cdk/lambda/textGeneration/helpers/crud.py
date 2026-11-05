@@ -10,6 +10,13 @@ from helpers.prompt_data import MAX_GUIDE_LABEL_CHARS, guide_state_key
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Conversation history sent to the model on every turn: at most this many
+# recent messages, and at most this many characters in total (finding A-06).
+# A normal 20-message window fits; a session grown on purpose cannot inflate
+# input tokens on every turn. The new question is not counted.
+HISTORY_MESSAGES = 20
+MAX_HISTORY_CHARS = 30_000
+
 def get_exchange_count(chat_session_id: str, db_connection) -> int:
     """
     Counts the number of exchanges (User + AI pairs) in a session.
@@ -33,7 +40,8 @@ def fetch_recent_messages(
     Fetch the most recent messages for a chat session, returned oldest->newest.
 
     The inner query selects the latest N messages (DESC + LIMIT); the outer
-    query restores chronological order for the Bedrock conversation.
+    query restores chronological order for the Bedrock conversation. Older
+    messages are then dropped until the rest fit in MAX_HISTORY_CHARS.
     """
     with db_connection.cursor() as cur:
         cur.execute(
@@ -48,7 +56,7 @@ def fetch_recent_messages(
             ) AS recent
             ORDER BY created_at ASC
             """,
-            (chat_session_id, 20)
+            (chat_session_id, HISTORY_MESSAGES)
         )
         rows = cur.fetchall()
 
@@ -59,6 +67,20 @@ def fetch_recent_messages(
             "content": content,
             "created_at": created_at.isoformat() if created_at else None
         })
+
+    # Keep the newest messages that fit in the character budget; stop at the
+    # first one that does not, so the kept history stays contiguous.
+    kept_chars = 0
+    first_kept = len(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        size = len(messages[i]["content"] or "")
+        if kept_chars + size > MAX_HISTORY_CHARS:
+            break
+        kept_chars += size
+        first_kept = i
+    if first_kept:
+        logger.info("History capped: dropped %d of %d messages", first_kept, len(messages))
+        messages = messages[first_kept:]
 
     # Bedrock Converse requires the conversation to start with a user turn.
     # A sliding window can begin on an AI message, so drop any leading ones.

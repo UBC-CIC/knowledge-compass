@@ -75,8 +75,8 @@ const subFrom = (attributes) =>
   (attributes || []).find((a) => a.Name === "sub")?.Value || null;
 
 /**
- * Create the Cognito user, or find the existing one, and put it in the admin
- * group. Returns { sub, cognito: "created" | "existing" }.
+ * Create the Cognito user, or find the existing one. It is not an admin yet:
+ * see addToAdminGroup. Returns { sub, cognito: "created" | "existing" }.
  */
 async function provisionCognitoAdmin(email) {
   if (!cognito) cognito = new CognitoIdentityProviderClient({});
@@ -106,11 +106,19 @@ async function provisionCognitoAdmin(email) {
     sub = subFrom(existing?.UserAttributes);
   }
   if (!sub) throw new Error("Cognito user has no sub");
-
-  await cognito.send(
-    new AdminAddUserToGroupCommand({ UserPoolId, Username: email, GroupName: ADMIN_GROUP })
-  );
   return { sub, cognito: status };
+}
+
+/**
+ * Grant admin: group membership is what the admin authorizer checks. Called
+ * only after the admin_audit row has committed (finding f-59c36519), so no
+ * account becomes an admin without a record; if this fails the request is a
+ * 500 and a retry is idempotent.
+ */
+async function addToAdminGroup(email) {
+  await cognito.send(
+    new AdminAddUserToGroupCommand({ UserPoolId: process.env.USER_POOL_ID, Username: email, GroupName: ADMIN_GROUP })
+  );
 }
 
 const respond = (response, statusCode, body) => {
@@ -197,6 +205,7 @@ exports.handler = async (event) => {
       },
     });
     logAdminAudit(createAudit);
+    await addToAdminGroup(email);
 
     respond(response, provisioned.cognito === "created" ? 201 : 200, {
       id: row.id,

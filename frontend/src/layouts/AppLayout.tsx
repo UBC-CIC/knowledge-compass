@@ -12,7 +12,9 @@ export default function AppLayout() {
         className={
           isAdminRoute
             ? "flex min-h-screen flex-col bg-muted font-sans"
-            : "flex h-screen flex-col overflow-hidden bg-background font-sans"
+            : // dvh, not vh: on phones 100vh includes the area behind the browser
+              // toolbar, which pushed the chat input below the visible screen.
+              "flex h-dvh flex-col overflow-hidden bg-background font-sans"
         }
       >
         {isDemoMode ? (
@@ -20,7 +22,10 @@ export default function AppLayout() {
             <span className="font-semibold text-secondary-foreground">
               Local demo
             </span>
-            <Link className="font-semibold text-primary underline-offset-2 hover:underline" to="/">
+            <Link
+              className="font-semibold text-primary underline-offset-2 hover:underline"
+              to="/"
+            >
               Conversation
             </Link>
             <Link
@@ -36,7 +41,8 @@ export default function AppLayout() {
               Admin dashboard
             </Link>
             <span className="text-foreground/75">
-              Typing and page clicks work here. Not connected to the live assistant.
+              Typing and page clicks work here. Not connected to the live
+              assistant.
             </span>
           </div>
         ) : null}

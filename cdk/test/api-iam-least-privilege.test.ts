@@ -20,6 +20,7 @@ type Resources = Record<string, any>;
 const env = { account: "111111111111", region: "ca-central-1" };
 
 let resources: Resources;
+let ingestionResources: Resources;
 
 const SPLIT_FUNCTIONS = [
   "adminLambdaAuthorizer",
@@ -28,8 +29,9 @@ const SPLIT_FUNCTIONS = [
   "lambdaTextGen",
   "lambdaKnowledgeBase",
   "chatSessionFunction",
+  "systemMessagesFunction",
+  "adminFunction",
 ];
-const SHARED_FUNCTIONS = ["systemMessagesFunction", "adminFunction"];
 const WEBSOCKET_FUNCTION_NAMES = ["KC-Api-ConnectFunction", "KC-Api-DisconnectFunction", "KC-Api-DefaultFunction"];
 const COGNITO_TRIGGER_NAMES = ["KC-Api-addMemberOnSignUp", "KC-Api-preSignupLambda"];
 
@@ -83,6 +85,7 @@ beforeAll(() => {
     enableReservedConcurrency: false,
   });
   resources = Template.fromStack(apiStack).toJSON().Resources;
+  ingestionResources = Template.fromStack(ingestionStack).toJSON().Resources;
 });
 
 const roleOf = (fnId: string): string => resources[fnId].Properties.Role["Fn::GetAtt"][0];
@@ -190,21 +193,21 @@ describe("API Lambda IAM least privilege", () => {
     expect(cognitoStatements[0].Resource).toEqual({ "Fn::GetAtt": [poolId, "Arn"] });
   });
 
-  test("authorizers, userFunction, text generation, knowledge base and chat sessions have their own roles", () => {
-    const shared = new Set(SHARED_FUNCTIONS.map(roleOf));
-    expect(shared.size).toBe(1);
-    const sharedRole = [...shared][0];
+  test("every request-handling function has its own role (no shared role, A-07)", () => {
     const splitRoles = SPLIT_FUNCTIONS.map(roleOf);
     expect(new Set(splitRoles).size).toBe(SPLIT_FUNCTIONS.length);
-    expect(splitRoles).not.toContain(sharedRole);
-    const onShared = Object.entries(resources)
-      .filter(([, r]) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === sharedRole)
-      .map(([id]) => id)
-      .sort();
-    expect(onShared).toEqual([...SHARED_FUNCTIONS].sort());
+    for (const roleId of splitRoles) {
+      const users = Object.values(resources).filter(
+        (r) => r.Type === "AWS::Lambda::Function" && r.Properties.Role["Fn::GetAtt"]?.[0] === roleId
+      );
+      expect(users).toHaveLength(1);
+    }
+    expect(Object.values(resources).some(
+      (r) => r.Type === "AWS::IAM::Role" && r.Properties.RoleName === "KC-Api-postgresLambdaRole"
+    )).toBe(false);
   });
 
-  test("authorizer, public-token and chat session roles hold only secret/SSM/X-Ray reads", () => {
+  test("authorizer, public-token, chat session, system messages and admin roles hold only secret/SSM/X-Ray reads", () => {
     const allowed = new Set([
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
@@ -221,6 +224,8 @@ describe("API Lambda IAM least privilege", () => {
       userFunction: "AWSLambdaVPCAccessExecutionRole",
       // Also where the eval signing-secret read lands when enableEval is on (f-7277748f).
       chatSessionFunction: "AWSLambdaVPCAccessExecutionRole",
+      systemMessagesFunction: "AWSLambdaVPCAccessExecutionRole",
+      adminFunction: "AWSLambdaVPCAccessExecutionRole",
     };
     for (const [fnId, policyName] of Object.entries(managed)) {
       const roleId = roleOf(fnId);
@@ -280,7 +285,7 @@ describe("API Lambda IAM least privilege", () => {
     );
     expect(boundaries).toHaveLength(1);
     const [boundaryId, boundary] = boundaries[0];
-    const fnIds = [...SPLIT_FUNCTIONS, ...SHARED_FUNCTIONS, ...WEBSOCKET_FUNCTION_NAMES.map(fnIdByName)];
+    const fnIds = [...SPLIT_FUNCTIONS, ...WEBSOCKET_FUNCTION_NAMES.map(fnIdByName)];
     for (const fnId of fnIds) {
       expect(resources[roleOf(fnId)].Properties.PermissionsBoundary).toEqual({ Ref: boundaryId });
     }
@@ -331,19 +336,34 @@ describe("API Lambda IAM least privilege", () => {
     for (const { roles } of invokers) expect(roles).toEqual([kbRole]);
   });
 
-  test("the worker invoke secret is readable only by the knowledge base role and wired to it", () => {
+  test("the worker invoke secret is readable only by the knowledge base role (and its rotation) and wired to it", () => {
     const secretId = workerInvokeSecretId();
+    const rotationRole = roleOf(fnIdByName("KC-Api-AppSecretRotation"));
     const readers = policyStatements().filter(({ statement }) =>
       JSON.stringify(statement.Resource ?? "").includes(`"Ref":"${secretId}"`)
     );
     expect(readers.length).toBeGreaterThan(0);
-    for (const { roles, statement } of readers) {
+    const kbReaders = readers.filter(({ roles }) => roles[0] !== rotationRole);
+    expect(kbReaders.length).toBeGreaterThan(0);
+    for (const { roles, statement } of kbReaders) {
       expect(roles).toEqual([roleOf("lambdaKnowledgeBase")]);
       expect([statement.Action].flat()).toContain("secretsmanager:GetSecretValue");
+    }
+    for (const { roles } of readers.filter(({ roles }) => roles[0] === rotationRole)) {
+      expect(roles).toEqual([rotationRole]);
     }
     expect(resources.lambdaKnowledgeBase.Properties.Environment.Variables.WORKER_INVOKE_SECRET_ARN).toEqual({
       Ref: secretId,
     });
+  });
+
+  test("the app client cannot write the email attribute (f-eb536a80)", () => {
+    const clients = Object.values(resources).filter((r: any) => r.Type === "AWS::Cognito::UserPoolClient") as any[];
+    expect(clients).toHaveLength(1);
+    const writable = clients[0].Properties.WriteAttributes;
+    // Unset or empty would leave every attribute writable.
+    expect(Array.isArray(writable) && writable.length > 0).toBe(true);
+    expect(writable).not.toContain("email");
   });
 
   test("the admin user pool requires TOTP MFA and keeps its logical ID", () => {
@@ -456,6 +476,12 @@ describe("API Lambda IAM least privilege", () => {
     }
   });
 
+  // Finding A-10: the console test-invoke stage bypasses the authorizers.
+  test("no Lambda may be invoked from the API Gateway test-invoke stage", () => {
+    const perms = Object.values(resources).filter((r: any) => r.Type === "AWS::Lambda::Permission");
+    expect(JSON.stringify(perms)).not.toContain("test-invoke-stage");
+  });
+
   test("no intra-stack dependency cycle", () => {
     const ids = new Set(Object.keys(resources));
     const refs = (node: any, out: Set<string>): Set<string> => {
@@ -538,5 +564,190 @@ describe("Bedrock guardrail policy", () => {
     const versions = Object.entries(resources).filter(([, r]: [string, any]) => r.Type === "AWS::Bedrock::GuardrailVersion");
     expect(versions).toHaveLength(1);
     expect(versions[0][0]).toMatch(/^InputGuardrailVersion/);
+  });
+});
+
+// Finding A-02: the Bedrock invoke grant names this account and the regions
+// the calls actually use, not any region or account.
+describe("Bedrock invoke scope", () => {
+  const invokeResources = (fnId: string): string[] =>
+    statementsFor(roleOf(fnId))
+      .filter((s) => s.Effect === "Allow" && [s.Action].flat().includes("bedrock:Converse"))
+      .flatMap((s) => [s.Resource].flat());
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s: inference profiles are pinned to this region and account", (fnId) => {
+    const profiles = invokeResources(fnId).filter((r) => r.includes(":inference-profile/"));
+    expect(profiles.length).toBeGreaterThan(0);
+    for (const arn of profiles) {
+      expect(arn.startsWith(`arn:aws:bedrock:${env.region}:${env.account}:inference-profile/`)).toBe(true);
+    }
+  });
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s: Haiku 5.5 is granted only via this account's us. profile and its destination regions", (fnId) => {
+    const haiku = invokeResources(fnId).filter((r) => r.includes("claude-haiku-5-5")).sort();
+    expect(haiku).toEqual([
+      `arn:aws:bedrock:${env.region}:${env.account}:inference-profile/us.anthropic.claude-haiku-5-5`,
+      ...["ca-central-1", "us-east-1", "us-east-2", "us-west-2"].map(
+        (r) => `arn:aws:bedrock:${r}::foundation-model/anthropic.claude-haiku-5-5`,
+      ),
+    ].sort());
+  });
+
+  test("no Claude model other than Haiku 5.5 is invokable", () => {
+    for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
+      const claude = invokeResources(fnId).filter((r) => r.includes("anthropic.claude"));
+      expect(claude.every((r) => r.includes("claude-haiku-5-5"))).toBe(true);
+    }
+  });
+});
+
+// Finding A-12: only the functions that call the WebSocket management API may, and
+// only on the WebSocket stage.
+describe("WebSocket ManageConnections scope", () => {
+  const manageConnectionsResources = (roleId: string): string[] =>
+    statementsFor(roleId)
+      .filter((s) => s.Effect === "Allow" && [s.Action].flat().includes("execute-api:ManageConnections"))
+      .flatMap((s) => [s.Resource].flat())
+      .map((r) => JSON.stringify(r));
+
+  test("only text gen and $default hold ManageConnections", () => {
+    const holders = allRoleIds().filter((id) => manageConnectionsResources(id).length > 0);
+    expect(holders.sort()).toEqual(
+      [roleOf("lambdaTextGen"), roleOf(fnIdByName("KC-Api-DefaultFunction"))].sort()
+    );
+  });
+
+  test("connect and disconnect hold no ManageConnections", () => {
+    for (const name of ["KC-Api-ConnectFunction", "KC-Api-DisconnectFunction"]) {
+      expect(allowActionsFor(roleOf(fnIdByName(name)))).not.toContain("execute-api:ManageConnections");
+    }
+  });
+
+  test("text gen may only POST to connections on the WebSocket stage in this account", () => {
+    const res = manageConnectionsResources(roleOf("lambdaTextGen"));
+    expect(res).toHaveLength(1);
+    expect(res[0]).toContain(`:${env.account}:*/prod/POST/@connections/*`);
+    expect(res[0]).toContain(env.region);
+  });
+
+  test("$default is pinned to this WebSocket API's id and stage", () => {
+    const res = manageConnectionsResources(roleOf(fnIdByName("KC-Api-DefaultFunction")));
+    expect(res).toHaveLength(2);
+    for (const r of res) {
+      expect(r).toContain("ChatWebSocketApi");
+      expect(r).toMatch(/\/prod\/(POST|DELETE)\/@connections\/\*/);
+    }
+  });
+});
+
+// Finding A-08: the ingestion tasks authenticate to the DB with the Secrets Manager
+// credential (RDS Proxy takes no IAM tokens), so their roles get no rds-db:connect.
+describe("Ingestion task DB access", () => {
+  const taskRoleIds = () =>
+    Object.entries(ingestionResources)
+      .filter(([id, r]) => r.Type === "AWS::IAM::Role" && /TaskRole/.test(id) && !/Execution/.test(id))
+      .map(([id]) => id);
+
+  test("no ingestion role is granted rds-db:connect", () => {
+    const actions = Object.values(ingestionResources)
+      .filter((r) => r.Type === "AWS::IAM::Policy")
+      .flatMap((r) => r.Properties.PolicyDocument.Statement)
+      .flatMap((s: any) => [s.Action].flat());
+    expect(actions).not.toContain("rds-db:connect");
+  });
+
+  test("the crawler and transcriber task roles can still read the DB secret", () => {
+    const ids = taskRoleIds();
+    expect(ids).toHaveLength(2);
+    for (const id of ids) {
+      const actions = Object.values(ingestionResources)
+        .filter((p) => p.Type === "AWS::IAM::Policy" && (p.Properties.Roles || []).some((x: any) => x.Ref === id))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .flatMap((s: any) => [s.Action].flat());
+      expect(actions).toContain("secretsmanager:GetSecretValue");
+    }
+  });
+});
+
+// Finding A-15: lost knowledge base worker invocations raise an alarm. The worker
+// payload carries the invoke token, so no queue or destination stores it.
+describe("Knowledge base async failures", () => {
+  test("dropped async invocations alarm to the ops topic", () => {
+    const alarms = Object.values(resources).filter(
+      (r) => r.Type === "AWS::CloudWatch::Alarm" && r.Properties.MetricName === "AsyncEventsDropped"
+    );
+    expect(alarms).toHaveLength(1);
+    const p = alarms[0].Properties;
+    expect(p.Namespace).toBe("AWS/Lambda");
+    expect(JSON.stringify(p.Dimensions)).toContain("lambdaKnowledgeBase");
+    expect(p.Statistic).toBe("Sum");
+    expect(p.Threshold).toBe(0);
+    expect(p.ComparisonOperator).toBe("GreaterThanThreshold");
+    expect(p.AlarmActions).toHaveLength(1);
+  });
+
+  test("no async invoke config sends payloads (and the invoke token) to a destination", () => {
+    const configs = Object.values(resources).filter((r) => r.Type === "AWS::Lambda::EventInvokeConfig");
+    for (const c of configs) {
+      expect(c.Properties.DestinationConfig).toBeUndefined();
+    }
+    const kb = resources["lambdaKnowledgeBase"].Properties;
+    expect(kb.DeadLetterConfig).toBeUndefined();
+  });
+});
+
+// Finding A-13: the two Python Lambdas import shared code from one layer, not copies.
+describe("Shared Python layer", () => {
+  const sharedLayerId = () => {
+    const ids = Object.entries(resources)
+      .filter(([id, r]) => r.Type === "AWS::Lambda::LayerVersion" && id.startsWith("sharedPythonLayer"))
+      .map(([id]) => id);
+    expect(ids).toHaveLength(1);
+    return ids[0];
+  };
+
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s loads the kc_shared layer", (fnId) => {
+    expect(resources[fnId].Properties.Layers).toContainEqual({ Ref: sharedLayerId() });
+  });
+
+  test("the layer targets the Python runtime the functions use", () => {
+    const layer = resources[sharedLayerId()].Properties;
+    expect(layer.CompatibleRuntimes).toEqual(["python3.12"]);
+    for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
+      expect(resources[fnId].Properties.Runtime).toBe("python3.12");
+    }
+  });
+});
+
+describe("Application secret rotation (f-440374a2)", () => {
+  const schedules = () =>
+    Object.values(resources).filter((r: any) => r.Type === "AWS::SecretsManager::RotationSchedule") as any[];
+
+  test("the JWT secret and worker invoke token rotate every 90 days, never on deploy", () => {
+    const rotated = schedules().map((s) => JSON.stringify(s.Properties.SecretId));
+    expect(rotated.some((id) => id.includes("JwtSecret"))).toBe(true);
+    expect(rotated.some((id) => id.includes("WorkerInvokeSecret"))).toBe(true);
+    for (const schedule of schedules()) {
+      expect(schedule.Properties.RotationRules.ScheduleExpression).toBe("rate(90 days)");
+      expect(schedule.Properties.RotateImmediatelyOnUpdate).toBe(false);
+      expect(JSON.stringify(schedule.Properties.RotationLambdaARN)).toContain(fnIdByName("KC-Api-AppSecretRotation"));
+    }
+  });
+
+  test("the rotation function's role touches only Secrets Manager", () => {
+    const roleId = roleOf(fnIdByName("KC-Api-AppSecretRotation"));
+    for (const action of allowActionsFor(roleId)) expect(action).toMatch(/^secretsmanager:/);
+  });
+});
+
+describe("CORS allow-list seed (f-9ff3f181)", () => {
+  test("a fresh deploy trusts no browser origin until the SPA origin is written", () => {
+    const seeds = Object.values(resources).filter(
+      (r: any) => r.Type === "Custom::AWS" && JSON.stringify(r.Properties.Create ?? "").includes("/API/AllowedOrigins")
+    ) as any[];
+    expect(seeds).toHaveLength(1);
+    const create = JSON.stringify(seeds[0].Properties.Create);
+    expect(create).toContain("https://origin-not-configured.invalid");
+    expect(create).not.toContain("localhost");
   });
 });

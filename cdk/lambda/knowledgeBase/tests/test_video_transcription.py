@@ -73,6 +73,11 @@ class TranscribeCompleteLockTest(unittest.TestCase):
                                     return_value={"ingestion_run_id": RUN_ID, "ecs_task_arn": "arn"})
         self.launch = patcher.start()
         self.addCleanup(patcher.stop)
+        self.get_job = mock.patch.object(
+            vt.transcribe_client, "get_transcription_job",
+            return_value={"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}},
+        ).start()
+        self.addCleanup(mock.patch.stopall)
 
     def test_cutover_defers_the_run_instead_of_launching(self):
         for run_status in ("pending", "queued"):
@@ -101,6 +106,38 @@ class TranscribeCompleteLockTest(unittest.TestCase):
         after_check = conn.log[conn.log.index(check[0]):]
         self.assertNotIn("commit", [kind for kind, _, _ in after_check])
         self.assertIn("'queued'::ingestion_status", conn.statements("UPDATE ingestion_runs")[0][1])
+
+
+class TranscribeEventIsNotTrustedTest(unittest.TestCase):
+    """The event is unauthenticated: status comes from Transcribe, not the payload."""
+
+    def setUp(self):
+        self.launch = mock.patch.object(vt, "launch_transcriber_for_run").start()
+        self.get_job = mock.patch.object(vt.transcribe_client, "get_transcription_job").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_forged_completed_event_for_a_running_job_changes_nothing(self):
+        self.get_job.return_value = {"TranscriptionJob": {"TranscriptionJobStatus": "IN_PROGRESS"}}
+        conn = FakeConnection(locked=False)
+        self.assertEqual(vt.handle_transcribe_complete(_event(), conn), {"ignored": True})
+        self.get_job.assert_called_once_with(TranscriptionJobName=JOB)
+        self.assertEqual(conn.statements("UPDATE"), [])
+        self.launch.assert_not_called()
+
+    def test_unknown_job_changes_nothing(self):
+        self.get_job.side_effect = RuntimeError("BadRequestException: job not found")
+        conn = FakeConnection(locked=False)
+        with self.assertLogs(level="ERROR"):
+            result = vt.handle_transcribe_complete(_event(), conn)
+        self.assertEqual(result["error"], "transcription job not found")
+        self.assertEqual(conn.log, [])
+
+    def test_failure_reason_comes_from_transcribe_not_the_event(self):
+        self.get_job.return_value = {"TranscriptionJob": {"TranscriptionJobStatus": "FAILED", "FailureReason": "real"}}
+        conn = FakeConnection(locked=False)
+        event = {"detail": {"TranscriptionJobName": JOB, "TranscriptionJobStatus": "FAILED", "FailureReason": "forged"}}
+        self.assertEqual(vt.handle_transcribe_complete(event, conn)["status"], "failed")
+        self.assertEqual(conn.statements("UPDATE ingestion_runs")[0][2][0], "real")
 
 
 if __name__ == "__main__":

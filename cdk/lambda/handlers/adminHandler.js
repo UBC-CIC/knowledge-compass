@@ -17,6 +17,7 @@ const { logResponse, errorSummary } = require("./utils/logging.js");
 const { adminSubFromEvent, resolveAdminUser } = require("./utils/adminIdentity.js");
 const { ensureStaffUser, normalizeEmail } = require("../authorization/staffIdentity.js");
 const { auditEntry, insertAdminAudit, logAdminAudit } = require("./utils/adminAudit.js");
+const { parsePositiveInt, validateUUID } = require("./utils/validation.js");
 const {
   handleFeedbackTriageRequest,
   fetchFeedbackLists,
@@ -1092,8 +1093,8 @@ exports.handler = async (event) => {
       case "GET /admin/users": {
         try {
           const qs = event.queryStringParameters ?? {};
-          const limit = Math.min(parseInt(qs.limit ?? "50", 10), 100); // cap limit to 100
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 50, 100);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
             SELECT id, email, display_name, role, created_at, last_seen_at
@@ -1117,15 +1118,16 @@ exports.handler = async (event) => {
       case "GET /admin/users/{userId}/chat_sessions": {
         try {
           const userId = event.pathParameters?.userId;
-          if (!userId) {
+          const userCheck = validateUUID(userId, "userId");
+          if (!userCheck.valid) {
             response.statusCode = 400;
-            response.body = JSON.stringify({ error: "User ID is required" });
+            response.body = JSON.stringify({ error: userCheck.error });
             break;
           }
 
           const qs = event.queryStringParameters ?? {};
-          const limit = parseInt(qs.limit ?? "50", 10);
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 50, 100);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
             SELECT id, user_id, title, created_at, last_active_at
@@ -1150,15 +1152,16 @@ exports.handler = async (event) => {
       case "GET /admin/chat_sessions/{sessionId}/messages": {
         try {
           const sessionId = event.pathParameters?.sessionId;
-          if (!sessionId) {
+          const sessionCheck = validateUUID(sessionId, "sessionId");
+          if (!sessionCheck.valid) {
             response.statusCode = 400;
-            response.body = JSON.stringify({ error: "Session ID is required" });
+            response.body = JSON.stringify({ error: sessionCheck.error });
             break;
           }
 
           const qs = event.queryStringParameters ?? {};
-          const limit = parseInt(qs.limit ?? "200", 10);
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 200, 1000);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
              SELECT id, chat_session_id, sender, content, sources, created_at
@@ -1590,8 +1593,22 @@ exports.handler = async (event) => {
 // hold user emails, chat transcripts, raw sources and feedback comments, so
 // every route logs status only; no route logs its body. The status line names
 // the acting admin (Cognito sub from the authorizer) so every admin action,
-// including a denied one, is attributable (finding f-7f03f151).
+// including a denied one, is attributable (finding f-7f03f151), and the
+// resolved path ids it acted on (`target`), so a read of one family's
+// transcript records whose it was (finding f-c3162843).
 function logAndReturn(event, response) {
-  logResponse(event, response, { actorSub: adminSubFromEvent(event) });
+  const target = targetIds(event);
+  logResponse(event, response, { actorSub: adminSubFromEvent(event), ...(target && { target }) });
   return response;
+}
+
+// Path parameters are ids (UUIDs, journey/cluster keys, message types). Only
+// id-shaped values are logged, so no free text ever reaches the log.
+const TARGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+function targetIds(event) {
+  const ids = Object.entries(event?.pathParameters || {}).filter(
+    ([, value]) => typeof value === "string" && TARGET_ID_PATTERN.test(value)
+  );
+  return ids.length ? Object.fromEntries(ids) : undefined;
 }

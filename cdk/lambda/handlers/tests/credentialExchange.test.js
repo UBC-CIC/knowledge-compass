@@ -205,6 +205,28 @@ test("unset JWT_ISSUER is a 500, never 401 invalid_credential", async () => {
   }
 });
 
+test("after a JWT secret rotation, credentials signed with the previous key still exchange", async () => {
+  const saved = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = "test-jwt-secret-id";
+  try {
+    const rotated = JSON.stringify({ jwtSecret: "rotated-jwt-secret", previousJwtSecret: "test-jwt-secret" });
+    const { handler } = loadHandler("userHandler", usersSql(), { secrets: { "test-jwt-secret-id": rotated } });
+    const call = (token) =>
+      quietly(() => handler({ httpMethod: "GET", resource: "/user/publicToken", headers: { Authorization: `Bearer ${token}` } }));
+
+    const res = await call(credential());
+    assert.equal(res.statusCode, 200);
+    // New tokens are signed with the current key only.
+    assert.equal(decodeFakeToken(JSON.parse(res.body).token).secret, "rotated-jwt-secret");
+
+    const retired = await call(fakeToken(decodeFakeToken(credential()).payload, "retired-jwt-secret"));
+    assert.equal(retired.statusCode, 401);
+  } finally {
+    if (saved === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = saved;
+  }
+});
+
 test("a Secrets Manager failure during exchange is a 500, never 401", async () => {
   const saved = process.env.JWT_SECRET;
   process.env.JWT_SECRET = "test-jwt-secret-id";

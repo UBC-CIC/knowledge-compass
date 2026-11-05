@@ -1,4 +1,4 @@
-# Specialization Explorer - Project Modification Guide
+# Knowledge Compass - Project Modification Guide
 
 This guide covers practical modifications developers commonly need to make: styling, authentication, API extensions, frontend components, LLM configuration, database migrations, and deployment. For guardrail configuration, see `Docs/BEDROCK_GUARDRAILS.md`.
 
@@ -11,10 +11,9 @@ This guide covers practical modifications developers commonly need to make: styl
 - [Using External Identity Providers (Enterprise SSO)](#using-external-identity-providers-enterprise-sso)
 - [Extending the API](#extending-the-api)
 - [Modifying Frontend Components](#modifying-frontend-components)
-- [Changing Website License (Footer)](#changing-website-license-footer)
 - [Configuring LLM Models](#configuring-llm-models)
 - [Database Schema Changes (Migrations)](#database-schema-changes-migrations)
-- [Message/Token Limit Management](#messagetoken-limit-management)
+- [Message Limits](#message-limits)
 - [Data Ingestion Modifications](#data-ingestion-modifications)
 - [Deployment & Testing](#deployment--testing)
 - [Encryption & KMS Keys](#encryption--kms-keys)
@@ -26,20 +25,17 @@ This guide covers practical modifications developers commonly need to make: styl
 
 The frontend uses Tailwind and CSS variables for theme colors. Primary variables are defined in `frontend/src/index.css`.
 
-**Example** (change the primary brand color and sidebar background):
+**Example** (the primary brand color and sidebar background, as currently set):
 
 ```css
 /* frontend/src/index.css */
 :root {
-  --primary: rgb(23, 68, 103);
-  --sidebar: rgb(23, 68, 103);
-}
-
-.dark {
-  --primary: rgb(23, 68, 103);
-  --sidebar: rgb(23, 68, 103);
+  --primary: oklch(0.42 0.10 268);
+  --sidebar: #f4f5f7;
 }
 ```
+
+The `.dark` block repeats the same variables (currently with the same values), and `@theme inline` maps them to Tailwind color names. Change both blocks to keep the theme consistent.
 
 For component-specific overrides, search for hex codes or Tailwind classes directly in `frontend/src/components/`.
 
@@ -50,11 +46,13 @@ For component-specific overrides, search for hex codes or Tailwind classes direc
 The project uses a dual access model:
 
 - **Admin users**: Authenticated via Cognito. Admin-only APIs require a Cognito token and are restricted by the admin authorizer in `OpenAPI_Swagger_Definition.yaml` and `cdk/lib/api-stack.ts`.
-- **Public users**: `lambda/publicTokenFunction/publicTokenFunction.js` generates a short-lived JWT for unauthenticated users. The frontend requests and caches this via `frontend/src/providers/UserSessionContext.tsx`.
+- **Public users**: no account. `POST /user` creates an anonymous user and returns a 30-day credential; the browser exchanges it at `GET /user/publicToken` (handled by `cdk/lambda/handlers/userHandler.js`) for 15-minute access tokens bound to that user. The user authorizer verifies those tokens. The frontend keeps the credential in `localStorage` and refreshes tokens in `frontend/src/lib/publicToken.ts`.
 
 Key files:
 - `cdk/lib/api-stack.ts` — Cognito UserPool and API authorizer setup
-- `cdk/lambda/publicTokenFunction/publicTokenFunction.js` — public token generation and expiry
+- `cdk/lambda/handlers/userHandler.js` — anonymous user creation, credential rotation and public token minting
+- `cdk/lambda/authorization/userAuthorizerFunction.js` — verifies public access tokens
+- `cdk/lambda/adminAuthorizerFunction/adminAuthorizerFunction.js` — verifies the Cognito ID token and `admin` group
 - `frontend/src/components/ProtectedRoute.tsx` — admin route protection
 
 ---
@@ -75,32 +73,49 @@ AWS docs:
 
 ## Extending the API
 
-1. Add the Lambda handler in `cdk/lambda/handlers/<your-handler>.js` (Node) or a new Python module.
-2. Define a new `lambda.Function` in `cdk/lib/api-stack.ts`.
-3. Wire up the API Gateway route and authorizer in `api-stack.ts`.
-4. Update `OpenAPI_Swagger_Definition.yaml` to reflect the new endpoint.
-5. Run `cdk deploy`.
+The REST API is a `SpecRestApi` built from `cdk/OpenAPI_Swagger_Definition.yaml`. Routes, authorizers and integrations are defined in that file, not with `addResource`/`addMethod`. The integrations refer to each Lambda by a fixed logical ID, so a Lambda must never reference `this.api` (permissions, IAM, environment): CloudFormation treats that as a dependency cycle (see the comment above the `SpecRestApi` in `cdk/lib/api-stack.ts`). Follow `adminFunction` as the pattern.
 
-Example (Node.js):
+1. Add the handler under `cdk/lambda/handlers/`, or add the route to an existing handler's router.
+2. For a new function, define the `lambda.Function` in `cdk/lib/api-stack.ts` and pin its logical ID with `overrideLogicalId`.
+3. In `cdk/OpenAPI_Swagger_Definition.yaml`, add the path with the matching `<<: *commonOptions<METHODS>` CORS block (one anchor per method set), a `security` entry (`adminAuthorizer` or `userAuthorizer`) and an `x-amazon-apigateway-integration` that points at the logical ID.
+4. Grant API Gateway invoke with `addPermission`, using the wildcard API ID `sourceArn` pattern already used in `api-stack.ts`.
+5. From `cdk/`, run `npm test` (includes `test/openapi-contract.test.ts`, which checks every handler route is reachable through the definition) and `npx cdk synth`.
 
 ```typescript
-const myHandler = new lambda.Function(this, `${id}-MyHandler`, {
+// cdk/lib/api-stack.ts
+const myFunction = new lambda.Function(this, `${id}-myFunction`, {
   runtime: lambda.Runtime.NODEJS_22_X,
   code: lambda.Code.fromAsset("lambda"),
   handler: "handlers/myHandler.handler",
-  environment: {
-    SM_DB_CREDENTIALS: db.secretPathUser.secretName,
-    RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
-  },
+  // vpc, environment, layers, role: copy from lambdaAdminFunction
 });
-
-const myResource = this.api.root.addResource("my-feature");
-myResource.addMethod("POST", new apigw.LambdaIntegration(myHandler), {
-  authorizer: this.adminAuthorizer,
+myFunction.addPermission("AllowApiGatewayInvoke", {
+  principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),
+  action: "lambda:InvokeFunction",
+  sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/admin/my-feature*`,
 });
+(myFunction.node.defaultChild as lambda.CfnFunction).overrideLogicalId("myFunction");
 ```
 
-Existing handlers in `cdk/lambda/handlers/` (e.g., `adminHandler.js`, `chatSessionHandler.js`) are good patterns to follow.
+```yaml
+# cdk/OpenAPI_Swagger_Definition.yaml
+  /admin/my-feature:
+    <<: *commonOptionsPOST
+    post:
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: OK
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${myFunction.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+```
+
+The function also needs `ALLOWED_ORIGIN_PARAM` and the matching `ssm:GetParameter` grant for CORS, as every existing API function has. Document the route in [`API_DOCUMENTATION.md`](./API_DOCUMENTATION.md).
 
 ---
 
@@ -109,7 +124,8 @@ Existing handlers in `cdk/lambda/handlers/` (e.g., `adminHandler.js`, `chatSessi
 Frontend code is in `frontend/src/`:
 - `pages/` — route-level pages
 - `components/` — reusable UI blocks
-- `providers/` — React context (e.g., `UserSessionContext`, `ModeContext`)
+- `providers/` — React context (`UserContext`, `ViewContext`, `SidebarContext`)
+- `lib/` — API client, public token handling and other helpers
 
 ### Adding a new page
 
@@ -125,24 +141,6 @@ import NewFeature from "./pages/NewFeature/NewFeature";
 ```
 
 Wrap with `<ProtectedRoute>` if admin-only.
-
----
-
-## Changing Website License (Footer)
-
-Edit `frontend/src/components/Footer.tsx`:
-
-```tsx
-<div className="text-sm text-muted-foreground">
-  © {new Date().getFullYear()} Your Organization Name.
-</div>
-```
-
-Or use a Vite env variable to avoid rebuilding for content changes:
-
-```tsx
-© {new Date().getFullYear()} {import.meta.env.VITE_WEBSITE_NAME || 'Specialization Explorer'}.
-```
 
 ---
 
@@ -176,37 +174,51 @@ For guardrail configuration, see `Docs/BEDROCK_GUARDRAILS.md`.
 
 ## Database Schema Changes (Migrations)
 
-Migrations live in `cdk/lambda/db_setup/migrations/` and follow a numbered naming convention.
+Migrations live in `cdk/lambda/db_setup/migrations/`, run with `node-pg-migrate` by the DBFlow stack, and follow a three-digit numbered naming convention. Add the next number after the newest file; never edit a migration that has already been deployed.
 
 ```javascript
-// cdk/lambda/db_setup/migrations/015_add_new_feature_table.js
-exports.up = async function (knex) {
-  return knex.schema.createTable('new_feature', (table) => {
-    table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
-    table.string('name').notNullable();
-    table.text('description');
-    table.timestamps(true, true);
-  });
+// cdk/lambda/db_setup/migrations/050_add_new_feature_table.js
+exports.up = (pgm) => {
+  pgm.sql(`
+    CREATE TABLE IF NOT EXISTS new_feature (
+      id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name text NOT NULL,
+      description text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
 };
 
-exports.down = async function (knex) {
-  return knex.schema.dropTable('new_feature');
+exports.down = (pgm) => {
+  pgm.sql(`DROP TABLE IF EXISTS new_feature;`);
 };
 ```
 
+See [`DATABASE_MIGRATIONS.md`](./DATABASE_MIGRATIONS.md) for the full workflow.
+
 ---
 
-## Message/Token Limit Management
+## Message Limits
 
-Token and message limits (daily token limit, max characters per message, min exchanges before suggestion, etc.) are admin-configurable at runtime — they're stored in the database and loaded by the Lambda on startup. No redeployment is needed to change them.
+These limits are admin settings in `system_settings` (admin console: [Assistant settings](./USER_GUIDE.md#assistant-settings)); changes apply without a deploy:
 
-For details on how to configure these via the admin dashboard, see the User Guide.
+- `max_characters_per_user_message`: length of one message
+- `max_characters_per_day` and `max_messages_per_day`: per user, per UTC day
+- `max_messages_per_day_global`: all public users together, per UTC day
+- `max_characters_per_ai_message`: length of an answer
+
+The daily cap of 20 new chat sessions per user is a constant (`DAILY_SESSION_LIMIT` in `cdk/lambda/handlers/chatSessionHandler.js`), not a setting.
 
 ---
 
 ## Data Ingestion Modifications
 
-The ingestion pipeline is handled by `cdk/lambda/knowledgeBase/` (Python Lambda). To add new file types or processing logic, modify `main.py` and the `helpers/` modules. Add a DB migration if new metadata tables are needed.
+Ingestion has two parts:
+
+- `cdk/lambda/knowledgeBase/` (Python Lambda) handles the admin API, uploads, documents (PDF, DOCX, CSV, Markdown, JSON), embedding-space management, and launches the container tasks. To add a file type or change chunking, modify `main.py` and the `helpers/` modules.
+- `cdk/containers/crawler/` and `cdk/containers/transcriber/` run on ECS Fargate for websites and videos. Changes are rebuilt and deployed by CodePipeline.
+
+Code shared by both Python Lambdas (CORS, embeddings, retrieval) lives in the `kc_shared` layer at `cdk/layers/shared_python/`. Add a DB migration if new metadata tables are needed. See [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
 
 ---
 
@@ -215,19 +227,25 @@ The ingestion pipeline is handled by `cdk/lambda/knowledgeBase/` (Python Lambda)
 **CDK / Backend:**
 ```bash
 cd cdk
-npm install
+npm ci
 npm run build
-cdk deploy
+npm test             # CDK Jest tests (cdk/test)
+npm run test:lambda  # Node Lambda tests (lambda/**/tests/*.test.js)
+npx cdk deploy --all -c StackPrefix=<PREFIX> -c githubRepo=<REPO> --profile <PROFILE>
 ```
 
+See the [Deployment Guide](./DEPLOYMENT_GUIDE.md#deploy-the-stacks) for the full deploy command and context flags.
+
 **Python Lambda dependencies:**
-Python Lambdas (`textGeneration`, `knowledgeBase`) do not auto-install `requirements.txt` at deploy time — dependencies are either bundled manually or come from Lambda layers. If you add a new Python dependency, you'll need to either add a layer or set up a bundling step in CDK.
+Python Lambdas (`textGeneration`, `knowledgeBase`) do not auto-install `requirements.txt` at deploy time — dependencies are either vendored into the Lambda folder or come from Lambda layers. See [`DEPENDENCY_MANAGEMENT.MD`](./DEPENDENCY_MANAGEMENT.MD) before adding one.
 
 **Frontend:**
 ```bash
 cd frontend
-npm install
-npm run build   # production build
+npm ci
+npm run build   # type-check and production build
+npm run lint
+npm test        # Vitest unit tests (*.test.ts / *.test.tsx beside the code), single run
 ```
 
 Run the dev server manually with `npm run dev` (Vite).
@@ -238,9 +256,7 @@ Run the dev server manually with `npm run dev` (Vite).
 
 ## Encryption & KMS Keys
 
-By default, all encrypted resources in this project (RDS, S3, Secrets Manager, OpenSearch Serverless) use AWS managed keys. No configuration is required to use them, but they offer limited control over key rotation, auditing, and cross-account access.
-
-If your organization requires customer-managed KMS keys (CMKs), see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md) for a full list of affected resources and the exact CDK property changes needed in each stack.
+Most resources use AWS managed keys (S3 buckets use SSE-S3); the API Gateway and WAF log groups use a customer-managed key. To switch other resources to customer-managed keys, see [`AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
 
 ---
 
@@ -249,6 +265,6 @@ If your organization requires customer-managed KMS keys (CMKs), see [`Docs/AWS_M
 - **Lambda Timeout**: Increase `timeout` in the CDK function definition.
 - **Memory/Latency**: Increase `memorySize`; check VPC and RDS proxy config.
 - **Database**: Verify `SM_DB_CREDENTIALS` in Secrets Manager and RDS proxy endpoint.
-- **Cognito**: Check user pool and client IDs in `frontend/.env`.
-- **Guardrails**: See `Docs/BEDROCK_GUARDRAILS.md` for topic policies, allow rules, and testing.
+- **Cognito**: Check the user pool and client IDs in `frontend/.env.local` (local development) or the Amplify environment variables (see [`frontend/README.md`](../frontend/README.md)).
+- **Guardrails**: See `Docs/BEDROCK_GUARDRAILS.md` for the PII, regex and content filter policy, streaming screening, and testing. Topic scope is a prompt rule (`SCOPE_RULE` in `cdk/lambda/textGeneration/helpers/config.py`), not a guardrail topic policy.
 - **Logging**: CloudWatch logs are the primary debugging source for all Lambdas.

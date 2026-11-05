@@ -244,15 +244,35 @@ class WordAndPdfTest(AdminTestBase):
             self.assertEqual(response["statusCode"], 400, name)
 
 
+def _audited(event, sub="admin-sub"):
+    """`event` with the admin's Cognito sub, as the admin authorizer sends it."""
+    event["requestContext"]["authorizer"]["userId"] = sub
+    return event
+
+
 class DeleteDocumentTest(AdminTestBase):
-    def test_deletes_source_and_document(self):
+    def _delete(self, sub="admin-sub"):
         conn = FakeConnection({"SELECT s3_key FROM guideline_documents": [(KEY,)]})
-        response, conn = self.call(_event("DELETE", f"/admin/guideline/documents/{DOC_ID}",
-                                          resource="/admin/guideline/documents/{id}", path_id=DOC_ID), conn=conn)
+        event = _event("DELETE", f"/admin/guideline/documents/{DOC_ID}",
+                       resource="/admin/guideline/documents/{id}", path_id=DOC_ID)
+        return self.call(_audited(event) if sub else event, conn=conn)
+
+    def test_deletes_source_and_document(self):
+        response, conn = self._delete()
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("DELETE FROM sources")[0][1], (f"guideline://doc/{DOC_ID}",))
         self.assertTrue(conn.sql_with("DELETE FROM guideline_documents"))
         self.s3.delete_object.assert_called_once_with(Bucket="bucket", Key=KEY)
+
+    def test_delete_is_audited_and_refused_without_an_admin_identity(self):
+        response, conn = self._delete()
+        audit = conn.sql_with("INSERT INTO admin_audit")
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0][1][:3], ("admin-sub", "admin@example.org", "guideline_document.delete"))
+
+        response, conn = self._delete(sub=None)
+        self.assertEqual(response["statusCode"], 401)
+        self.assertFalse(conn.sql_with("DELETE FROM"))
 
     def test_invalid_id(self):
         response, _ = self.call(_event("DELETE", "/admin/guideline/documents/abc",
@@ -338,10 +358,17 @@ class CutoverLockTest(AdminTestBase):
 
 class ModeTest(AdminTestBase):
     def test_valid_mode(self):
-        response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "guideline"})
+        response, conn = self.call(_audited(_event("PUT", "/admin/guideline/mode")), {"mode": "guideline"})
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("INSERT INTO guideline_config")[0][1], ("guideline", "admin@example.org"))
         self.assertEqual(conn.commits, 1)
+        # Audited in the same commit (finding f-c47d6990).
+        self.assertEqual(conn.sql_with("INSERT INTO admin_audit")[0][1][2], "guideline.mode_set")
+
+    def test_mode_change_without_an_admin_identity_is_refused(self):
+        response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "guideline"})
+        self.assertEqual(response["statusCode"], 401)
+        self.assertFalse(conn.sql_with("INSERT INTO guideline_config"))
 
     def test_invalid_mode(self):
         response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "other"})

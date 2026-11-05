@@ -14,6 +14,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers.message_limits import reserve_daily_characters  # noqa: E402
 

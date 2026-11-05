@@ -7,8 +7,10 @@ Unit tests for helpers/guideline_prompt.py. Run from textGeneration:
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers import config, guideline_prompt as gp  # noqa: E402
 
@@ -55,11 +57,24 @@ class GuidelinePromptTest(unittest.TestCase):
         # stop the model from citing section and resource numbers.
         self.assertNotIn("cite the guides", a)
         self.assertIn("still list the guide section number and every resource number you used in <cited_indices>", a)
-        self.assertIn(config.GUARDRAILS, a)
+        self.assertIn(config.GUARDRAILS.strip(), a)
         self.assertIn(config.LANGUAGE_GUIDELINES, a)
         for step in ("(a) Check the guide first", "(b) Identify the situation",
                      "(c) Take the matching section", "(d) Respond using only that section"):
             self.assertIn(step, a)
+
+    def test_scope_rule_survives_admin_guardrail_edits(self):
+        # F13: the code-owned scope rule stays in <guardrails> whatever the
+        # admin Boundaries text is, including when it is cleared.
+        for admin_text in ("ALWAYS:\n- Answer any question the family asks.", ""):
+            with mock.patch.object(config, "GUARDRAILS", admin_text):
+                static = gp.build_static_prompt()
+            block = static.split("<guardrails>\n", 1)[1].split("\n</guardrails>", 1)[0]
+            self.assertIn(config.SCOPE_RULE, block)
+            if admin_text:
+                self.assertTrue(block.startswith(admin_text), admin_text)
+            else:
+                self.assertEqual(block, config.SCOPE_RULE)
 
     def test_sections_are_numbered_for_citations(self):
         _, dynamic, model = gp.build_guideline_prompt(STRUCTURED, None)

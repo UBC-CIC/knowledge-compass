@@ -1,8 +1,8 @@
 # Security Overview
 
-**Project:** Specialization Explorer
+**Project:** Knowledge Compass
 **Document Type:** Public Security Architecture Overview
-**Last Updated:** May 2026
+**Last Updated:** November 2026
 
 ---
 
@@ -16,22 +16,14 @@
 6. [Data Protection](#6-data-protection)
 7. [GenAI Security](#7-genai-security)
 8. [Monitoring & Compliance](#8-monitoring--compliance)
+9. [Accepted Risks and Operator Actions](#9-accepted-risks-and-operator-actions)
+10. [Security Contact](#10-security-contact)
 
 ---
 
 ## 1. Introduction
 
-Specialization Explorer is an AI-powered conversational application that helps undergraduate students navigate academic specialization choices. This document provides an overview of the security measures implemented to protect user data, ensure system integrity, and maintain service availability.
-
-### 1.1 Security Principles
-
-| Principle | Description |
-|-----------|-------------|
-| **Defense in Depth** | Multiple layers of security controls |
-| **Least Privilege** | Minimal permissions for all components |
-| **Encryption Everywhere** | Data protected at rest and in transit |
-| **Zero Trust** | Verify every request, trust nothing by default |
-| **Privacy by Design** | PII protection built into the architecture |
+Knowledge Compass is a conversational assistant that answers questions from a curated knowledge base. This page summarizes its security controls.
 
 ---
 
@@ -40,69 +32,25 @@ Specialization Explorer is an AI-powered conversational application that helps u
 ### 2.1 High-Level Architecture
 
 ```
-╔═════════════════════════════════════════════════════════════════╗
-║                          INTERNET                               ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                      EDGE SECURITY LAYER                        ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   CloudFront    │  │    AWS WAF      │  │  AWS Shield   │   ║
-║   │   CDN + TLS     │  │   Firewall      │  │    DDoS       │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                      APPLICATION LAYER                          ║
-║                                                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │            API Gateway  (REST + WebSocket)              │   ║
-║   │   Request validation · Rate limiting · Access logging   │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                  Lambda Authorizers                     │   ║
-║   │   JWT validation · Role-based access · Session verify   │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │               Lambda Functions  (VPC)                   │   ║
-║   │   Input validation · Business logic · Param. queries    │   ║
-║   └─────────────────────────────────────────────────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                         DATA LAYER                              ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   RDS Proxy     │  │   PostgreSQL    │  │  S3 Bucket    │   ║
-║   │     TLS         │  │   Encrypted     │  │  Encrypted    │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚══════════════════════════════╤══════════════════════════════════╝
-                               │
-                               ▼
-╔═════════════════════════════════════════════════════════════════╗
-║                         AI / ML LAYER                           ║
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │    Bedrock      │  │ Knowledge Base  │  │  OpenSearch   │   ║
-║   │   Guardrails    │  │     RAG         │  │  Serverless   │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-╚═════════════════════════════════════════════════════════════════╝
+  Browser ──▶ Amplify Hosting (CloudFront managed by Amplify) ──▶ SPA (static files)
+  Browser ──▶ AWS WAF ──▶ API Gateway REST ──▶ Lambda authorizers ──▶ Lambda (VPC)
+  Browser ──▶ API Gateway WebSocket (no WAF, see §9) ──▶ Lambda (VPC)
+
+  Lambda (VPC) ──▶ RDS Proxy (TLS) ──▶ PostgreSQL + pgvector (encrypted, isolated subnets)
+               ──▶ S3 ingest bucket (encrypted, no public access)
+               ──▶ Amazon Bedrock models and guardrails
 ```
+
+AWS Shield Standard applies automatically to AWS edge and API endpoints; the stacks do not deploy it.
 
 ### 2.2 Security Layers Summary
 
 | Layer | Components | Security Controls |
 |-------|------------|-------------------|
-| **Edge** | CloudFront, WAF, Shield | DDoS protection, TLS termination, rate limiting |
+| **Edge** | Amplify Hosting (managed CloudFront), AWS WAF on the REST API | TLS, managed rule groups and per-IP rate limits on REST only |
 | **Application** | API Gateway, Lambda | Authentication, authorization, input validation |
 | **Data** | RDS, S3, Secrets Manager | Encryption, access control, credential rotation |
-| **AI/ML** | Bedrock, Knowledge Base | PII protection, prompt security, output validation |
+| **AI/ML** | Bedrock models and guardrails, pgvector retrieval | PII protection, prompt security, output validation |
 
 ---
 
@@ -110,28 +58,12 @@ Specialization Explorer is an AI-powered conversational application that helps u
 
 ### 3.1 Dual Authentication Model
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                     AUTHENTICATION FLOW                         ║
-╠══════════════════════════════╦══════════════════════════════════╣
-║        ADMIN USERS           ║          PUBLIC USERS            ║
-║                              ║                                  ║
-║   ┌──────────────────────┐   ║   ┌──────────────────────┐       ║
-║   │     AWS Cognito      │   ║   │     Custom JWT       │       ║
-║   │                      │   ║   │                      │       ║
-║   │  · Email / password  │   ║   │  · Anonymous access  │       ║
-║   │  · MFA support       │   ║   │  · Short-lived token │       ║
-║   │  · Email verify      │   ║   │  · Auto-refresh      │       ║
-║   │  · Group membership  │   ║   │                      │       ║
-║   └──────────┬───────────┘   ║   └──────────┬───────────┘       ║
-║              │               ║              │                   ║
-║              ▼               ║              ▼                   ║
-║   ┌──────────────────────┐   ║   ┌──────────────────────┐       ║
-║   │   Admin Authorizer   │   ║   │   User Authorizer    │       ║
-║   │    (Cognito JWT)     │   ║   │    (Custom JWT)      │       ║
-║   └──────────────────────┘   ║   └──────────────────────┘       ║
-╚══════════════════════════════╩══════════════════════════════════╝
-```
+| | Admin users | Public users |
+|---|---|---|
+| **Identity** | Amazon Cognito: email and password, verified email, `admin` group | Anonymous; no account or email |
+| **MFA** | TOTP MFA required | None |
+| **Token** | Cognito ID token (1 hour) | Custom JWT access token (15 minutes), minted from a 30-day credential and refreshed automatically |
+| **Authorizer** | Admin authorizer (Cognito JWT and `admin` group) | User authorizer (custom JWT bound to one user) |
 
 ### 3.2 Authorization Controls
 
@@ -154,18 +86,7 @@ Specialization Explorer is an AI-powered conversational application that helps u
 
 ### 4.1 Request Security Pipeline
 
-```
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │   WAF    │───▶ │  Rate    │────▶│  Schema  │────▶│ Auth    │
-  │  Rules   │     │  Limit   │     │  Valid.  │     │  Check   │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘
-       │                │                │                │
-       ▼                ▼                ▼                ▼
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │  Block   │     │ Throttle │     │  Reject  │     │   Deny   │
-  │ Attacks  │     │  Excess  │     │ Invalid  │     │  Unauth  │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘
-```
+A REST request passes WAF rules (block attacks), stage throttling (throttle excess), OpenAPI request validation (reject invalid requests) and a Lambda authorizer (deny unauthorized callers), in that order.
 
 ### 4.2 WAF Rules
 
@@ -174,6 +95,8 @@ Specialization Explorer is an AI-powered conversational application that helps u
 | **Managed Rules** | SQL injection, XSS, path traversal, and common attacks |
 | **Rate Limiting** | Per-IP ceilings scoped by URI path (token minting, chat) plus a global per-IP ceiling. Request headers do not select a bucket. |
 | **Endpoint Protection** | Stricter limits for expensive AI operations |
+
+The web ACL covers the REST API only. The chat WebSocket API and the Amplify-hosted SPA are not behind WAF; see [section 9](#9-accepted-risks-and-operator-actions).
 
 ### 4.3 Request Validation
 
@@ -185,11 +108,10 @@ Specialization Explorer is an AI-powered conversational application that helps u
 
 ### 4.4 CORS Configuration
 
-- Dynamic origin validation from configuration
-- Restricted to known application domains
+- Allowed origins come from the SSM parameter `/<STACK-PREFIX>-Api/API/AllowedOrigins`; a response echoes the request `Origin` only if it is listed
+- OPTIONS preflight and gateway error responses use the deployed SPA origin (stage variable `allowedOrigin`)
 - Fails closed: a missing `ALLOWED_ORIGIN_PARAM`, an SSM read failure, or a `*` entry in the parameter never yields a wildcard origin (failures are not cached)
 - `Access-Control-Allow-Methods` lists only the methods each function serves
-- Proper headers enforced on all error responses
 
 ### 4.5 Frontend Security Headers
 
@@ -198,9 +120,9 @@ Amplify Hosting adds these to every file it serves (`spaSecurityHeaders` in `cdk
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
 - `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy` denying camera, microphone, geolocation, payment and USB
-- A Content Security Policy: same-origin scripts only, no framing (`frame-ancestors 'none'`), and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
+- An enforced `Content-Security-Policy`: same-origin scripts only, no framing (`frame-ancestors 'none'`), no plugins (`object-src 'none'`), styles and fonts from the app and Google Fonts only, and `connect-src` limited to the REST and WebSocket APIs, the Cognito user pool and S3 presigned uploads
 
-The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are logged in the browser console but nothing is blocked. After a dev deploy shows no violations, rename the header to `Content-Security-Policy`. Header changes take effect on the branch's next Amplify deploy.
+The browser blocks anything the policy does not list. If a change needs a new source (for example another API origin), add it to `spaSecurityHeaders` rather than switching back to `Content-Security-Policy-Report-Only`. Header changes take effect on the branch's next Amplify deploy.
 
 ---
 
@@ -208,33 +130,11 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 
 ### 5.1 VPC Architecture
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                       VPC ARCHITECTURE                          ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                    PUBLIC SUBNETS                       │   ║
-║   │   · NAT Gateway  (outbound internet access)             │   ║
-║   │   · Internet Gateway                                    │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║                               ▼                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                   PRIVATE SUBNETS                       │   ║
-║   │   · Lambda functions  (VPC-connected)                   │   ║
-║   │   · Outbound access via NAT                             │   ║
-║   └───────────────────────────┬─────────────────────────────┘   ║
-║                               │                                 ║
-║                               ▼                                 ║
-║   ┌─────────────────────────────────────────────────────────┐   ║
-║   │                   ISOLATED SUBNETS                      │   ║
-║   │   · RDS PostgreSQL  (no internet access)                │   ║
-║   │   · RDS Proxy                                           │   ║
-║   │   · VPC Endpoints  (AWS services)                       │   ║
-║   └─────────────────────────────────────────────────────────┘   ║
-╚═════════════════════════════════════════════════════════════════╝
-```
+| Subnet | Runs | Internet access |
+|---|---|---|
+| Public | NAT gateway, internet gateway | Yes |
+| Private | Lambda functions | Outbound only, through NAT |
+| Isolated | RDS PostgreSQL, RDS Proxy, VPC endpoints for AWS services | None |
 
 ### 5.2 Network Controls
 
@@ -270,29 +170,14 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 
 ### 6.2 Encryption at Rest
 
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                      ENCRYPTION AT REST                         ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │      RDS        │  │       S3        │  │  OpenSearch   │   ║
-║   │    AES-256      │  │     SSE-S3      │  │ AWS-managed   │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-║                                                                 ║
-╠═════════════════════════════════════════════════════════════════╣
-║                      ENCRYPTION IN TRANSIT                      ║
-╠═════════════════════════════════════════════════════════════════╣
-║                                                                 ║
-║   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐   ║
-║   │   API Gateway   │  │   RDS Proxy     │  │   Bedrock     │   ║
-║   │    TLS 1.2+     │  │  TLS Required   │  │     TLS       │   ║
-║   └─────────────────┘  └─────────────────┘  └───────────────┘   ║
-║                                                                 ║
-╚═════════════════════════════════════════════════════════════════╝
-```
+| Resource | Encryption |
+|---|---|
+| RDS PostgreSQL (including vectors) | AES-256 storage encryption, AWS managed key |
+| S3 buckets | SSE-S3 (S3-managed keys) |
+| Secrets Manager secrets | AWS managed key |
+| API Gateway (REST and WebSocket) and WAF log groups | Customer-managed KMS key (`apiLogsKey`, rotation on) |
 
-> All encrypted resources currently use AWS managed keys. For details on which resources are affected and how to switch to customer-managed KMS keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
+Encryption in transit is listed in [§5.3](#53-encryption-in-transit); Bedrock calls also use TLS. To switch other resources to customer-managed keys, see [`Docs/AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md).
 
 ### 6.3 Credential Management
 
@@ -301,7 +186,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 | Database credentials (admin) | AWS Secrets Manager | 30-day automatic |
 | Database credentials (app users) | AWS Secrets Manager | 30-day automatic |
 | JWT signing key | AWS Secrets Manager | Manual |
-| Cognito secrets | AWS Secrets Manager | N/A (static IDs) |
+| Cognito pool, client and identity pool IDs (identifiers, not secrets; read by the frontend build) | AWS Secrets Manager | N/A (static IDs) |
 
 ### 6.4 S3 Bucket Security
 
@@ -316,7 +201,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
 
 | Control | Detail |
 |---------|--------|
-| **Retention** | A daily job (`cdk/lambda/handlers/retentionHandler.js`, 09:00 UTC) deletes each guest user, with all their chats, messages and feedback, once their most recent activity is more than 90 days old. Staff (Cognito) rows are never touched. |
+| **Retention** | A daily job (`cdk/lambda/handlers/retentionHandler.js`, 09:00 UTC) deletes each guest user, with all their chats, messages and feedback, once their most recent activity is more than 90 days old. A guest with starred feedback is kept until an admin unstars or dismisses it, then deleted on the next run. Staff (Cognito) rows are never touched. The chat sidebar tells families that conversations are cleared after 90 days without a visit. |
 | **Analytics rollup** | Before deleting, the job keeps per-day counts only (sessions, messages, questions, thumbs up/down) in `analytics_archive` under a fresh anonymous number that cannot be linked back to the user. Admin analytics adds these to live data, so totals do not drop. Written feedback text is not kept. |
 | **Limit bookkeeping** | The same job prunes `daily_usage_requests` after 2 days and `user_daily_usage` after 7 days. |
 | **Session cap** | Each guest can start 20 new chats per UTC day (`POST /chat_sessions` returns 429 `DAILY_SESSION_LIMIT_EXCEEDED`). Deleting a chat does not free a slot. |
@@ -334,7 +219,7 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
       ▼
   ┌─────────────────────────────────────────────────────────────┐
   │  1 · INPUT VALIDATION                                       │
-  │      · Length limits (2 000 characters)                     │
+  │      · Length limit (admin setting, default 2,000 chars)    │
   │      · Format validation                                    │
   └───────────────────────────┬─────────────────────────────────┘
                               │
@@ -349,8 +234,9 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
                               ▼
   ┌─────────────────────────────────────────────────────────────┐
   │  3 · RAG RETRIEVAL                                          │
-  │      · Knowledge Base query                                 │
+  │      · pgvector similarity search                           │
   │      · Source document retrieval                            │
+  │      · Retrieved text marked as data, tags escaped          │
   └───────────────────────────┬─────────────────────────────────┘
                               │
                               ▼
@@ -362,10 +248,17 @@ The CSP currently ships as `Content-Security-Policy-Report-Only`: violations are
                               │
                               ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  5 · OUTPUT VALIDATION                                      │
-  │      · Hallucination detection                              │
-  │      · Source grounding verification                        │
-  │      · Warning injected if response is ungrounded           │
+  │  5 · OUTPUT GUARDRAIL                                       │
+  │      · Content filters (hate, insults, sexual, violence)    │
+  │      · High-risk identifiers masked                         │
+  │     ✗  Blocked → safe message, no citations                 │
+  └───────────────────────────┬─────────────────────────────────┘
+                              │
+                              ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  6 · OUTPUT VALIDATION                                      │
+  │      · LLM grounding check against the cited sources        │
+  │      · Warning added if the response is not grounded        │
   └───────────────────────────┬─────────────────────────────────┘
                               │
                               ▼
@@ -389,7 +282,8 @@ Coarse location (province/territory, city, school board) is intentionally not ma
 | Control | Description |
 |---------|-------------|
 | **Prompt Attack Detection** | Identifies and blocks injection attempts |
-| **Scope Enforcement** | System prompts restrict topic to academic advising |
+| **Untrusted Context** | Retrieved documents are wrapped as data with an instruction not to follow anything inside them; tag-like text is escaped so a crawled page cannot close the block |
+| **Scope Enforcement** | A code-owned scope rule (`SCOPE_RULE` in `textGeneration/helpers/config.py`) is added after the admin Boundaries prompt, so a prompt edit cannot remove it. It limits help to a child's schooling in Canada, keeps sensitive school topics (harm, restraint, self-harm, legal worries) in scope with care, politely declines unrelated tasks, and gives tips rather than drafting emails or letters to the school. `evals/guardrails/f13_cases.yaml` tests it |
 | **Guardrails** | Strict boundaries on acceptable responses |
 
 For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROCK_GUARDRAILS.md).
@@ -398,66 +292,46 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 | Control | Description |
 |---------|-------------|
-| **Grounding Verification** | Responses checked against source documents |
-| **Hallucination Detection** | LLM-based verification of claims |
-| **Warning System** | Users notified when responses may be ungrounded |
+| **Output Guardrail** | Every final answer is screened before it is saved or sent: content filters replace a flagged answer with a safe message, and passwords, PINs, card, bank, health and SIN numbers are masked. A guardrail error fails closed. While the answer streams, each batch is screened (with everything sent before it) before it reaches the socket, so a blocked answer stops streaming; the final screened answer in the `complete` event replaces the streamed text ([details](./BEDROCK_GUARDRAILS.md#streaming-and-the-output-guardrail)). |
+| **Grounding Check** | A separate model call (`textGeneration/helpers/intervention.py`) checks the answer against its cited sources; answers that are not grounded carry a warning to the user |
 
 ---
 
 ## 8. Monitoring & Compliance
 
-### 8.1 Logging Architecture
+### 8.1 Security Logging
 
-```
-  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-  │   API Gateway   │   │     Lambda      │   │   VPC Flow      │
-  │   Access Logs   │   │      Logs       │   │     Logs        │
-  └────────┬────────┘   └────────┬────────┘   └────────┬────────┘
-           │                     │                     │
-           └─────────────────────┼─────────────────────┘
-                                 │
-                                 ▼
-                     ┌───────────────────────┐
-                     │  CloudWatch Logs      │
-                     │  & Metrics            │
-                     └───────────┬───────────┘
-                                 │
-                                 ▼
-                     ┌───────────────────────┐
-                     │  CloudWatch Alarms    │
-                     │  (concurrency, errors,│
-                     │   WAF block rate)     │
-                     └───────────────────────┘
-```
-
-### 8.2 Security Logging
+All logs go to CloudWatch Logs; the alarms in [§8.2](#82-alerting) read CloudWatch metrics.
 
 | Log Type | Content | Retention |
 |----------|---------|-----------|
 | **API Access Logs** | Request metadata, source IP, status, request id, and the authorizer identity: principal id, user id (admin Cognito sub or bound guest id), role, admin email (masked by the data-protection policy), access-token id (`jti`) | 1 year (retained on stack deletion; `apiLogRetention` in `api-stack.ts`) |
-| **Lambda Logs** | Function execution, errors (body excluded) | 2 years (CDK-managed log groups, retained on stack deletion) |
+| **Lambda Logs** | Function execution, errors (body excluded) | 90 days for Lambda and CodeBuild (`SERVICE_LOG_RETENTION` in `cdk/lib/log-retention.ts`) |
+| **ECS Task Logs** | Crawler and transcriber output | 30 days |
 | **VPC Flow Logs** | Network traffic metadata | Configurable |
 | **WebSocket Logs** | Connection events, route keys (no authorizer fields: the WebSocket API has no API Gateway authorizer) | 1 year (retained on stack deletion) |
-| **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for promote_user, admin user creation, system-message create/activate/delete, system-settings updates and data-source deletion; written in the same transaction as the change; append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
+| **WAF Logs** (`aws-waf-logs-<STACK-PREFIX>-Api`) | Blocked requests only, `Authorization` header redacted | 1 year, customer-managed key (retained on stack deletion) |
+| **Admin audit table (`admin_audit`)** | Actor (Cognito sub/email from the admin authorizer), action, target ids (never content or setting values), request id, for role elevation (`admin.promote_user`), admin user creation, system-message create/activate/delete, system-settings updates, journey and situation create/update, journey prompt version create/activate/delete, guideline mode changes, guideline document deletion, feedback triage, data-source deletion and embedding-space purge; written in the same transaction as the change (a purge, whose vector batches commit one at a time, commits its row before the first batch); append-only (trigger blocks UPDATE/DELETE/TRUNCATE) | Indefinite (database) |
 | **Token issuance log** | One line per access token from `GET /user/publicToken`: token id (`jti`), bound guest id or null, source IP, user agent, request id (never the token or credential) | Lambda log retention |
 | **Worker task log** | One line per self-invoked ingestion/embedding task with the originating admin (sub/email/request id, null for scheduler/ECS paths) | Lambda log retention |
 
-### 8.3 Alerting
+### 8.2 Alerting
 
 | Alert | Trigger | Purpose |
 |-------|---------|---------|
 | **Concurrency Alarm** | Lambda approaching reserved limit | Prevent service degradation |
 | **Error Rate Alarm** | Elevated 5XX responses | Detect service issues |
 | **WAF Block Alarm** | High block rate | Detect attack patterns |
+| **Dropped Worker Event Alarm** | A knowledge base ingestion or embedding self-invocation is dropped by Lambda | Surface a lost batch (no dead-letter queue: the payload carries the worker invoke token) |
 
-### 8.4 Compliance Summary
+### 8.3 Compliance Summary
 
 | Control Area | Status | Notes |
 |--------------|--------|-------|
 | **Encryption at Rest** | ✅ Enabled | AWS managed keys (CMK upgrade available — see [`AWS_MANAGED_KEYS.md`](./AWS_MANAGED_KEYS.md)) |
 | **Encryption in Transit** | ✅ Enabled | TLS enforced on all connections |
 | **Access Control** | ✅ Enabled | Role-based, least privilege |
-| **Audit Logging** | ✅ Enabled | Privileged admin actions (role elevation, admin creation, system messages/settings, data-source deletion) are recorded with the acting administrator in the append-only `admin_audit` table; API access logs carry the authorizer identity and token id and are kept 1 year; token issuance and admin-started worker tasks are logged with their ids and originating admin. CloudTrail covers AWS API calls. |
+| **Audit Logging** | ✅ Enabled | Privileged admin actions (role elevation, admin creation, system messages/settings, journeys and their prompts, guideline mode and documents, feedback triage, data-source deletion, embedding-space purge) are recorded with the acting administrator in the append-only `admin_audit` table; API access logs carry the authorizer identity and token id and are kept 1 year; token issuance and admin-started worker tasks are logged with their ids and originating admin. CloudTrail covers AWS API calls. |
 | **Credential Management** | ✅ Enabled | Secrets Manager with automatic rotation |
 | **PII Protection** | ✅ Enabled | Automatic anonymization via Bedrock Guardrails |
 | **Input Validation** | ✅ Enabled | Schema and application-level validation |
@@ -465,10 +339,35 @@ For guardrail configuration details, see [`Docs/BEDROCK_GUARDRAILS.md`](./BEDROC
 
 ---
 
-## 9. Security Contact
+## 9. Accepted Risks and Operator Actions
 
-For security concerns or to report vulnerabilities, please contact the project maintainers through the repository's security policy.
+Known gaps that are accepted by design, and settings an operator must change outside the code. Each comes from the October 2026 architecture review (finding ids in brackets).
+
+### 9.1 Accepted by design
+
+| Area | What remains | Why it is accepted | Mitigation in place |
+|------|--------------|--------------------|---------------------|
+| **WebSocket API not behind WAF** [A-03] | The chat WebSocket API has no WAF web ACL | AWS WAF cannot attach to API Gateway WebSocket (or HTTP) APIs; only REST API stages are supported | Token verified on `$connect`; stage-wide throttles; a `generate_text` limit counted both per connection and per guest across all of that guest's sockets (`cdk/lambda/websocket/connections.js`); one in-flight answer per guest; the input guardrail. Putting CloudFront (with WAF) in front would only inspect the initial upgrade request. |
+| **Wildcard API id in Lambda invoke permissions** [A-11] | API Gateway invoke permissions name `*` for the REST API id, and text generation's `ManageConnections` grant names `*` for the WebSocket API id | Naming the API id would create a CloudFormation dependency cycle (the OpenAPI body references the functions) | Every grant is pinned to this account and region and to its route, stage or `POST /@connections`; the authorizers still gate every request. Only an API Gateway in the same account could use the wildcard. |
+| **Single-AZ database** [A-16] | RDS runs in one Availability Zone with 7-day automated backups | Cost, for the current scale | Encrypted storage, TLS only, isolated subnets, deletion protection, rotated credentials. For production consider `multiAz: true` and backups aligned with the data-retention policy (`cdk/lib/database-stack.ts`). |
+| **Ingest buckets are deleted with the stack** | The S3 ingest bucket (uploaded originals, transcript outputs, cached OCR text) and its access-log bucket use `RemovalPolicy.DESTROY` with `autoDeleteObjects: true`, so deleting the ingestion stack permanently deletes their contents | Content should not outlive the deployment that processed it. The originals are not needed to change embedding models: a rebuild re-embeds from the chunk text stored in the database | Deleting a stack is a deliberate, approved action. The database (chunk text and vectors) has deletion protection, and RDS takes a final snapshot if the database is deleted. To keep the originals, copy the bucket before teardown (`cdk/lib/ingestion-stack.ts`). |
+| **Shared code in the ingestion images** [A-13] | The crawler and transcriber images keep their own copy of `embeddings.py` and `url_safety.py` | A container image cannot use a Lambda layer | The Lambdas share one copy through the `kc_shared` layer. The pipeline's test stage fails if the container `embeddings.py` drifts from the layer or `url_safety.py` drifts from the knowledge base copy. |
+
+### 9.2 Operator actions
+
+| Action | Where | When |
+|--------|-------|------|
+| **Add WAF to the SPA** [A-03] | Amplify Hosting supports a WAF web ACL directly (Amplify console → Hosting → Firewall, or CDK). The web ACL must be CLOUDFRONT-scoped, created in us-east-1, in the same account as the app. AWS and Amplify bill separately for it. | Optional: the SPA serves static files only, and the APIs it calls already have their own controls |
+| **Reserve Lambda concurrency** [A-14] | Request an account Lambda concurrency quota of at least 350, then deploy with `-c enableReservedConcurrency=true` | Before public launch. Until then the public Lambdas run unreserved, so a traffic spike can starve admin functions; WAF rate rules and WebSocket throttles are the backstop |
+| **Enable Cognito threat protection** [A-17] | Cognito Plus feature plan with threat protection (compromised-credential and adaptive authentication) in ENFORCED mode, on the admin user pool | Optional. Admin sign-in already requires TOTP MFA, a strong password policy and SRP; only users in the `admin` group reach the admin role |
+| **Accept or fix ECR scan findings** | `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts` (each entry needs a reason), or a newer base image | Whenever the image scan gate blocks a build on a CRITICAL or HIGH finding |
+
+### 9.3 Authorization model (reviewed, no change needed) [A-17]
+
+The identity pool issues no unauthenticated identities and maps roles from the token, denying ambiguous ones, so the admin role is reachable only through the `admin` group claim; the default authenticated role holds no permissions. The admin authorizer verifies the Cognito ID token and requires `admin` group membership from the token itself.
 
 ---
 
-*This document provides a high-level overview of security controls. Implementation details are maintained in internal documentation.*
+## 10. Security Contact
+
+Report suspected vulnerabilities privately to the project maintainers. Do not open a public issue.

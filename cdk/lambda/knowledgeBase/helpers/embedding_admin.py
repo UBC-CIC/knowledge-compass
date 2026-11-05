@@ -44,13 +44,14 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
-from helpers import embedding_models, embeddings
-from helpers.cors import get_cors_headers
+from helpers import embedding_models
+from kc_shared import embeddings
+from kc_shared.cors import get_cors_headers
 from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_job
 from helpers.embedding_space import index_name
 from helpers.ingestion_lock import LOCK_CODE, LOCK_MESSAGE, LOCK_TTL_SECONDS, lock_state
 from helpers.admin_user import normalize_email
-from helpers.admin_audit import with_actor
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit, with_actor
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -666,6 +667,9 @@ def purge_space(event, body, connection, space_id, admin):
     active space, is 'retired', has been retired for RETENTION_DAYS, no cutover holds the
     lock, no job is queued or running for it, and the typed name matches exactly.
     """
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     confirm_name = body.get("confirm_name")
 
     with connection.cursor() as cur:
@@ -706,17 +710,79 @@ def purge_space(event, body, connection, space_id, admin):
         })
     if lock_state(connection)["locked"]:
         return _locked_response(event)
+    # Typed confirmation, compared exactly (case-sensitive) with the stored name.
+    if not isinstance(confirm_name, str) or confirm_name != name:
+        return _response(event, 400, {
+            "error": "Type the exact name of the space in confirm_name to purge it.",
+        })
+
+    # Hold the cutover lock for the whole purge (finding f-71ff7846). Rollback
+    # creation and the cutover worker refuse while it is held, so the space
+    # cannot be made live while its vectors are being deleted. Taken
+    # atomically; a crashed purge's lock expires after LOCK_TTL_SECONDS.
+    purge_lock_id = str(uuid.uuid4())
+    if not _take_purge_lock(connection, purge_lock_id):
+        return _locked_response(event)
+    try:
+        return _purge_holding_lock(event, connection, space_id, name, actor, purge_lock_id)
+    finally:
+        _release_purge_lock(connection, purge_lock_id)
+
+
+def _take_purge_lock(connection, lock_id: str) -> bool:
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE embedding_active_space
+               SET cutover_locked = true, cutover_locked_at = now(),
+                   cutover_job_id = %s::uuid, updated_at = now()
+             WHERE id = 1
+               AND (cutover_locked = false
+                    OR cutover_locked_at < now() - make_interval(secs => %s))
+            """,
+            (lock_id, LOCK_TTL_SECONDS),
+        )
+        taken = cur.rowcount == 1
+    connection.commit()
+    return taken
+
+
+def _release_purge_lock(connection, lock_id: str) -> None:
+    _rollback_quietly(connection)
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE embedding_active_space
+                   SET cutover_locked = false, cutover_locked_at = NULL,
+                       cutover_job_id = NULL, updated_at = now()
+                 WHERE id = 1 AND cutover_job_id = %s::uuid
+                """,
+                (lock_id,),
+            )
+        connection.commit()
+    except Exception as e:  # noqa: BLE001 - the lock expires by itself
+        _rollback_quietly(connection)
+        logger.error("Could not release the purge lock (%s); it expires after %s s",
+                     type(e).__name__, LOCK_TTL_SECONDS)
+
+
+def _purge_holding_lock(event, connection, space_id, name, actor, lock_id):
+    # Checked under the lock, so no job for this space can start after it.
     running = _active_job_exists(connection, tuple(_TASK_FOR_MODE), space_id)
     if running:
         return _response(event, 409, {
             "error": "A job is still running for this space. Wait for it to finish first.",
             "job_id": running,
         })
-    # Typed confirmation, compared exactly (case-sensitive) with the stored name.
-    if not isinstance(confirm_name, str) or confirm_name != name:
-        return _response(event, 400, {
-            "error": "Type the exact name of the space in confirm_name to purge it.",
-        })
+
+    # The deletes below commit batch by batch and cannot be undone, so the
+    # decision is recorded before the first one (finding f-c47d6990).
+    audit_target = {"space_id": space_id, "name": name}
+    with connection.cursor() as cur:
+        insert_admin_audit(cur, actor, "embedding_space.purge", audit_target)
+    connection.commit()
+    log_admin_audit(actor, "embedding_space.purge", audit_target)
 
     deleted = 0
     batches = 0
@@ -732,6 +798,11 @@ def purge_space(event, body, connection, space_id, admin):
                 (space_id, PURGE_BATCH_SIZE),
             )
             count = cur.rowcount or 0
+            cur.execute(   # keep the purge lock fresh while batches run
+                "UPDATE embedding_active_space SET cutover_locked_at = now() "
+                "WHERE id = 1 AND cutover_job_id = %s::uuid",
+                (lock_id,),
+            )
         connection.commit()   # one commit per batch: resumable, short locks
         if count <= 0:
             break

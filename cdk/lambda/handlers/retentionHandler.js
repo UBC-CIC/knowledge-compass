@@ -7,7 +7,9 @@
  * activity (user created, last seen, any session created or active) is more
  * than RETENTION_DAYS old. Whole users are deleted, never single sessions, so
  * each guest is either fully live or fully archived and the analytics rollup
- * below stays exact.
+ * below stays exact. A guest with starred feedback is kept until an admin
+ * unstars or dismisses it (dismissing clears the star); the next run after
+ * that deletes them as usual.
  *
  * Per batch, in one transaction:
  *   1. Lock up to BATCH_SIZE inactive guest student rows (SKIP LOCKED).
@@ -84,6 +86,13 @@ async function retireBatch(tx) {
       AND NOT EXISTS (SELECT 1 FROM data_sources d WHERE d.created_by = u.id)
       AND NOT EXISTS (SELECT 1 FROM system_messages m WHERE m.created_by = u.id)
       AND NOT EXISTS (SELECT 1 FROM system_settings s WHERE s.updated_by = u.id)
+      AND NOT EXISTS (
+            SELECT 1
+              FROM session_feedback sf
+              JOIN chat_sessions cs ON cs.id = sf.chat_session_id
+             WHERE cs.user_id = u.id
+               AND sf.starred_at IS NOT NULL
+          )
     ORDER BY u.created_at
     LIMIT ${BATCH_SIZE}
     FOR UPDATE OF u SKIP LOCKED
