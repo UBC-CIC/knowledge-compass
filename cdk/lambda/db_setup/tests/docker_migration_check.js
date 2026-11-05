@@ -168,10 +168,20 @@ const sqlLiteral = (v) => {
   return `'${String(v).replace(/'/g, "''")}'`;
 };
 
-/** Substitute psycopg2-style %s placeholders with SQL literals (as psycopg2 does client-side). */
+/**
+ * Substitute psycopg2-style placeholders with SQL literals (as psycopg2 does client-side):
+ * %s from an array of params, %(name)s from an object of params.
+ */
 const fillParams = (statement) => {
+  const { sql, params } = statement;
+  if (params && !Array.isArray(params)) {
+    return sql.replace(/%\((\w+)\)s/g, (_, key) => {
+      assert(Object.prototype.hasOwnProperty.call(params, key), `missing named param ${key}`);
+      return sqlLiteral(params[key]);
+    });
+  }
   let i = 0;
-  return statement.sql.replace(/%s/g, () => sqlLiteral(statement.params[i++]));
+  return sql.replace(/%s/g, () => sqlLiteral(params[i++]));
 };
 
 const skip = (name, reason) => {
@@ -423,12 +433,16 @@ function runChecks() {
       assert(!mustPsql(fillParams(kb.kb_existing)).includes("5|"), "a chunk with a stale vector still counts as up to date");
     });
 
-    check("retrieval SQL runs for the legacy space and returns rows; guideline candidate SQL executes (real SQL)", () => {
+    check("retrieval SQL runs for the legacy space and returns rows; guideline candidate SQL executes, unrestricted and restricted (real SQL)", () => {
       const tg = dumpSql({ mode: "tg", space_id: legacy, dims: 1024, vector: randomArray(1024) });
       const rows = mustPsql(fillParams(tg.tg_standard)).split("\n").filter(Boolean);
       assert(rows.length > 0, "no rows from the legacy space");
-      mustPsql(fillParams(tg.tg_guideline));
-      return `${rows.length} rows`;
+      const guideline = fillParams(tg.tg_guideline);
+      const restricted = fillParams(tg.tg_guideline_restricted);
+      assert(!/%\(|%s/.test(guideline + restricted), "unfilled placeholder in the guideline candidate SQL");
+      mustPsql(guideline);
+      mustPsql(restricted);
+      return `${rows.length} rows; guideline candidate SQL ran unrestricted and restricted`;
     });
 
     check("crawler and transcriber SQL write vectors to the space only and detect stale vectors (real SQL)", () => {
