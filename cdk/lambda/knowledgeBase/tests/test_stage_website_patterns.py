@@ -59,8 +59,10 @@ class StageWebsitePatternTests(unittest.TestCase):
         if exclude is not None:
             body["exclude_patterns"] = exclude
         with mock.patch.object(stage, "_insert_data_source_row", return_value="ds-1") as insert:
+            # The authorizer identity the admin_audit row records (finding f-531c9569).
+            event = {"requestContext": {"authorizer": {"userId": "sub-1", "email": "admin@example.org"}}}
             response = stage._stage_website(
-                {}, body, self.connection, created_by="admin@example.org", created_by_user_id="u1",
+                event, body, self.connection, created_by="admin@example.org", created_by_user_id="u1",
             )
         return response, insert
 

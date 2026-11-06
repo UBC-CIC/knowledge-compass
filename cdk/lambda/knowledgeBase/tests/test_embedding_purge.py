@@ -300,7 +300,7 @@ class PurgedSpaceCannotComeBackTest(unittest.TestCase):
                     "path": f"/admin/embedding-spaces/{SPACE_ID}/{action}",
                     "resource": f"/admin/embedding-spaces/{{id}}/{action}",
                     "pathParameters": {"id": SPACE_ID},
-                    "requestContext": {"authorizer": {"email": "admin@example.org"}},
+                    "requestContext": {"authorizer": {"email": "admin@example.org", "userId": "admin-sub"}},
                     "headers": {},
                 }
                 response = ea.handle_embedding_request(event, body, conn)

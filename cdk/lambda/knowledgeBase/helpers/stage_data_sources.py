@@ -12,7 +12,7 @@ from helpers.video_transcription import start_transcription_job
 from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
 from helpers.crawl_scope import CrawlScope, InvalidPatterns
 from helpers.process_document_batch import trigger_uploaded_document
-from helpers.admin_audit import actor_from_event
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
 from helpers.data_source_cleanup import supersede_duplicates
 from helpers.upload_identity import (
@@ -59,6 +59,36 @@ UPLOAD_NOT_ISSUED_ERROR = (
     "This upload was not issued to you, has expired, or was already staged. Upload the file again."
 )
 UPLOAD_ALREADY_CLAIMED_ERROR = "This upload is already being staged by another request. Upload the file again."
+
+# admin_audit actions for staging (finding f-531c9569).
+STAGE_AUDIT_ACTION = "data_source.stage"
+BATCH_STAGE_AUDIT_ACTION = "data_source.stage_batch"
+
+
+def stage_audit_target(
+    source_type: str, outcome: str, data_source_ids: list[str], ingestion_run_ids: list[str]
+) -> dict:
+    """admin_audit target for one staged source: ids only, never file names, URLs or content."""
+    return {
+        "type": source_type,
+        "outcome": outcome,
+        "data_source_ids": list(data_source_ids),
+        "ingestion_run_ids": list(ingestion_run_ids),
+    }
+
+
+def insert_stage_audit(connection, event, action: str, target: dict) -> dict:
+    """
+    Insert the admin_audit row for a staging request in the caller's
+    transaction, so it commits with the staged rows; the caller logs it with
+    log_admin_audit after the commit. The actor is the authorizer identity
+    (helpers/admin_audit.py), never the body; without one this raises and the
+    staging is rolled back. Returns the actor.
+    """
+    actor = actor_from_event(event)
+    with connection.cursor() as cursor:
+        insert_admin_audit(cursor, actor, action, target)
+    return actor
 
 
 def _response(event, status_code: int, body: dict):
@@ -632,7 +662,10 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
         },
     )
 
+    audit_target = stage_audit_target("website", "staged", [data_source_id], [ingestion_run_id])
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
 
     return _response(
         event,
@@ -724,7 +757,10 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             details={"video_url": video_url, "source_key": source_key, "content_etag": etag},
             source_url=video_url,
         )
+        audit_target = stage_audit_target("video", "unchanged", [existing["id"]], [])
+        actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
         connection.commit()
+        log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
         delete_s3_objects([(s3_bucket, s3_key), *superseded])
         return _response(
             event,
@@ -819,7 +855,12 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
         action = "staged_video_transcription"
         message = "Video uploaded. Transcription has started; embedding will run automatically when it finishes."
 
+    audit_target = stage_audit_target(
+        "video", "replaced" if existing else "staged", [data_source_id], [ingestion_run_id]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
 
     return _response(
@@ -906,7 +947,10 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             source_url=source_url,
         )
         set_citation_url(connection, url=source_url, citation_url=citation_url)
+        audit_target = stage_audit_target("document", "unchanged", [existing["id"]], [])
+        actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
         connection.commit()
+        log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
         delete_s3_objects([(s3_bucket, s3_key), *superseded])
         return _response(
             event,
@@ -970,7 +1014,13 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         )
         replaced = False
 
+    # Committed before ingestion starts, so the embedding it triggers is attributable.
+    audit_target = stage_audit_target(
+        "document", "replaced" if replaced else "staged", [data_source_id], [ingestion_run_id]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
 
     trigger_result = trigger_uploaded_document(connection, ingestion_run_id, actor=actor_from_event(event))
@@ -1040,7 +1090,12 @@ def _stage_pair(
     except StageRejected as rejected:
         return _response(event, rejected.status_code, rejected.body)
 
+    audit_target = stage_audit_target(
+        source_type, result["action"], result["data_source_ids"], result["ingestion_run_ids"]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects(result["s3_cleanup"])
 
     label = primary_source_label.capitalize()
@@ -1076,6 +1131,8 @@ def stage_data_sources(event, body, connection):
       under the same name, replaces the existing row(s) in place (see
       upload_identity.py) so its chunks are re-embedded only where changed
     - creates matching ingestion_runs row(s) with status 'pending'
+    - writes an admin_audit row ("data_source.stage": the authorizer identity,
+      type, outcome, data source and ingestion run ids) that commits with them
     - does NOT start ingestion or create schedulers
 
     Supported request types:

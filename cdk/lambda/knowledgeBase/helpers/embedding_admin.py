@@ -2,7 +2,9 @@
 Admin API for embedding spaces and their jobs (migrations 032 and 033). Every route
 sits under /admin/ and is protected by the existing admin Cognito authorizer in API
 Gateway. Routes that change anything additionally need the authorizer's `requestContext`
-email (the audit identity); a body-supplied email is ignored.
+email (the audit identity); a body-supplied email is ignored. Activate, rollback and
+purge also need the authorizer's Cognito sub and write an admin_audit row
+(helpers/admin_audit.py) before any of their work starts.
 
   GET  /admin/embedding-models                      models this app can call, with Bedrock ids
   GET  /admin/embedding-spaces                     spaces, coverage, lock state, latest job
@@ -511,7 +513,12 @@ def _reap_stale_jobs(connection, modes: tuple, seconds: int, space_id: Optional[
     connection.commit()
 
 
-def _insert_job(connection, space_id: str, mode: str, admin: str, report: Optional[dict] = None) -> str:
+def _insert_job(connection, space_id: str, mode: str, admin: str, report: Optional[dict] = None,
+                audit: Optional[Tuple[dict, str, dict]] = None) -> str:
+    """
+    Record a queued job. `audit` = (actor, action, target): an admin_audit row for it,
+    with the job id added to the target, committed in the same transaction as the job.
+    """
     with connection.cursor() as cur:
         cur.execute(
             """
@@ -522,7 +529,13 @@ def _insert_job(connection, space_id: str, mode: str, admin: str, report: Option
             (space_id, mode, admin, None if report is None else json.dumps(report)),
         )
         job_id = cur.fetchone()[0]
+        if audit is not None:
+            actor, action, target = audit
+            target = {**target, "job_id": job_id}
+            insert_admin_audit(cur, actor, action, target)
     connection.commit()
+    if audit is not None:
+        log_admin_audit(actor, action, target)
     return job_id
 
 
@@ -610,7 +623,14 @@ def create_validate_job(event, body, connection, space_id, admin):
 
 
 def create_cutover_job(event, body, connection, space_id, admin, mode: str):
-    """POST .../activate and .../rollback: check the preconditions, record the job, start it."""
+    """
+    POST .../activate and .../rollback: check the preconditions, record the job and its
+    admin_audit row in one transaction, start it. The cutover moves the single live
+    retrieval pointer, so it never runs without a verified admin (finding f-531c9569).
+    """
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     request: Dict[str, Any] = {}
     if mode == "activate":
         skip_quality = body.get("skip_quality")
@@ -650,8 +670,10 @@ def create_cutover_job(event, body, connection, space_id, admin, mode: str):
         return _locked_response(event)
 
     report = {"request": request, "old_space_id": old_space_id, "new_space_id": space["id"]}
+    audit_target = {"space_id": space["id"], "name": space["name"], "from_space_id": old_space_id}
     try:
-        job_id = _insert_job(connection, space_id, mode, admin, report)
+        job_id = _insert_job(connection, space_id, mode, admin, report,
+                             audit=(actor, f"embedding_space.{mode}", audit_target))
     except Exception as e:  # noqa: BLE001
         if _is_unique_violation(e):
             _rollback_quietly(connection)

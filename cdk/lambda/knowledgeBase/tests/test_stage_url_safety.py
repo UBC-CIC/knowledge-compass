@@ -54,8 +54,10 @@ class _Base(unittest.TestCase):
 
 class StageWebsiteUrlSafetyTests(_Base):
     def stage(self, name):
+        # The authorizer identity the admin_audit row records (finding f-531c9569).
+        event = {"requestContext": {"authorizer": {"userId": "sub-1", "email": "admin@example.org"}}}
         return stage._stage_website(
-            {}, {"type": "website", "name": name}, self.connection,
+            event, {"type": "website", "name": name}, self.connection,
             created_by="admin@example.org", created_by_user_id="u1",
         )
 
