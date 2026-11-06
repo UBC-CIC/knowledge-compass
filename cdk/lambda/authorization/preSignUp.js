@@ -1,4 +1,5 @@
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
+const { parseAllowedDomains, isAllowedEmailDomain } = require("./emailDomains.js");
 
 exports.handler = async (event) => {
   const ssmClient = new SSMClient();
@@ -10,12 +11,11 @@ exports.handler = async (event) => {
       WithDecryption: true,
     });
     const data = await ssmClient.send(getParameterCommand);
-    const allowedDomains = data.Parameter.Value.split(",");
+    const allowedDomains = parseAllowedDomains(data.Parameter.Value);
     const email = event.request.userAttributes.email;
-    const emailDomain = email.split("@")[1];
 
-    if (!allowedDomains.includes(emailDomain)) {
-      throw new Error(`Signup not allowed for email domain: ${emailDomain}`);
+    if (!isAllowedEmailDomain(email, allowedDomains)) {
+      throw new Error(`Signup not allowed for email domain: ${String(email).split("@")[1]}`);
     }
 
     return event;

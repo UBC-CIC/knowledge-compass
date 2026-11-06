@@ -2450,6 +2450,8 @@ export class ApiGatewayStack extends cdk.Stack {
           RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
           USER_POOL_ID: this.userPool.userPoolId,
           ALLOWED_ORIGIN_PARAM: this.allowedOriginsParamName,
+          // Checked for existing accounts too, where PreSignUp never runs.
+          ALLOWED_EMAIL_DOMAINS: allowedEmailDomainsParamName,
         },
         functionName: `${id}-adminProvisioningFunction`,
         memorySize: 256,
@@ -2462,6 +2464,12 @@ export class ApiGatewayStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ["ssm:GetParameter", "ssm:GetParameters"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${this.allowedOriginsParamName}`],
+    }));
+    // The staff domain allow-list (SecureString under aws/ssm), as preSignUp.
+    lambdaAdminProvisioningFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${allowedEmailDomainsParamName}`],
     }));
     lambdaAdminProvisioningFunction.addPermission("AllowApiGatewayInvoke", {
       principal: new iam.ServicePrincipal("apigateway.amazonaws.com"),

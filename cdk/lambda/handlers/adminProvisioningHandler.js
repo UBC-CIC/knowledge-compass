@@ -7,6 +7,9 @@
  * keeps the RequestHandlerBoundary deny on cognito-idp:Admin* (finding
  * f-4597100e).
  *
+ * The email's domain must be in /KC/AllowedEmailDomains whether or not the
+ * account exists (see emailDomainAllowed).
+ *
  * Every account in the pool is an administrator (self sign-up is disabled), so
  * an email that already has a Cognito account is made an admin too: it is
  * added to the "admin" group (idempotent) and its users row is elevated.
@@ -22,6 +25,7 @@ const {
   SecretsManagerClient,
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
+const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 const {
   CognitoIdentityProviderClient,
   AdminCreateUserCommand,
@@ -33,6 +37,7 @@ const { logResponse, errorSummary } = require("./utils/logging.js");
 const { adminSubFromEvent } = require("./utils/adminIdentity.js");
 const { ensureStaffUser, normalizeEmail } = require("../authorization/staffIdentity.js");
 const { auditEntry, insertAdminAudit, logAdminAudit } = require("./utils/adminAudit.js");
+const { parseAllowedDomains, isAllowedEmailDomain } = require("../authorization/emailDomains.js");
 
 const ADMIN_GROUP = "admin";
 // users.email / display_name are varchar(255) (OpenAPI maxLength).
@@ -41,6 +46,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 let sqlConnection;
 let cognito;
+let ssm;
 const secretsManager = new SecretsManagerClient();
 
 const initConnection = async () => {
@@ -69,6 +75,22 @@ const initConnection = async () => {
 // /admin/users serves GET (adminFunction) and POST (this function); the CORS
 // header lists the path's methods (OpenAPI_Swagger_Definition.yaml).
 const SERVED_METHODS = "GET,POST";
+
+/**
+ * Whether the address is in /KC/AllowedEmailDomains (ALLOWED_EMAIL_DOMAINS
+ * names the parameter). Checked here because the PreSignUp trigger runs only
+ * when Cognito creates the account: an existing account would otherwise skip
+ * the allow-list (finding f-87e4994d). Read on every request, so removing a
+ * domain also stops re-granting admin to its accounts. Throws if the list
+ * cannot be read (the request is a 500 and grants nothing).
+ */
+async function emailDomainAllowed(email) {
+  const Name = process.env.ALLOWED_EMAIL_DOMAINS;
+  if (!Name) throw new Error("ALLOWED_EMAIL_DOMAINS is not set");
+  if (!ssm) ssm = new SSMClient({});
+  const data = await ssm.send(new GetParameterCommand({ Name, WithDecryption: true }));
+  return isAllowedEmailDomain(email, parseAllowedDomains(data?.Parameter?.Value));
+}
 
 /** The Cognito sub from a user's attribute list, or null. */
 const subFrom = (attributes) =>
@@ -168,12 +190,19 @@ exports.handler = async (event) => {
   }
 
   try {
+    // Before any Cognito call, for new and existing accounts alike.
+    if (!(await emailDomainAllowed(email))) {
+      respond(response, 400, { error: "Email domain is not allowed" });
+      return logAndReturn(event, response);
+    }
+
     let provisioned;
     try {
       provisioned = await provisionCognitoAdmin(email);
     } catch (error) {
       // PreSignUp_AdminCreateUser runs authorization/preSignUp.js, which
-      // rejects addresses outside ALLOWED_EMAIL_DOMAINS.
+      // rejects addresses outside ALLOWED_EMAIL_DOMAINS (backstop for the
+      // check above).
       if (error?.name === "UserLambdaValidationException") {
         respond(response, 400, { error: "Email domain is not allowed" });
         return logAndReturn(event, response);

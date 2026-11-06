@@ -167,6 +167,17 @@ describe("API Lambda IAM least privilege", () => {
     ]);
   });
 
+  test("admin provisioning reads the email domain allow-list itself (finding f-87e4994d)", () => {
+    const fn = resources["adminProvisioningFunction"];
+    expect(fn.Properties.Environment.Variables.ALLOWED_EMAIL_DOMAINS).toBe("/KC/AllowedEmailDomains");
+    const reads = statementsFor(roleOf("adminProvisioningFunction")).filter(
+      (s) => s.Effect === "Allow" && [s.Action].flat().includes("ssm:GetParameter")
+    );
+    expect(reads.map((s) => s.Resource)).toContainEqual(
+      `arn:aws:ssm:${env.region}:${env.account}:parameter/KC/AllowedEmailDomains`
+    );
+  });
+
   test("Cognito triggers use the readwrite DB credential, never the tablecreator one", () => {
     const secretStatements = statementsFor(cognitoTriggerRole()).filter((s) =>
       [s.Action].flat().some((a: string) => a.startsWith("secretsmanager:"))

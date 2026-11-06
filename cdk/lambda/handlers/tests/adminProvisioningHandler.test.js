@@ -18,6 +18,10 @@ const adminContext = {
 };
 
 process.env.USER_POOL_ID = "ca-central-1_TestPool";
+// The handler reads the staff domain allow-list from this SSM parameter.
+const DOMAINS_PARAM = "/test/KC/AllowedEmailDomains";
+process.env.ALLOWED_EMAIL_DOMAINS = DOMAINS_PARAM;
+const allowDomains = (value) => ({ [DOMAINS_PARAM]: value });
 
 // Records every Cognito call; `overrides[name]` replaces a command's behaviour.
 function fakeCognito(overrides = {}) {
@@ -40,14 +44,25 @@ const newRowSql = () =>
     text.startsWith("INSERT INTO users") ? [{ id: "new-admin", email: values[1], role: values[3] }] : []
   );
 
-async function invoke(sql, cognito, event) {
-  const { handler } = loadHandler("adminProvisioningHandler", sql, { cognito });
+async function invoke(sql, cognito, event, ssmParameters = allowDomains("example.com")) {
+  const { handler } = loadHandler("adminProvisioningHandler", sql, { cognito, ssmParameters });
   const res = await quietly(() => handler({ httpMethod: "POST", resource: "/admin/users", ...event }));
   return { statusCode: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : null };
 }
 
-const post = (sql, cognito, body, requestContext = adminContext) =>
-  invoke(sql, cognito, { requestContext, body: JSON.stringify(body) });
+const post = (sql, cognito, body, requestContext = adminContext, ssmParameters) =>
+  invoke(sql, cognito, { requestContext, body: JSON.stringify(body) }, ssmParameters);
+
+// AdminCreateUser reports the account exists; AdminGetUser returns its sub.
+const existingAccountCognito = () =>
+  fakeCognito({
+    AdminCreateUser: () => {
+      const error = new Error("User account already exists");
+      error.name = "UsernameExistsException";
+      throw error;
+    },
+    AdminGetUser: () => ({ UserAttributes: [{ Name: "sub", Value: NEW_SUB }] }),
+  });
 
 test("creates the Cognito user, adds it to the admin group, and writes an admin users row with an audit", async () => {
   const sql = newRowSql();
@@ -114,6 +129,7 @@ test("an existing Cognito account is added to the admin group and its row elevat
 });
 
 test("an email domain rejected by the pre-sign-up trigger is 400 and writes nothing", async () => {
+  // The handler's own check passes; the trigger is the backstop.
   const sql = newRowSql();
   const cognito = fakeCognito({
     AdminCreateUser: () => {
@@ -122,11 +138,90 @@ test("an email domain rejected by the pre-sign-up trigger is 400 and writes noth
       throw error;
     },
   });
-  const res = await post(sql, cognito, { display_name: "Outsider", email: "someone@elsewhere.test" });
+  const res = await post(
+    sql,
+    cognito,
+    { display_name: "Outsider", email: "someone@elsewhere.test" },
+    adminContext,
+    allowDomains("example.com,elsewhere.test")
+  );
   assert.equal(res.statusCode, 400);
   assert.deepEqual(res.body, { error: "Email domain is not allowed" });
   assert.deepEqual(cognito.calls.map((c) => c.name), ["AdminCreateUser"]);
   assert.equal(sql.queries().length, 0);
+});
+
+test("an address outside the allow-list is 400 before Cognito, whether or not its account exists", async () => {
+  for (const [label, cognito] of [
+    ["existing account", existingAccountCognito()],
+    ["new account", fakeCognito()],
+  ]) {
+    const sql = newRowSql();
+    const res = await post(sql, cognito, { display_name: "Revoked", email: "old.admin@revoked.test" });
+    assert.equal(res.statusCode, 400, label);
+    assert.deepEqual(res.body, { error: "Email domain is not allowed" }, label);
+    assert.equal(cognito.calls.length, 0, `${label}: no Cognito call, so no group grant`);
+    assert.equal(sql.queries().length, 0, `${label}: no users row or audit row`);
+  }
+});
+
+test("a subdomain of an allowed domain is not allowed", async () => {
+  const cognito = existingAccountCognito();
+  const res = await post(newRowSql(), cognito, { display_name: "Sub", email: "someone@mail.example.com" });
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { error: "Email domain is not allowed" });
+  assert.equal(cognito.calls.length, 0);
+});
+
+test("allow-list entries are compared trimmed and lower-cased", async () => {
+  const cognito = fakeCognito();
+  const res = await post(
+    newRowSql(),
+    cognito,
+    { display_name: "New Admin", email: "new@example.com" },
+    adminContext,
+    allowDomains(" other.org , Example.COM ")
+  );
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+});
+
+test("an empty allow-list refuses every address", async () => {
+  for (const value of ["", " , "]) {
+    const cognito = existingAccountCognito();
+    const sql = newRowSql();
+    const res = await post(sql, cognito, { display_name: "New", email: "new@example.com" }, adminContext, allowDomains(value));
+    assert.equal(res.statusCode, 400, JSON.stringify(value));
+    assert.deepEqual(res.body, { error: "Email domain is not allowed" });
+    assert.equal(cognito.calls.length, 0);
+    assert.equal(sql.queries().length, 0);
+  }
+});
+
+test("an unreadable allow-list is 500 and grants nothing", async () => {
+  const cognito = existingAccountCognito();
+  const sql = newRowSql();
+  const res = await post(
+    sql,
+    cognito,
+    { display_name: "New", email: "new@example.com" },
+    adminContext,
+    allowDomains(new Error("AccessDeniedException"))
+  );
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(res.body, { error: "Internal server error" });
+  assert.equal(cognito.calls.length, 0);
+  assert.equal(sql.queries().length, 0);
+
+  const saved = process.env.ALLOWED_EMAIL_DOMAINS;
+  delete process.env.ALLOWED_EMAIL_DOMAINS;
+  try {
+    const unset = existingAccountCognito();
+    const resUnset = await post(newRowSql(), unset, { display_name: "New", email: "new@example.com" });
+    assert.equal(resUnset.statusCode, 500);
+    assert.equal(unset.calls.length, 0);
+  } finally {
+    process.env.ALLOWED_EMAIL_DOMAINS = saved;
+  }
 });
 
 test("invalid input is 400 before any Cognito or database call", async () => {
@@ -186,7 +281,10 @@ test("an unexpected Cognito failure is 500 and logs no email", async () => {
       throw error;
     },
   });
-  const { handler } = loadHandler("adminProvisioningHandler", sql, { cognito });
+  const { handler } = loadHandler("adminProvisioningHandler", sql, {
+    cognito,
+    ssmParameters: allowDomains("example.com"),
+  });
   const lines = [];
   const saved = { log: console.log, error: console.error, warn: console.warn };
   console.log = console.error = console.warn = (...args) => lines.push(JSON.stringify(args));
