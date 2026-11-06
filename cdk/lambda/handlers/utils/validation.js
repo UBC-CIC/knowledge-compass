@@ -9,18 +9,22 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /**
  * Validates that a value is a valid UUID v4 format.
+ * Surrounding whitespace is ignored; callers must bind the returned `value`
+ * (the trimmed id that was checked), never the raw input. Case is kept:
+ * Postgres compares uuid values case-insensitively.
  * @param {string} value - The value to validate
  * @param {string} fieldName - Name of the field (for error messages)
- * @returns {{ valid: boolean, error?: string }}
+ * @returns {{ valid: boolean, value?: string, error?: string }}
  */
 function validateUUID(value, fieldName = "id") {
     if (!value || typeof value !== "string") {
         return { valid: false, error: `${fieldName} is required` };
     }
-    if (!UUID_REGEX.test(value.trim())) {
+    const normalized = value.trim();
+    if (!UUID_REGEX.test(normalized)) {
         return { valid: false, error: `${fieldName} must be a valid UUID` };
     }
-    return { valid: true };
+    return { valid: true, value: normalized };
 }
 
 /**

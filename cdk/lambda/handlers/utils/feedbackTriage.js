@@ -161,15 +161,15 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
   };
 
   try {
-    const chatSessionId = event.pathParameters?.chat_session_id;
-    const idCheck = validateUUID(chatSessionId, "chat_session_id");
+    const idCheck = validateUUID(event.pathParameters?.chat_session_id, "chat_session_id");
     if (!idCheck.valid) {
       send(400, { error: idCheck.error });
       return true;
     }
+    const chatSessionId = idCheck.value;
 
     if (pathData === RATED_MESSAGE_ROUTE) {
-      const result = await fetchRatedMessage(sql, chatSessionId.trim());
+      const result = await fetchRatedMessage(sql, chatSessionId);
       if (!result.found) {
         send(404, { error: "Feedback not found" });
       } else {
@@ -182,7 +182,7 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
     // Triage and its admin_audit row commit together (finding f-c47d6990).
     let audit;
     const saved = await sql.begin(async (tx) => {
-      const row = await updateTriage(tx, chatSessionId.trim(), changes);
+      const row = await updateTriage(tx, chatSessionId, changes);
       if (row) {
         audit = auditEntry(event, "feedback.triage", {
           chat_session_id: row.chat_session_id, starred: row.starred, dismissed: row.dismissed,

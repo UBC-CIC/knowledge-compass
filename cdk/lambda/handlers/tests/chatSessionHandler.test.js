@@ -361,6 +361,23 @@ test("every metadata projection in chatSessionHandler.js uses the guest projecti
   for (const line of projections) assert.ok(line.includes(GUEST_METADATA), line.trim());
 });
 
+test("session routes bind the trimmed chat_session_id and token user they validated (f-83933690)", async () => {
+  const padded = (id) => ` ${id}\t`;
+  for (const route of ROUTES.filter((r) => r.pathParameters?.chat_session_id)) {
+    for (const requestContext of [as(USER), as(padded(USER))]) {
+      const sql = sessionSql(USER, (text) =>
+        text.startsWith("INSERT INTO session_feedback") ? [{ rating: "up", updated_at: "2026-01-01" }] : [],
+      );
+      const res = await invoke(sql, { ...route, requestContext, pathParameters: { chat_session_id: padded(SESSION) } });
+      const label = `${route.httpMethod} ${route.resource} ${JSON.stringify(requestContext.authorizer.userId)}`;
+      assert.ok(res.statusCode < 300, `${label}: ${res.statusCode}`);
+      const ids = sql.queries().flatMap((q) => q.values)
+        .filter((v) => typeof v === "string" && [SESSION, USER].includes(v.trim()));
+      assert.ok(ids.includes(SESSION), label);
+      assert.ok(ids.every((v) => v === SESSION || v === USER), `${label}: ${JSON.stringify(ids)}`);
+    }
+  }
+});
 test("malformed, null, array and scalar bodies are a 400 on every body route (f-5290289f)", async () => {
   const routes = [
     { httpMethod: "POST", resource: "/chat_sessions" },

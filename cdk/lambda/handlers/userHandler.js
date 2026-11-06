@@ -196,13 +196,13 @@ exports.handler = async (event) => {
       }
 
       case "GET /user/{user_id}": {
-        const userId = event.pathParameters?.user_id;
-        const userIdValidation = validateUUID(userId, "user_id");
+        const userIdValidation = validateUUID(event.pathParameters?.user_id, "user_id");
         if (!userIdValidation.valid) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: userIdValidation.error });
           break;
         }
+        const userId = userIdValidation.value;
         const caller = resolveCaller(event, userId);
         if (caller.error) {
           rejectCaller(response, caller);
@@ -232,21 +232,20 @@ exports.handler = async (event) => {
       }
 
       case "GET /user/{user_id}/chat_sessions/{chat_session_id}/chat_history": {
-        const userId = event.pathParameters?.user_id;
-        const chatSessionId = event.pathParameters?.chat_session_id;
-
-        const userIdValidation = validateUUID(userId, "user_id");
+        const userIdValidation = validateUUID(event.pathParameters?.user_id, "user_id");
         if (!userIdValidation.valid) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: userIdValidation.error });
           break;
         }
-        const sessionIdValidation = validateUUID(chatSessionId, "chat_session_id");
+        const sessionIdValidation = validateUUID(event.pathParameters?.chat_session_id, "chat_session_id");
         if (!sessionIdValidation.valid) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: sessionIdValidation.error });
           break;
         }
+        const userId = userIdValidation.value;
+        const chatSessionId = sessionIdValidation.value;
         const caller = resolveCaller(event, userId);
         if (caller.error) {
           rejectCaller(response, caller);

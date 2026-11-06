@@ -124,6 +124,21 @@ test("invalid ids and bodies return 400 without touching the database", async ()
   assert.equal(sql.calls.length, 0);
 });
 
+test("triage and rated-message reads bind the trimmed id they validated (f-83933690)", async () => {
+  for (const routeKey of [ROUTE, "GET /admin/feedback/{chat_session_id}/message"]) {
+    const sql = triageSql({ starred_at: null, dismissed_at: null });
+    const original = console.log;
+    console.log = () => {};
+    try {
+      await call(sql, triageEvent({ starred: true }, ` ${UUID}\t`), routeKey);
+    } finally {
+      console.log = original;
+    }
+    const ids = sql.calls.flatMap((c) => c.values).filter((v) => typeof v === "string" && v.trim() === UUID);
+    assert.ok(ids.length > 0, routeKey);
+    assert.ok(ids.every((v) => v === UUID), `${routeKey}: ${JSON.stringify(ids)}`);
+  }
+});
 test("missing feedback row returns 404", async () => {
   const res = await call(triageSql(null), triageEvent({ starred: true }));
   assert.equal(res.statusCode, 404);

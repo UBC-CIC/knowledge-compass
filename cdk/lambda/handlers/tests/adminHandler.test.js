@@ -677,3 +677,19 @@ test("admin session and transcript reads validate ids and cap the page size (f-5
     assert.ok(numbers.every((v) => v >= 0 && v <= cap), `${resource}: ${numbers}`);
   }
 });
+
+test("admin session and transcript reads bind the trimmed id they validated (f-83933690)", async () => {
+  const id = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
+  for (const [resource, param] of [
+    ["/admin/users/{userId}/chat_sessions", "userId"],
+    ["/admin/chat_sessions/{sessionId}/messages", "sessionId"],
+  ]) {
+    const sql = fakeSql(() => []);
+    const res = await invoke(sql, {
+      httpMethod: "GET", resource, pathParameters: { [param]: ` ${id}\t` }, requestContext: adminContext,
+    });
+    assert.equal(res.statusCode, 200, resource);
+    const strings = sql.queries().flatMap((q) => q.values).filter((v) => typeof v === "string");
+    assert.deepEqual(strings, [id], resource);
+  }
+});

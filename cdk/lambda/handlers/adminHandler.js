@@ -1141,13 +1141,13 @@ exports.handler = async (event) => {
       // fetches the chat sessions for a specific user 
       case "GET /admin/users/{userId}/chat_sessions": {
         try {
-          const userId = event.pathParameters?.userId;
-          const userCheck = validateUUID(userId, "userId");
+          const userCheck = validateUUID(event.pathParameters?.userId, "userId");
           if (!userCheck.valid) {
             response.statusCode = 400;
             response.body = JSON.stringify({ error: userCheck.error });
             break;
           }
+          const userId = userCheck.value;
 
           const qs = event.queryStringParameters ?? {};
           const limit = parsePositiveInt(qs.limit, 50, 100);
@@ -1175,13 +1175,13 @@ exports.handler = async (event) => {
       // fetches the messages for a specific chat session
       case "GET /admin/chat_sessions/{sessionId}/messages": {
         try {
-          const sessionId = event.pathParameters?.sessionId;
-          const sessionCheck = validateUUID(sessionId, "sessionId");
+          const sessionCheck = validateUUID(event.pathParameters?.sessionId, "sessionId");
           if (!sessionCheck.valid) {
             response.statusCode = 400;
             response.body = JSON.stringify({ error: sessionCheck.error });
             break;
           }
+          const sessionId = sessionCheck.value;
 
           const qs = event.queryStringParameters ?? {};
           const limit = parsePositiveInt(qs.limit, 200, 1000);

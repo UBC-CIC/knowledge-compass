@@ -224,6 +224,41 @@ test("removed and unknown routes fail without leaking details", async () => {
   }
 });
 
+test("validateUUID returns the trimmed id it checked, case unchanged (f-83933690)", () => {
+  const { validateUUID } = require("../utils/validation.js");
+  assert.deepEqual(validateUUID(` ${SESSION}\n`, "chat_session_id"), { valid: true, value: SESSION });
+  const upper = SESSION.toUpperCase();
+  assert.deepEqual(validateUUID(upper), { valid: true, value: upper });
+  assert.equal(validateUUID(`${SESSION}x`).valid, false);
+  assert.equal(validateUUID("   ").valid, false);
+  assert.equal(validateUUID(undefined).value, undefined);
+});
+
+test("user routes bind the trimmed ids that passed validation (f-83933690)", async () => {
+  const padded = (id) => ` ${id}\t`;
+  const bound = (sql) => sql.queries().flatMap((q) => q.values).filter((v) => typeof v === "string");
+
+  const userSql = fakeSql((text) => (text.includes("FROM users") ? [{ id: USER }] : []));
+  const user = await invoke(userSql, {
+    httpMethod: "GET", resource: "/user/{user_id}", pathParameters: { user_id: padded(USER) },
+  });
+  assert.equal(user.statusCode, 200);
+  assert.deepEqual(bound(userSql), [USER, USER]);
+
+  for (const pathParameters of [
+    { user_id: USER, chat_session_id: padded(SESSION) },
+    { user_id: padded(USER), chat_session_id: padded(SESSION) },
+  ]) {
+    const sql = historySql();
+    const res = await invoke(sql, historyEvent({ pathParameters }));
+    assert.equal(res.statusCode, 200, JSON.stringify(pathParameters));
+    assert.equal(res.body.user_id, USER);
+    assert.equal(res.body.chat_session_id, SESSION);
+    assert.ok(bound(sql).includes(SESSION));
+    assert.ok(bound(sql).every((v) => v === USER || v === SESSION), JSON.stringify(bound(sql)));
+  }
+});
+
 test("chat history ignores negative or junk pagination instead of failing (f-5290289f)", async () => {
   for (const qs of [{ limit: "-1" }, { offset: "-5" }, { limit: "abc", offset: "x" }]) {
     const sql = historySql();

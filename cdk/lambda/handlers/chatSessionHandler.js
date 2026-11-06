@@ -94,15 +94,17 @@ const queryUserId = (event) =>
   event.queryStringParameters?.user_id || event.queryStringParameters?.user_session_id;
 
 // Validates the session id and confirms `userId` (the token's user) owns it.
-// Returns null on success, or { statusCode, error } to send back. A missing
+// Returns { chatSessionId } (the trimmed id that was checked, which the route
+// must bind) on success, or { statusCode, error } to send back. A missing
 // and a foreign session get the same 404, so no guest can tell whether
 // another family's session id exists (as in textGeneration's
 // session_security.py, finding f-c5ba1a1b).
 const SESSION_NOT_FOUND = { statusCode: 404, error: "Chat session not found" };
 
-const checkSessionOwnership = async (chatSessionId, userId) => {
-  const sessionCheck = validateUUID(chatSessionId, "chat_session_id");
+const checkSessionOwnership = async (pathSessionId, userId) => {
+  const sessionCheck = validateUUID(pathSessionId, "chat_session_id");
   if (!sessionCheck.valid) return { statusCode: 400, error: sessionCheck.error };
+  const chatSessionId = sessionCheck.value;
 
   const chatSession = await sqlConnection`
     SELECT id
@@ -110,7 +112,7 @@ const checkSessionOwnership = async (chatSessionId, userId) => {
     WHERE id = ${chatSessionId} AND user_id = ${userId}
   `;
 
-  return chatSession.length === 0 ? SESSION_NOT_FOUND : null;
+  return chatSession.length === 0 ? SESSION_NOT_FOUND : { chatSessionId };
 };
 
 const reject = (response, failure) => {
@@ -263,9 +265,9 @@ exports.handler = async (event) => {
       }
 
       case "PUT /chat_sessions/{chat_session_id}": {
-        const chatSessionId = event.pathParameters?.chat_session_id;
+        const pathSessionId = event.pathParameters?.chat_session_id;
 
-        if (!chatSessionId) {
+        if (!pathSessionId) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: "chat_session_id is required" });
           break;
@@ -293,11 +295,12 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
-        if (ownershipError) {
-          reject(response, ownershipError);
+        const session = await checkSessionOwnership(pathSessionId, caller.userId);
+        if (session.error) {
+          reject(response, session);
           break;
         }
+        const { chatSessionId } = session;
 
         const updated = await sqlConnection`
           UPDATE chat_sessions
@@ -314,9 +317,9 @@ exports.handler = async (event) => {
       }
 
       case "DELETE /chat_sessions/{chat_session_id}": {
-        const chatSessionId = event.pathParameters?.chat_session_id;
+        const pathSessionId = event.pathParameters?.chat_session_id;
 
-        if (!chatSessionId) {
+        if (!pathSessionId) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: "chat_session_id is required" });
           break;
@@ -328,11 +331,12 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
-        if (ownershipError) {
-          reject(response, ownershipError);
+        const session = await checkSessionOwnership(pathSessionId, caller.userId);
+        if (session.error) {
+          reject(response, session);
           break;
         }
+        const { chatSessionId } = session;
 
         // Delete children first if you DON'T have ON DELETE CASCADE
         await sqlConnection`
@@ -352,7 +356,7 @@ exports.handler = async (event) => {
       }
 
       case "GET /chat_sessions/{chat_session_id}/feedback": {
-        const chatSessionId = event.pathParameters?.chat_session_id;
+        const pathSessionId = event.pathParameters?.chat_session_id;
 
         const caller = resolveCaller(event, queryUserId(event));
         if (caller.error) {
@@ -360,11 +364,12 @@ exports.handler = async (event) => {
           break;
         }
 
-        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
-        if (ownershipError) {
-          reject(response, ownershipError);
+        const session = await checkSessionOwnership(pathSessionId, caller.userId);
+        if (session.error) {
+          reject(response, session);
           break;
         }
+        const { chatSessionId } = session;
 
         const rows = await sqlConnection`
           SELECT rating, comment, updated_at
@@ -378,7 +383,7 @@ exports.handler = async (event) => {
       }
 
       case "PUT /chat_sessions/{chat_session_id}/feedback": {
-        const chatSessionId = event.pathParameters?.chat_session_id;
+        const pathSessionId = event.pathParameters?.chat_session_id;
 
         const caller = resolveCaller(event, queryUserId(event));
         if (caller.error) {
@@ -409,11 +414,12 @@ exports.handler = async (event) => {
         }
         const comment = sanitizeString(body.comment, FEEDBACK_COMMENT_MAX_LENGTH);
 
-        const ownershipError = await checkSessionOwnership(chatSessionId, caller.userId);
-        if (ownershipError) {
-          reject(response, ownershipError);
+        const session = await checkSessionOwnership(pathSessionId, caller.userId);
+        if (session.error) {
+          reject(response, session);
           break;
         }
+        const { chatSessionId } = session;
 
         // One feedback row per session; later submissions replace the rating
         // and comment so users can change their mind.

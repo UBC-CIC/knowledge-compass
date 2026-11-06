@@ -156,7 +156,7 @@ function validateField(field) {
 function validateId(value, label) {
   const check = validateUUID(value, label);
   if (!check.valid) throw new InputError(check.error);
-  return value.trim();
+  return check.value;
 }
 
 /** "30d" | "6m" | "1y" -> days (default 30, capped at 365). "all" -> null. */
