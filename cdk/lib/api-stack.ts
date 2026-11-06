@@ -211,6 +211,7 @@ export function wafIpRateLimitRules(): wafv2.CfnWebACL.RuleProperty[] {
     },
 
     // Moderate limit for expensive AI endpoints (1000 req/5min per IP).
+    // URL_DECODE so an encoded path such as `/chat%5Fsessions` cannot skip it.
     {
       name: "LimitExpensiveEndpoints",
       priority: 5,
@@ -223,7 +224,7 @@ export function wafIpRateLimitRules(): wafv2.CfnWebACL.RuleProperty[] {
             byteMatchStatement: {
               searchString: "/chat_sessions",
               fieldToMatch: { uriPath: {} },
-              textTransformations: [{ priority: 0, type: "NONE" }],
+              textTransformations: [{ priority: 0, type: "URL_DECODE" }],
               positionalConstraint: "CONTAINS",
             },
           },

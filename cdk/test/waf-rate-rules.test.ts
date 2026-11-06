@@ -70,19 +70,31 @@ describe("WAF IP rate limits", () => {
     expect(statement.scopeDownStatement).toBeUndefined();
   });
 
-  test("chat generation and identity minting stay on the URI path", () => {
-    expect(rateOf(byName.get("LimitExpensiveEndpoints"))).toMatchObject({
+  // Finding f-26c13502: `/chat%5Fsessions` must not skip the chat cap.
+  test("the chat cap URL-decodes the path before matching /chat_sessions", () => {
+    const rule = byName.get("LimitExpensiveEndpoints");
+    expect(rule?.priority).toBe(5);
+    expect(rule?.action).toEqual({ block: {} });
+    expect(rule?.visibilityConfig).toEqual({
+      sampledRequestsEnabled: true,
+      cloudWatchMetricsEnabled: true,
+      metricName: "LimitExpensiveEndpoints",
+    });
+    expect(rateOf(rule)).toEqual({
       limit: 1000,
       aggregateKeyType: "IP",
       scopeDownStatement: {
         byteMatchStatement: {
           searchString: "/chat_sessions",
           fieldToMatch: { uriPath: {} },
+          textTransformations: [{ priority: 0, type: "URL_DECODE" }],
           positionalConstraint: "CONTAINS",
         },
       },
     });
+  });
 
+  test("identity minting stays on the URI path", () => {
     const mint = rateOf(byName.get("LimitIdentityMinting"));
     expect(mint.limit).toBe(60);
     const scope = JSON.stringify(mint.scopeDownStatement);
