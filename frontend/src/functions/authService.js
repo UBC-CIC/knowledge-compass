@@ -7,6 +7,7 @@ import {
   fetchAuthSession,
 } from "aws-amplify/auth";
 import { apiCache } from "./apiCache.js";
+import { chooseAdminTokenStorage } from "../lib/adminTokenStorage";
 
 export class AuthService {
   static authCache = new Map();
@@ -42,10 +43,13 @@ export class AuthService {
     }
   }
 
-  static async signIn(email, password) {
+  static async signIn(email, password, remember = true) {
     try {
       // Clear auth cache on new sign in
       this.clearAuthCache();
+
+      // "Keep me signed in": localStorage when ticked, sessionStorage when not.
+      await chooseAdminTokenStorage(remember);
 
       // The admin app client allows only SRP (cdk/lib/api-stack.ts), so pin it
       // here rather than rely on Amplify's default.

@@ -196,7 +196,7 @@ export default function AdminLogin() {
     }
 
     try {
-      const result = await AuthService.signIn(email, password);
+      const result = await AuthService.signIn(email, password, remember);
 
       if (!result.success) {
         setError(result.error || "Invalid email or password");
