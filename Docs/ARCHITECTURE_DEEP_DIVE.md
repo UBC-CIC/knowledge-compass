@@ -34,7 +34,7 @@ For the full list of stacks see the [Deployment Guide](./DEPLOYMENT_GUIDE.md#sta
 
 Migrations in `cdk/lambda/db_setup/migrations/` are the source of truth for the schema; see [Database Migrations](./DATABASE_MIGRATIONS.md). The tables below are grouped by purpose, with the migration that introduced each one.
 
-The diagrams show each table's keys and main columns as of migration 049. Tables without lines have no foreign keys. The `created_by` and `updated_by` columns that point at an administrator's `users` row (on `data_sources`, `system_messages`, `system_settings`, `journeys`, `journey_clusters` and `journey_prompt_versions`) are not drawn.
+The diagrams show each table's keys and main columns as of migration 050 (which adds a unique index allowing one active row per `type` in `system_messages` and changes no columns). Tables without lines have no foreign keys. The `created_by` and `updated_by` columns that point at an administrator's `users` row (on `data_sources`, `system_messages`, `system_settings`, `journeys`, `journey_clusters` and `journey_prompt_versions`) are not drawn.
 
 #### Users, chat, prompts and limits
 
