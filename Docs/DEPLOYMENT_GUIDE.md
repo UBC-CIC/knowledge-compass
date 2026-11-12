@@ -253,6 +253,8 @@ Bootstrap once per account and Region (skip if CDK has already been bootstrapped
 npx cdk bootstrap aws://<YOUR_AWS_ACCOUNT_ID>/<YOUR_ACCOUNT_REGION> --profile <YOUR-PROFILE-NAME>
 ```
 
+The bootstrap command is the same in PowerShell.
+
 #### Deploy the stacks
 
 ```bash
@@ -263,6 +265,20 @@ npx cdk deploy --all \
   --context githubRepo=knowledge-compass \
   --profile <YOUR-PROFILE-NAME>
 ```
+
+<details>
+<summary>PowerShell version of the deploy</summary>
+
+```powershell
+npx cdk deploy --all `
+  --context StackPrefix=<YOUR-STACK-PREFIX> `
+  --context environment=dev `
+  --context versionNumber=1.0.0 `
+  --context githubRepo=knowledge-compass `
+  --profile <YOUR-PROFILE-NAME>
+```
+
+</details>
 
 - `StackPrefix` is prefixed onto the stack names and the physical names of their resources.
 - `environment` (`dev`, `test`, `prod`) sets the `Environment` tag and the CICD environment name; it defaults to `dev`.
@@ -322,6 +338,17 @@ The CICD stack creates a CodeConnections GitHub connection that stays `PENDING` 
      --profile <YOUR-PROFILE-NAME>
    ```
 
+   PowerShell:
+
+   ```powershell
+   npx cdk deploy <YOUR-STACK-PREFIX>-Ingestion `
+     --context StackPrefix=<YOUR-STACK-PREFIX> `
+     --context environment=dev `
+     --context versionNumber=1.0.0 `
+     --context githubRepo=knowledge-compass `
+     --profile <YOUR-PROFILE-NAME>
+   ```
+
    Use the same `--context` values as your `--all` deploy, including any optional flags you set.
 
 This is needed only on the first deployment. Later pushes that change `cdk/containers/` start a new build automatically.
@@ -373,6 +400,25 @@ aws ssm put-parameter \
   --overwrite \
   --profile <YOUR-PROFILE-NAME>
 ```
+
+<details>
+<summary>PowerShell version of the allowed origins</summary>
+
+```powershell
+aws ssm get-parameter `
+  --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" `
+  --profile <YOUR-PROFILE-NAME> `
+  --query Parameter.Value --output text
+
+aws ssm put-parameter `
+  --name "/<STACK-PREFIX>-Api/API/AllowedOrigins" `
+  --value "https://main.abc123.amplifyapp.com,https://your-custom-domain.com" `
+  --type String `
+  --overwrite `
+  --profile <YOUR-PROFILE-NAME>
+```
+
+</details>
 
 Later CDK deployments do not overwrite origins you added.
 
