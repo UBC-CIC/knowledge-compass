@@ -200,6 +200,29 @@ class MainKillSwitchTests(KillSwitchTestCase):
         sent = [p["type"] for p in self.ws.payloads]
         self.assertEqual(sent, ["start", "complete"])
 
+    def test_an_anonymous_empty_request_reads_the_switch_without_db_work(self):
+        # The admin console's read-only check (frontend/src/lib/publicChatSwitch.ts):
+        # an anonymous token, an empty body and the nil session id.
+        event = {
+            "requestContext": {"authorizer": {"userId": "", "role": "user"}},
+            "pathParameters": {"chat_session_id": "00000000-0000-0000-0000-000000000000"},
+            "body": "{}",
+        }
+
+        self.ssm.value = "false"
+        paused = main.handler(event)
+        self.assertEqual(paused["statusCode"], 429)
+        self.assertEqual(json.loads(paused["body"])["error"], "PUBLIC_CHAT_PAUSED")
+
+        kill_switch._cache.update({"value": None, "at": 0.0})
+        self.ssm.value = "true"
+        running = main.handler(event)
+        self.assertEqual(running["statusCode"], 401)
+        self.assertNotEqual(json.loads(running["body"])["error"], "PUBLIC_CHAT_PAUSED")
+
+        self.get_db_connection.assert_not_called()
+        self.get_response.assert_not_called()
+
     def test_ssm_error_does_not_take_chat_down(self):
         self.ssm.error = RuntimeError("ssm down")
         with self.assertLogs(level=logging.WARNING):

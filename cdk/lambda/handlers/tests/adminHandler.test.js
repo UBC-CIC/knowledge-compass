@@ -479,7 +479,7 @@ test("system settings audits the patched field names and never their values", as
     httpMethod: "PUT",
     resource: "/admin/system-settings",
     requestContext: auditContext,
-    body: JSON.stringify({ max_messages_per_day: 77, service_status: "normal" }),
+    body: JSON.stringify({ max_messages_per_day: 77, service_message: "Back at 3 pm." }),
   });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const inserts = auditInserts(sql);
@@ -487,10 +487,36 @@ test("system settings audits the patched field names and never their values", as
   assert.equal(inserts[0].values[2], "system_settings.update");
   assert.deepEqual(JSON.parse(inserts[0].values[3]), {
     settings_id: "s1",
-    fields: ["max_messages_per_day", "service_status"],
+    fields: ["max_messages_per_day", "service_message"],
   });
   assert.ok(!JSON.stringify(res.audits).includes("77"));
+  assert.ok(!JSON.stringify(res.audits).includes("Back at 3 pm."));
+  assert.ok(!JSON.stringify(inserts[0].values).includes("Back at 3 pm."));
   assert.equal(res.audits.length, 1);
+});
+
+test("pausing and resuming public chat records the new service status in the audit row", async () => {
+  for (const service_status of ["read_only", "normal", "banner"]) {
+    const sql = settingsSql();
+    const res = await invokeCapturing(sql, {
+      httpMethod: "PUT",
+      resource: "/admin/system-settings",
+      requestContext: auditContext,
+      body: JSON.stringify({ service_status, service_message: "Back at 3 pm." }),
+    });
+    assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+    const inserts = auditInserts(sql);
+    assert.equal(inserts.length, 1);
+    // The status is one of three fixed values; the message text is never recorded.
+    assert.deepEqual(JSON.parse(inserts[0].values[3]), {
+      settings_id: "s1",
+      fields: ["service_status", "service_message"],
+      service_status,
+    });
+    assert.ok(!JSON.stringify(inserts[0].values).includes("Back at 3 pm."));
+    assert.equal(res.audits.length, 1);
+    assert.equal(res.audits[0].target.service_status, service_status);
+  }
 });
 
 test("system settings: a failing audit insert is a 500 with no success log", async () => {

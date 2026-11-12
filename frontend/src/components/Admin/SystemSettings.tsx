@@ -23,6 +23,7 @@ import {
   type SettingKey,
 } from "@/lib/assistantSettings";
 import { API_ENDPOINT } from "@/lib/api";
+import { isPublicChatPausedBySwitch } from "@/lib/publicChatSwitch";
 import ServiceStatusCard from "@/components/Admin/ServiceStatusCard";
 import SettingsSection from "@/components/Admin/SettingsSection";
 import {
@@ -123,6 +124,8 @@ export default function SystemSettings() {
   const [draft, setDraft] = useState<AssistantSettings>(RECOMMENDED);
   const [meta, setMeta] = useState<Meta>({});
   const [service, setService] = useState<ServiceState>(NORMAL_SERVICE_STATE);
+  // The AWS break-glass switch, read through the public chat route (lib/publicChatSwitch).
+  const [breakGlassPaused, setBreakGlassPaused] = useState(false);
   const [loading, setLoading] = useState(!isDemoMode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +144,8 @@ export default function SystemSettings() {
       setService(demoService);
       return;
     }
+    // Runs alongside the settings read; it never fails (false when unknown).
+    isPublicChatPausedBySwitch().then(setBreakGlassPaused);
     try {
       setLoading(true);
       const data = await settingsFetch<Partial<Record<SettingKey, unknown>> & ServiceFields & Meta>();
@@ -494,7 +499,7 @@ export default function SystemSettings() {
             </div>
           </div>
 
-          <ServiceStatusCard saved={service} onSave={saveService} />
+          <ServiceStatusCard saved={service} onSave={saveService} breakGlassPaused={breakGlassPaused} />
 
           <div>
             <DeveloperSwitch checked={showDeveloper} onChange={setShowDeveloper} />

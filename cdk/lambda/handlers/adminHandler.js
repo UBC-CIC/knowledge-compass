@@ -1547,6 +1547,9 @@ exports.handler = async (event) => {
             settingsAudit = auditEntry(event, "system_settings.update", {
               settings_id: rows[0].id,
               fields: Object.keys(patch),
+              // Pausing or resuming public chat: the new status (one of three fixed
+              // values, already validated) so the row says which. Never the message.
+              ...(patch.service_status !== undefined && { service_status: patch.service_status }),
             });
             await insertAdminAudit(tx, settingsAudit);
           }

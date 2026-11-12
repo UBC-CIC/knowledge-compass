@@ -10,6 +10,9 @@
  *
  * `target` holds ids and field names only: never prompt content, setting
  * values, tokens or guest personal data. The admin's own email is allowed.
+ * One exception: a system settings update records the new service status
+ * (one of three fixed values), so a pause or resume of public chat is
+ * visible; the service message is never recorded.
  */
 
 const { adminSubFromEvent } = require("./adminIdentity.js");
