@@ -24,7 +24,7 @@
     - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
     - [Step 2: Configure Admin User](#step-2-configure-admin-user)
     - [Step 3: Visit Web App](#step-3-visit-web-app)
-  - [Step 4: Add Content](#step-4-add-content)
+    - [Step 4: Add Content](#step-4-add-content)
     - [Adding Custom Allowed Origins](#adding-custom-allowed-origins)
   - [Troubleshooting](#troubleshooting)
   - [Cleanup](#cleanup)
@@ -115,20 +115,36 @@ aws secretsmanager create-secret `
 
 </details>
 
-Allowed email domains for **administrator** accounts, as a comma-separated list with no spaces, in lowercase (for example `inclusioncanada.ca,example.org`). Domains must match exactly; subdomains are not included. The Cognito pre-sign-up trigger rejects an account with any other domain, including one you create in the Cognito console. Public users have no account, so this list does not affect them.
+Allowed email domains for **administrator** accounts, as a comma-separated list with no spaces, in lowercase (for example `example.ca,example.org`). Domains must match exactly; subdomains are not included. The Cognito pre-sign-up trigger rejects an account with any other domain, including one you create in the Cognito console. Public users have no account, so this list does not affect them.
 
 ```bash
 aws ssm put-parameter \
     --name "/KC/AllowedEmailDomains" \
-    --value "inclusioncanada.ca" \
+    --value "example.ca" \
     --type SecureString \
     --profile <YOUR-PROFILE-NAME>
 ```
 
-The application uses Claude Haiku 5.5 for all text generation. It reads the model from two SSM parameters (one per role); set both to the same Haiku 5.5 ID. You must create both before deploying.
+<details>
+<summary>PowerShell version of the GitHub username and allowed email domains</summary>
 
-- `/KC/LLM/HaikuArn`: router, detective replies, grounding check, titles, guideline labelling.
-- `/KC/LLM/SonnetArn`: partial and suggestion replies (the name is historical).
+```powershell
+aws ssm put-parameter `
+    --name "KC-owner-name" `
+    --value "<YOUR-GITHUB-USERNAME>" `
+    --type String `
+    --profile <YOUR-PROFILE-NAME>
+
+aws ssm put-parameter `
+    --name "/KC/AllowedEmailDomains" `
+    --value "example.ca" `
+    --type SecureString `
+    --profile <YOUR-PROFILE-NAME>
+```
+
+</details>
+
+The application uses Claude Haiku 5.5 for all text generation (router, detective, partial and suggestion replies, grounding check, titles, guideline labelling). It reads the model ID from the SSM parameter `/KC/LLM/HaikuArn`. You must create it before deploying.
 
 ```bash
 aws ssm put-parameter \
@@ -136,13 +152,20 @@ aws ssm put-parameter \
     --value "us.anthropic.claude-haiku-5-5" \
     --type String \
     --profile <YOUR-PROFILE-NAME>
+```
 
-aws ssm put-parameter \
-    --name "/KC/LLM/SonnetArn" \
-    --value "us.anthropic.claude-haiku-5-5" \
-    --type String \
+<details>
+<summary>PowerShell version of the model parameter</summary>
+
+```powershell
+aws ssm put-parameter `
+    --name "/KC/LLM/HaikuArn" `
+    --value "us.anthropic.claude-haiku-5-5" `
+    --type String `
     --profile <YOUR-PROFILE-NAME>
 ```
+
+</details>
 
 ### Step 3: CDK Deployment
 
@@ -369,7 +392,7 @@ Add the page's origin to `/<STACK-PREFIX>-Api/API/AllowedOrigins` ([Adding Custo
 
 **Text generation Lambda fails with a parameter not found error**
 
-Create the `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` SSM parameters ([Step 2](#step-2-upload-secrets--parameters)).
+Create the `/KC/LLM/HaikuArn` SSM parameter ([Step 2](#step-2-upload-secrets--parameters)).
 
 **The first chat fails with `AccessDeniedException` from Bedrock**
 
@@ -408,7 +431,7 @@ Follow these steps in order, and wait for each stack to finish deleting before s
 
 3. **Delete the secrets** in Secrets Manager: `github-personal-access-token`, `KCSecrets`, and any database credentials the stack created.
 
-4. **Delete the SSM parameters:** `KC-owner-name`, `/KC/AllowedEmailDomains`, `/KC/LLM/HaikuArn`, `/KC/LLM/SonnetArn`, `/<STACK-PREFIX>-Api/API/AllowedOrigins`.
+4. **Delete the SSM parameters:** `KC-owner-name`, `/KC/AllowedEmailDomains`, `/KC/LLM/HaikuArn`, `/<STACK-PREFIX>-Api/API/AllowedOrigins`.
 
 5. **Delete the retained resources.** These survive stack deletion by design:
    - Cognito user pool `<STACK-PREFIX>-Api-UserPool`: turn off its deletion protection, then delete it.

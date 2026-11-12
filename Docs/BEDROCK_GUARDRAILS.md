@@ -51,7 +51,7 @@ User messages are not content-filtered, so a family can describe what happened t
 
 The constants are combined into one `guardrailPolicy`, hashed by `computeConfigHash`, and published as a `CfnGuardrailVersion` named after the hash, so any policy change creates a new pinned version. The hash is also a `ConfigHash` tag on the guardrail.
 
-The CDK passes the guardrail ID and pinned version to the text generation Lambda as environment variables `GUARDRAIL_ID` and `GUARDRAIL_VERSION` (no SSM parameter), and grants `bedrock:ApplyGuardrail` on that guardrail's ARN only. `config.load_config()` raises `RuntimeError` if either variable is missing. The models themselves come from the SSM parameters `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn` (both set to Claude Haiku 5.5), whose names the Lambda receives in `HAIKU_ARN` and `SONNET_ARN`.
+The CDK passes the guardrail ID and pinned version to the text generation Lambda as environment variables `GUARDRAIL_ID` and `GUARDRAIL_VERSION` (no SSM parameter), and grants `bedrock:ApplyGuardrail` on that guardrail's ARN only. `config.load_config()` raises `RuntimeError` if either variable is missing. The models themselves come from the SSM parameter `/KC/LLM/HaikuArn` (Claude Haiku 5.5), whose name the Lambda receives in `HAIKU_ARN`.
 
 ### Lambda (`cdk/lambda/textGeneration/helpers/`)
 

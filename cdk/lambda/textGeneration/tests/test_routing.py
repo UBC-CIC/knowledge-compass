@@ -264,7 +264,7 @@ class RouteTurnTests(unittest.TestCase):
 class PromptAssemblyTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.multiple(
-            config, HAIKU_ARN="haiku", SONNET_ARN="sonnet", ROUTING_MODE="dynamic",
+            config, HAIKU_ARN="haiku", ROUTING_MODE="dynamic",
             MIN_EXCHANGES_BEFORE_SUGGEST=4,
         )
         patcher.start()
@@ -285,7 +285,7 @@ class PromptAssemblyTests(unittest.TestCase):
     def test_partial_is_public_suggestion_with_partial_format(self):
         route = _route(confidence="MEDIUM", situation="A", info_needed="duration")
         _, count, phase, instructions, model = logic.get_current_prompt(PARTIAL, 0, "journey: J1", route)
-        self.assertEqual((count, phase, model), (15, "SUGGESTION", "sonnet"))
+        self.assertEqual((count, phase, model), (15, "SUGGESTION", "haiku"))
         self.assertIn(config.OUTPUT_FORMAT_PARTIAL, instructions)
         self.assertNotIn(config.OUTPUT_FORMAT_SUGGESTION, instructions)
         self.assertIn(HINT_BLOCK, instructions)

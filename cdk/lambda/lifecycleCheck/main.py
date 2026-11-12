@@ -7,7 +7,7 @@ an SNS topic when something needs attention:
   * embedding models: every non-purged row of `embedding_spaces` (a retired space still
     counts, because a rollback would use it)
   * generation models: the SSM parameters in GENERATION_MODEL_PARAMS (default
-    /KC/LLM/HaikuArn and /KC/LLM/SonnetArn, the two parameters the app reads)
+    /KC/LLM/HaikuArn, the parameter the app reads)
 
 A model is flagged when
   * Bedrock reports a lifecycle status other than ACTIVE (for example LEGACY),
@@ -44,7 +44,7 @@ logger.setLevel(logging.INFO)
 # exactly 90 days away is not yet flagged.
 WARN_DAYS = 90
 
-DEFAULT_GENERATION_PARAMS = "/KC/LLM/HaikuArn,/KC/LLM/SonnetArn"
+DEFAULT_GENERATION_PARAMS = "/KC/LLM/HaikuArn"
 # Cross-region inference profile ids start with a geography; the model id follows.
 _GEO_PREFIXES = {"us", "eu", "apac", "us-gov", "global", "ca", "jp", "au"}
 _SNS_SUBJECT_MAX = 100

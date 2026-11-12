@@ -82,7 +82,7 @@ def get_current_prompt(
                             reported as SUGGESTION to keep the frontend contract)
       - phase_instructions: the dynamic block for this phase (phase prompt +
                             phase-specific output format), wrapped in XML tags
-      - model_arn:          Haiku for detective, Sonnet for partial/suggestion
+      - model_arn:          Haiku for every phase
 
     Inclusion Canada structure:
       static  = <role> + <guardrails> + <language_guidelines>
@@ -126,7 +126,7 @@ def get_current_prompt(
         )
     else:
         retrieval_count = ANSWER_RETRIEVAL_COUNT
-        model_arn = config.SONNET_ARN
+        model_arn = config.HAIKU_ARN
 
         # Stored in chat_sessions.metadata, so it is bounded, escaped and
         # fenced as data (see helpers/prompt_data.py).

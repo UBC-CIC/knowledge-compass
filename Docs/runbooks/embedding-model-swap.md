@@ -119,7 +119,7 @@ Never put private details in the message; any visitor can read it (`GET /system-
 A weekly Lambda (`<stack id>-lifecycleCheck`, schedule `rate(7 days)`) lists the models the system depends on:
 
 - every non-purged embedding index, with the end-of-life date you entered (it may be empty, which is not an alert by itself);
-- the generation models named by the SSM parameters `/KC/LLM/HaikuArn` and `/KC/LLM/SonnetArn`.
+- the generation model named by the SSM parameter `/KC/LLM/HaikuArn`.
 
 It sends **one** message to the SNS topic `<stack id>-ModelLifecycleAlerts` when a model is not `ACTIVE`, is missing from the Bedrock model list in its region, ends within **90 days** (or already ended), or when a region could not be checked ("check failed"). The message lists model id, region, reason and days left, and nothing secret.
 

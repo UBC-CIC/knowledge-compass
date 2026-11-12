@@ -118,7 +118,7 @@ class ChatModeTestBase(unittest.TestCase):
             "route_turn": mock.Mock(return_value=None),
             "decide_phase": mock.Mock(return_value="SUGGESTION"),
             "touched_keys": mock.Mock(return_value=([], [])),
-            "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "sonnet")),
+            "get_current_prompt": mock.Mock(return_value=("static", 15, "SUGGESTION", "<phase>x</phase>", "haiku")),
             "retrieve_from_pgvector": mock.Mock(return_value=list(RESOURCES)),
             "retrieve_guideline_sections": mock.Mock(return_value=SECTIONS),
             "fetch_journey_coverage": mock.Mock(return_value={}),
@@ -305,7 +305,7 @@ class GuidelineModeTest(ChatModeTestBase):
         self.assertEqual(result["phase"], "SUGGESTION")
 
         payload = self.bedrock.converse_stream.call_args.kwargs
-        self.assertEqual(payload["modelId"], "sonnet")
+        self.assertEqual(payload["modelId"], "haiku")
         dynamic = payload["system"][2]["text"]
         self.assertIn("[1] Situation: Child sent home early", dynamic)
         # Resources continue the numbering after the guide sections.

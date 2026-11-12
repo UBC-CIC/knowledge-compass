@@ -1518,7 +1518,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
 
     // Main chat (answer) model: a US cross-region inference profile id. Same value as the
-    // documented /KC/LLM/SonnetArn parameter (Haiku 5.5, same as /KC/LLM/HaikuArn); also
+    // documented /KC/LLM/HaikuArn parameter (Haiku 5.5); also
     // the ModelId dimension of the Bedrock token alarms below.
     const generationModelId = GENERATION_INFERENCE_PROFILE;
 
@@ -1555,33 +1555,19 @@ export class ApiGatewayStack extends cdk.Stack {
       maxEventAge: Duration.seconds(60),
     });
 
-    // Grant SSM parameter access for HaikuArn and SonnetArn
-      lambdaTextGen.addToRolePolicy(
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: ["ssm:GetParameter", "ssm:GetParameters"],
-          resources: [
-            `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
-            `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
-          ],
-        })
-      );
-
-      // Add SSM parameter names as environment variables
-      lambdaTextGen.addEnvironment("HAIKU_ARN", "/KC/LLM/HaikuArn");
-      lambdaTextGen.addEnvironment("SONNET_ARN", "/KC/LLM/SonnetArn");
-
-
+    // Grant SSM parameter access for HaikuArn (the generation model for every phase)
     lambdaTextGen.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions:["ssm:GetParameter", "ssm:GetParameters"],
+        actions: ["ssm:GetParameter", "ssm:GetParameters"],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
         ],
       })
     );
+
+    // Add the SSM parameter name as an environment variable
+    lambdaTextGen.addEnvironment("HAIKU_ARN", "/KC/LLM/HaikuArn");
 
     // --- Bedrock Guardrail (input and output) ---
     // Applied by text generation to the user's message (source='INPUT') and to
@@ -1834,7 +1820,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     // Own role, least privilege. bedrock:ListFoundationModels has no resource-level scoping.
     // The two SSM parameters are the generation-model names the app already reads
-    // (/KC/LLM/HaikuArn, /KC/LLM/SonnetArn); this is the only SSM access.
+    // (/KC/LLM/HaikuArn); this is the only SSM access.
     const lifecycleRole = new iam.Role(this, `${id}-lifecycleCheckRole`, {
       roleName: `${id}-lifecycleCheckRole`,
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -1863,7 +1849,6 @@ export class ApiGatewayStack extends cdk.Stack {
       actions: ['ssm:GetParameters'],
       resources: [
         `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/HaikuArn`,
-        `arn:aws:ssm:${this.region}:${this.account}:parameter/KC/LLM/SonnetArn`,
       ],
     }));
 
@@ -1886,7 +1871,7 @@ export class ApiGatewayStack extends cdk.Stack {
         RDS_PROXY_ENDPOINT: db.rdsProxyEndpoint,
         REGION: this.region,
         SNS_TOPIC_ARN: lifecycleTopic.topicArn,
-        GENERATION_MODEL_PARAMS: '/KC/LLM/HaikuArn,/KC/LLM/SonnetArn',
+        GENERATION_MODEL_PARAMS: '/KC/LLM/HaikuArn',
       },
     });
 

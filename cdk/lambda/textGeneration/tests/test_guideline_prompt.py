@@ -84,7 +84,7 @@ class GuidelinePromptTest(unittest.TestCase):
         self.assertIn("<cited_indices>", dynamic)
         self.assertIn("resource you linked or mentioned", dynamic)
         self.assertIn("<guide_state>section: n</guide_state>", dynamic)
-        self.assertEqual(model, config.SONNET_ARN)
+        self.assertEqual(model, config.HAIKU_ARN)
         print("\n--- structured prompt (dynamic) ---\n" + dynamic)
 
     def test_empty_sections_ask_clarifying_question(self):

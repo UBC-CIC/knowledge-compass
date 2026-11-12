@@ -329,11 +329,10 @@ class HandlerTests(unittest.TestCase):
             env.run()
 
     def test_generation_parameters_come_from_configuration(self):
-        env = Env(self, generation={"/KC/LLM/HaikuArn": HAIKU, "/KC/LLM/SonnetArn": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
-                  listings={REGION: listing(summary(HAIKU), summary("anthropic.claude-3-5-sonnet-20241022-v2:0"))})
+        env = Env(self, generation={"/KC/LLM/HaikuArn": HAIKU}, listings={REGION: listing(summary(HAIKU))})
         env.run()
         names = env.ssm.get_parameters.call_args.kwargs["Names"]
-        self.assertEqual(names, ["/KC/LLM/HaikuArn", "/KC/LLM/SonnetArn"])
+        self.assertEqual(names, ["/KC/LLM/HaikuArn"])
 
 
 class DbTlsTests(unittest.TestCase):

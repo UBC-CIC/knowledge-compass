@@ -9,8 +9,8 @@ message. `decide_phase` then combines those signals with the exchange count,
 the admin settings, and the session's routing state to pick this turn's phase:
 
   DETECTIVE   ask one focused question (Haiku, no guidance yet)
-  PARTIAL     1-2 low-risk steps plus one clarifying question (Sonnet)
-  SUGGESTION  full cluster-based guidance (Sonnet)
+  PARTIAL     1-2 low-risk steps plus one clarifying question
+  SUGGESTION  full cluster-based guidance
 
 PARTIAL is internal only: it is reported to the frontend as SUGGESTION so the
 REST/WebSocket contract ("DETECTIVE" | "SUGGESTION") is unchanged.

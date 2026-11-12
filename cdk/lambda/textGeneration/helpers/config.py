@@ -24,7 +24,6 @@ JOURNEY_CATALOG: JourneyCatalog = DEFAULT_CATALOG
 # ------------------------------------------------------------------
 
 HAIKU_ARN = None
-SONNET_ARN = None
 
 REGION = os.getenv("REGION", "ca-central-1")
 LLM_REGION = os.getenv("LLM_REGION", "us-west-2")
@@ -391,7 +390,7 @@ def load_config(db_connection):
     global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_DAY, MAX_MESSAGES_PER_DAY_GLOBAL, MAX_CHARACTERS_PER_AI_MESSAGE, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
     global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
     global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, WELCOME_MESSAGE
-    global HAIKU_ARN, SONNET_ARN
+    global HAIKU_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
     global PROMPT_MODE, GUIDELINE_OUTLINE
 
@@ -407,16 +406,6 @@ def load_config(db_connection):
         ssm = boto3.client("ssm")
         try:
             HAIKU_ARN = ssm.get_parameter(Name=ssm_param)["Parameter"]["Value"]
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch SSM parameter {ssm_param}: {e}")
-
-    if not SONNET_ARN:
-        ssm_param = os.environ.get("SONNET_ARN")
-        if not ssm_param:
-            raise RuntimeError("Missing environment variable for SONNET_ARN")
-        ssm = boto3.client("ssm")
-        try:
-            SONNET_ARN = ssm.get_parameter(Name=ssm_param)["Parameter"]["Value"]
         except Exception as e:
             raise RuntimeError(f"Failed to fetch SSM parameter {ssm_param}: {e}")
 

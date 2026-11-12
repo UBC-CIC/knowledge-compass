@@ -210,7 +210,7 @@ def build_guideline_prompt(
 {GUIDELINE_OUTPUT_FORMAT}
 </output_format>
 """
-    return build_static_prompt(), dynamic_prompt, config.SONNET_ARN
+    return build_static_prompt(), dynamic_prompt, config.HAIKU_ARN
 
 
 def parse_guide_state(

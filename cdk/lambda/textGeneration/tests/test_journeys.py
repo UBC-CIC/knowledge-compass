@@ -173,7 +173,7 @@ class DetectiveBlockTests(unittest.TestCase):
 class PromptAssemblyTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.multiple(
-            config, HAIKU_ARN="haiku", SONNET_ARN="sonnet", ROUTING_MODE="dynamic",
+            config, HAIKU_ARN="haiku", ROUTING_MODE="dynamic",
             MIN_EXCHANGES_BEFORE_SUGGEST=4, JOURNEY_CATALOG=DEFAULT_CATALOG,
         )
         patcher.start()

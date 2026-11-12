@@ -146,12 +146,9 @@ Wrap with `<ProtectedRoute>` if admin-only.
 
 ## Configuring LLM Models
 
-The text generation Lambda reads two model IDs from SSM: `HaikuArn` (router, detective replies, grounding check, titles) and `SonnetArn` (partial and suggestion replies). Both are set to Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`):
+The text generation Lambda reads one model ID from SSM, `/KC/LLM/HaikuArn`, and uses it for every generation call (router, detective, partial and suggestion replies, grounding check, titles). It is set to Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`).
 
-- `/KC/LLM/HaikuArn`
-- `/KC/LLM/SonnetArn`
-
-To update a model, change the SSM parameter value via the AWS Console or CLI:
+To update the model, change the SSM parameter value via the AWS Console or CLI:
 
 ```bash
 aws ssm put-parameter \
