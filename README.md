@@ -3,6 +3,22 @@ Knowledge Compass is a conversational assistant that uses Large Language Models 
 
 To deploy, follow the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md). All guides are listed under [Documentation](#documentation).
 
+## Table of Contents
+
+- [High-Level Architecture](#high-level-architecture)
+- [Directories](#directories)
+- [Technology Stack](#technology-stack)
+  - [Frontend](#frontend)
+  - [Backend](#backend)
+  - [Infrastructure](#infrastructure)
+- [Documentation](#documentation)
+  - [Architecture and Design](#architecture-and-design)
+  - [Deployment and Configuration](#deployment-and-configuration)
+  - [Development and Maintenance](#development-and-maintenance)
+  - [API and Usage](#api-and-usage)
+- [Credits](#credits)
+- [License](#license)
+
 ## High-Level Architecture
 
 The following architecture diagram illustrates the various AWS components utilized to deliver the solution. For an in-depth explanation of the frontend and backend stacks, please look at the [Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md).
