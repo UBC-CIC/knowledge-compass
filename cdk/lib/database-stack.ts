@@ -84,12 +84,17 @@ export class DatabaseStack extends Stack {
       }
     );
 
+    // RDS retires old minor versions for new instances; keep this on a
+    // version listed by `aws rds describe-db-engine-versions --engine postgres`.
+    // 16.15 is newer than the constants in aws-cdk-lib 2.274.0, so use `of()`.
+    const postgresVersion = rds.PostgresEngineVersion.of("16.15", "16");
+
     const parameterGroup = new rds.ParameterGroup(
       this,
       `${id}-rdsParameterGroup`,
       {
         engine: rds.DatabaseInstanceEngine.postgres({
-          version: rds.PostgresEngineVersion.VER_16_9,
+          version: postgresVersion,
         }),
         description: "Empty parameter group",
         parameters: {
@@ -107,7 +112,7 @@ export class DatabaseStack extends Stack {
         subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       },
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_9,
+        version: postgresVersion,
       }),
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.BURSTABLE4_GRAVITON,

@@ -432,6 +432,17 @@ Another deployment uses the same names. Delete those resources or use a differen
 
 On a first deployment, IAM policy statements can reference the pipeline and ECR resources before they exist. Authorize the GitHub connection, run the pipeline and redeploy, as in [Step 4](#step-4-authorize-the-github-connection-and-build-the-images).
 
+**Database stack fails with "Cannot find version 16.x for postgres"**
+
+The PostgreSQL minor version is pinned in `cdk/lib/database-stack.ts` (`postgresVersion`, currently 16.15). RDS stops offering older minor versions for new instances over time. List the versions your Region offers, then set `postgresVersion` to one of them and redeploy:
+
+```bash
+aws rds describe-db-engine-versions --engine postgres --engine-version 16 \
+  --query "DBEngineVersions[].EngineVersion" --output text
+```
+
+On an existing database, a higher version upgrades it in place on the next deploy (short outage, no downgrade). Run `npx cdk diff` first.
+
 **CORS errors in the browser**
 
 Add the page's origin to `/<STACK-PREFIX>-Api/API/AllowedOrigins` ([Adding Custom Allowed Origins](#adding-custom-allowed-origins)).
