@@ -38,6 +38,7 @@ The following architecture diagram illustrates the various AWS components utiliz
 │   │   └── tests/
 │   ├── lambda/
 │   │   ├── adminAuthorizerFunction/  # Cognito admin authorizer
+│   │   ├── appSecretRotation/        # rotates JWT signing and worker tokens
 │   │   ├── authorization/            # user authorizer, Cognito triggers
 │   │   ├── db_setup/                 # node-pg-migrate runner and migrations/
 │   │   ├── ecrImageWaiter/           # waits for container images on first deploy
@@ -143,6 +144,7 @@ The following architecture diagram illustrates the various AWS components utiliz
 
 - **[Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md)**: System architecture and component interactions
 - **[Security Overview](Docs/SECURITY_OVERVIEW.md)**: Security architecture, controls, and compliance summary
+- **[AWS Managed Keys](Docs/AWS_MANAGED_KEYS.md)**: Where AWS managed or S3-managed keys are used for encryption, and how to switch to customer-managed KMS keys
 
 ### Deployment and Configuration
 
