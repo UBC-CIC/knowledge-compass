@@ -1,8 +1,6 @@
 ﻿# Knowledge Compass
 Knowledge Compass is a conversational assistant that uses Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to answer questions from a curated knowledge base. The current deployment helps families find their way through Inclusion Canada's inclusive-education guidance: it asks about their situation, then suggests next steps grounded in the documents, websites and videos an administrator has added. Administrators manage the knowledge base, prompts, settings and analytics from an admin dashboard.
 
-To deploy, follow the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md). All guides are listed under [Documentation](#documentation).
-
 ## Table of Contents
 
 | Index | Description |
