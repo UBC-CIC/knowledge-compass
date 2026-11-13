@@ -5,19 +5,15 @@ To deploy, follow the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md). All guides a
 
 ## Table of Contents
 
-- [High-Level Architecture](#high-level-architecture)
-- [Directories](#directories)
-- [Technology Stack](#technology-stack)
-  - [Frontend](#frontend)
-  - [Backend](#backend)
-  - [Infrastructure](#infrastructure)
-- [Documentation](#documentation)
-  - [Architecture and Design](#architecture-and-design)
-  - [Deployment and Configuration](#deployment-and-configuration)
-  - [Development and Maintenance](#development-and-maintenance)
-  - [API and Usage](#api-and-usage)
-- [Credits](#credits)
-- [License](#license)
+| Index | Description |
+|---|---|
+| [High-Level Architecture](#high-level-architecture) | High-level overview illustrating component interactions |
+| [Deployment](Docs/DEPLOYMENT_GUIDE.md) | How to deploy the project |
+| [User Guide](Docs/USER_GUIDE.md) | The working solution |
+| [Directories](#directories) | General project directory structure |
+| [Additional Documentation](#documentation) | Comprehensive guides and references |
+| [Credits](#credits) | Meet the team behind the solution |
+| [License](#license) | License details |
 
 ## High-Level Architecture
 
