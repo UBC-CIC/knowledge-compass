@@ -12,6 +12,10 @@ const path = require("node:path");
 const SECRET = "test-jwt-secret";
 const ISSUER = "test-issuer";
 const USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11";
+// WS_IP_HASH_SECRET and its ipHashKey (ipLimit.js), and the default client IP.
+const IP_HASH_SECRET_ID = "test-ip-hash-secret";
+const IP_HASH_KEY = "test-ip-hash-key-0123456789abcdef0123456789abcdef";
+const SOURCE_IP = "203.0.113.7";
 
 class FakeCommand {
   constructor(input) {
@@ -52,7 +56,8 @@ const conditionFailed = () =>
 // The three rate-limit UpdateItem shapes in connections.js consumeGenerateAllowance.
 const RL_INCREMENT = "attribute_exists(connectionId) AND rlWindow = :w AND rlCount < :max";
 const RL_START = "attribute_exists(connectionId) AND (attribute_not_exists(rlWindow) OR rlWindow < :w)";
-// The per-user window (consumeUserGenerateAllowance) lives on a "user#<id>" item it may create.
+// The per-user and per-IP windows (consumeKeyedAllowance) live on "user#<id>" and
+// "ip#<scope>#<hmac>" items they may create.
 const USER_RL_INCREMENT = "rlWindow = :w AND rlCount < :max";
 const USER_RL_START = "attribute_not_exists(rlWindow) OR rlWindow < :w";
 
@@ -76,7 +81,7 @@ function dynamoFake(connections, calls = [], { rateState = new Map(), updateErro
         const id = command.input.Key?.connectionId?.S ?? command.input.Item?.connectionId?.S;
         if (command instanceof UpdateItemCommand) {
           if (updateError) throw updateError;
-          if (id?.startsWith("user#")) {
+          if (id?.startsWith("user#") || id?.startsWith("ip#")) {
             const values = command.input.ExpressionAttributeValues;
             const w = Number(values[":w"].N);
             const state = rateState.get(id);
@@ -142,9 +147,10 @@ function dynamoFake(connections, calls = [], { rateState = new Map(), updateErro
  *   secretError - Error thrown by Secrets Manager
  *   updateError - Error thrown by DynamoDB UpdateItem only
  *   jwtSecret   - the JWT secret JSON (default { jwtSecret: SECRET })
+ *   ipSecretError - Error thrown when the IP hash secret is read
  * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections, rateState }.
  */
-function load(name, { connections = new Map(), secretError, updateError, jwtSecret = { jwtSecret: SECRET } } = {}) {
+function load(name, { connections = new Map(), secretError, ipSecretError, updateError, jwtSecret = { jwtSecret: SECRET } } = {}) {
   const rateState = new Map();
   const invocations = [];
   const posts = [];
@@ -156,7 +162,11 @@ function load(name, { connections = new Map(), secretError, updateError, jwtSecr
     jsonwebtoken: fakeJwt,
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
-        async send() {
+        async send(command) {
+          if (command.input?.SecretId === IP_HASH_SECRET_ID) {
+            if (ipSecretError) throw ipSecretError;
+            return { SecretString: JSON.stringify({ ipHashKey: IP_HASH_KEY }) };
+          }
           if (secretError) throw secretError;
           return { SecretString: JSON.stringify(jwtSecret) };
         }
@@ -213,9 +223,20 @@ const loadDefault = (options) => load("default", options);
 const loadConnect = (options) => load("connect", options);
 const loadDisconnect = (options) => load("disconnect", options);
 
-/** Set JWT_ISSUER and CONNECTIONS_TABLE_NAME for a test; returns a restore function. */
+/**
+ * Set JWT_ISSUER, CONNECTIONS_TABLE_NAME and WS_IP_HASH_SECRET for a test, with
+ * the WS_IP_* limits at their defaults; returns a restore function.
+ */
 function withEnv(overrides = {}) {
-  const values = { JWT_ISSUER: ISSUER, CONNECTIONS_TABLE_NAME: "test-connections", ...overrides };
+  const values = {
+    JWT_ISSUER: ISSUER,
+    CONNECTIONS_TABLE_NAME: "test-connections",
+    WS_IP_HASH_SECRET: IP_HASH_SECRET_ID,
+    WS_IP_CONNECT_RATE_LIMIT: undefined,
+    WS_IP_GENERATE_RATE_LIMIT: undefined,
+    WS_IP_RATE_WINDOW_SECONDS: undefined,
+    ...overrides,
+  };
   const saved = {};
   for (const [key, value] of Object.entries(values)) {
     saved[key] = process.env[key];
@@ -253,6 +274,8 @@ module.exports = {
   SECRET,
   ISSUER,
   USER,
+  IP_HASH_KEY,
+  SOURCE_IP,
   fakeJwt,
   accessToken,
   dynamoFake,

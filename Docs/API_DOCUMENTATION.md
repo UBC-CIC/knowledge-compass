@@ -1266,6 +1266,8 @@ The client sends one JSON frame per chat message:
 | `user_id` | no | Legacy field. If sent, it must equal the bound user |
 
 - `generate_text` frames are rate limited twice, with the same limit and window: per connection, and per guest across all of that guest's connections, so opening more sockets gives no extra allowance. The limit is `WS_GENERATE_RATE_LIMIT` frames per `WS_GENERATE_RATE_WINDOW_SECONDS` (defaults 10 per 60 s, `cdk/lambda/websocket/connections.js`). Every `generate_text` frame counts, valid or not. An over-limit frame gets a `RATE_LIMITED` error event and nothing else runs.
+- `generate_text` frames are also limited per client IP, across every guest on that address: `WS_IP_GENERATE_RATE_LIMIT` per `WS_IP_RATE_WINDOW_SECONDS` (defaults 30 per 60 s, `cdk/lambda/websocket/ipLimit.js`). Over the limit gives the same `RATE_LIMITED` event. IPv6 addresses are counted per /64.
+- `$connect` handshakes are limited per client IP before the token is checked: `WS_IP_CONNECT_RATE_LIMIT` per `WS_IP_RATE_WINDOW_SECONDS` (defaults 30 per 60 s). Over the limit the handshake is refused with `429`. Counters are keyed by an HMAC of the address (key in Secrets Manager, `<STACK-PREFIX>-Api-KC-WsIpHashSecret`), so no IP is stored.
 - An empty `query` or an invalid `chat_session_id` returns `400` with no event, so the client must validate both before sending.
 - The client sends `{"type": "ping"}` every 30 seconds to keep the connection open. Pings are not rate limited.
 

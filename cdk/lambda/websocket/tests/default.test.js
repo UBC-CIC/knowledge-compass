@@ -13,14 +13,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { USER, accessToken, loadDefault, withEnv, quietly } = require("./_loadWebsocket.js");
+const { USER, SOURCE_IP, accessToken, loadDefault, withEnv, quietly } = require("./_loadWebsocket.js");
 
 const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 
 const bound = () => ({ connections: new Map([["conn-1", USER]]) });
 const rawEvent = (body) => ({
-  requestContext: { connectionId: "conn-1", domainName: "example.com", stage: "prod", routeKey: "$default" },
+  requestContext: {
+    connectionId: "conn-1", domainName: "example.com", stage: "prod", routeKey: "$default",
+    identity: { sourceIp: SOURCE_IP },
+  },
   body,
 });
 const wsEvent = (body) => rawEvent(JSON.stringify(body));

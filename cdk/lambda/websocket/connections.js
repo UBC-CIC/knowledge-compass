@@ -7,8 +7,9 @@
  *
  * The same item carries a fixed-window generate_text frame counter for
  * $default (rlWindow = window number, rlCount = frames in it); see
- * consumeGenerateAllowance. WAFv2 cannot attach to WebSocket APIs, so this is
- * the per-connection rate limit.
+ * consumeGenerateAllowance. WAFv2 cannot attach to WebSocket APIs, so this
+ * table also holds the per-user and per-IP counters (consumeKeyedAllowance,
+ * ipLimit.js).
  */
 
 const {
@@ -141,14 +142,25 @@ async function consumeGenerateAllowance(connectionId, { limit, windowSeconds }, 
  * Count one generate_text frame against the bound guest's own window, shared by
  * every socket that guest holds (finding f-177af79e: the per-connection window
  * alone let one token open N sockets for N x the allowance). Kept on a
- * `user#<userId>` item in the same table (connection ids never contain "#"),
- * created on first use and removed by TTL after its window. Returns true when
+ * `user#<userId>` item (see consumeKeyedAllowance). Returns true when allowed,
+ * false when the window is full; throws on any other DynamoDB error.
+ */
+async function consumeUserGenerateAllowance(userId, limits, nowMs = Date.now()) {
+  if (typeof userId !== "string" || !UUID_REGEX.test(userId)) return false;
+  return consumeKeyedAllowance(`user#${userId}`, limits, nowMs);
+}
+
+/**
+ * Count one event against the fixed window on the counter item `key`
+ * ("<kind>#<id>" in the same table; connection ids never contain "#"), created
+ * on first use and removed by TTL after its window. Used for the per-user
+ * window above and the per-IP windows in ipLimit.js. Returns true when
  * allowed, false when the window is full; throws on any other DynamoDB error.
  */
-async function consumeUserGenerateAllowance(userId, { limit, windowSeconds }, nowMs = Date.now()) {
-  if (typeof userId !== "string" || !UUID_REGEX.test(userId)) return false;
+async function consumeKeyedAllowance(key, { limit, windowSeconds }, nowMs = Date.now()) {
+  if (typeof key !== "string" || !/^[a-z]+#./.test(key)) throw new Error("invalid counter key");
   const TableName = tableName();
-  const Key = { connectionId: { S: `user#${userId}` } };
+  const Key = { connectionId: { S: key } };
   const windowIndex = Math.floor(nowMs / 1000 / windowSeconds);
   const window = String(windowIndex);
   const expiresAt = String((windowIndex + 2) * windowSeconds);
@@ -187,6 +199,8 @@ async function consumeUserGenerateAllowance(userId, { limit, windowSeconds }, no
 
 module.exports = {
   consumeUserGenerateAllowance,
+  consumeKeyedAllowance,
+  positiveInt,
   putConnection,
   getConnectionUserId,
   deleteConnection,

@@ -11,7 +11,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { USER, accessToken, load, loadDefault, withEnv, quietly } = require("./_loadWebsocket.js");
+const { USER, SOURCE_IP, accessToken, load, loadDefault, withEnv, quietly } = require("./_loadWebsocket.js");
 
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 const RATE_LIMITED_MESSAGE = "You're sending messages a little quickly. Please wait a moment, then try again.";
@@ -20,7 +20,10 @@ const T0 = Date.UTC(2026, 0, 1, 12, 0, 0);
 
 const bound = (extra = {}) => ({ connections: new Map([["conn-1", USER]]), ...extra });
 const wsEvent = (body) => ({
-  requestContext: { connectionId: "conn-1", domainName: "example.com", stage: "prod", routeKey: "$default" },
+  requestContext: {
+    connectionId: "conn-1", domainName: "example.com", stage: "prod", routeKey: "$default",
+    identity: { sourceIp: SOURCE_IP },
+  },
   body: JSON.stringify(body),
 });
 const generate = (extra = {}) =>
@@ -157,7 +160,7 @@ test("every limiter UpdateItem requires an existing record, so none can create o
   await quietly(() => handler(generate()));
   await quietly(() => handler(generate()));
   // Connection-window updates; the per-user window is tested separately.
-  const updates = updateCalls(dynamoCalls).filter(({ input }) => !input.Key.connectionId.S.startsWith("user#"));
+  const updates = updateCalls(dynamoCalls).filter(({ input }) => !/^(user|ip)#/.test(input.Key.connectionId.S));
   assert.ok(updates.length >= 2);
   for (const { input } of updates) {
     assert.equal(input.TableName, "test-connections");

@@ -11,9 +11,10 @@
  * generate_text queries are truncated to system_settings.max_characters_per_user_message
  * (messageLimit.js), which falls back to 2000 when that read misses.
  *
- * generate_text frames are rate limited per connection (fixed window,
- * WS_GENERATE_RATE_LIMIT per WS_GENERATE_RATE_WINDOW_SECONDS) before any other
- * work; over the limit the frame gets a RATE_LIMITED error event and nothing is
+ * generate_text frames are rate limited per connection and per bound guest
+ * (fixed window, WS_GENERATE_RATE_LIMIT per WS_GENERATE_RATE_WINDOW_SECONDS)
+ * and per client IP (ipLimit.js, WS_IP_GENERATE_RATE_LIMIT) before any other
+ * work; over a limit the frame gets a RATE_LIMITED error event and nothing is
  * invoked. A limiter fault fails closed. Pings are not counted.
  */
 
@@ -28,6 +29,7 @@ const {
   getConnectionUserId, consumeGenerateAllowance, consumeUserGenerateAllowance, rateLimitConfig,
 } = require("./connections.js");
 const messageLimit = require("./messageLimit.js");
+const { consumeIpAllowance, ipRateLimitConfig } = require("./ipLimit.js");
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -123,14 +125,17 @@ exports.handler = async (event) => {
 
     if (action === "generate_text") {
       // Count every generate_text frame (valid or not) before doing any work.
-      // Both windows must allow it: this socket's, and the bound guest's across
-      // all of their sockets, so opening more connections buys no allowance.
+      // All three windows must allow it: this socket's, the bound guest's across
+      // all of their sockets (so opening more connections buys no allowance),
+      // and the client IP's across every guest it holds (ipLimit.js), so
+      // minting more guests from one address buys none either.
       let allowed;
       try {
         const limits = rateLimitConfig();
         allowed =
           (await consumeGenerateAllowance(connectionId, limits)) &&
-          (await consumeUserGenerateAllowance(boundUserId, limits));
+          (await consumeUserGenerateAllowance(boundUserId, limits)) &&
+          (await consumeIpAllowance(event, "generate", ipRateLimitConfig().generate));
       } catch (err) {
         console.error("WebSocket rate limit check failed", { connectionId, error: err?.name });
         await sendErrorEvent(event, "Internal server error", GENERIC_MESSAGE);

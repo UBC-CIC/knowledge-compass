@@ -2484,6 +2484,32 @@ export class ApiGatewayStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // short-lived connection state only
     });
 
+    // HMAC key for the per-IP WebSocket counters (lambda/websocket/ipLimit.js).
+    // Counter items are keyed by HMAC(client IP) so the table never holds an IP
+    // and cannot be mapped back to one without this key. Not rotated on a
+    // schedule: a new key only resets the counters (each lives for two windows).
+    const wsIpHashSecret = new secretsmanager.Secret(this, `${id}-WsIpHashSecret`, {
+      secretName: `${id}-KC-WsIpHashSecret`,
+      description: "HMAC key that pseudonymises client IPs in the WebSocket per-IP rate-limit counters",
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({}),
+        generateStringKey: "ipHashKey",
+        excludePunctuation: true,
+        passwordLength: 64,
+      },
+    });
+
+    // Per-IP WebSocket limits (ipLimit.js applies the same defaults). Counted per
+    // address, or per /64 for IPv6. Generous because a school or carrier network
+    // can put many families behind one address; the per-guest limit below still
+    // holds each family to WS_GENERATE_RATE_LIMIT.
+    const wsIpRateLimitEnv = {
+      WS_IP_HASH_SECRET: wsIpHashSecret.secretArn,
+      WS_IP_CONNECT_RATE_LIMIT: "30",
+      WS_IP_GENERATE_RATE_LIMIT: "30",
+      WS_IP_RATE_WINDOW_SECONDS: "60",
+    };
+
     // Connect Lambda
     const connectFunction = new lambda.Function(this, `${id}-ConnectFunction`, {
       functionName: `${id}-ConnectFunction`,
@@ -2497,6 +2523,7 @@ export class ApiGatewayStack extends cdk.Stack {
       environment: {
         JWT_SECRET: jwtSecret.secretArn,
         JWT_ISSUER: jwtIssuer,
+        ...wsIpRateLimitEnv,
       },
       layers: [jwt],
     });
@@ -2558,6 +2585,7 @@ export class ApiGatewayStack extends cdk.Stack {
         // default.js applies the same defaults.
         WS_GENERATE_RATE_LIMIT: "10",
         WS_GENERATE_RATE_WINDOW_SECONDS: "60",
+        ...wsIpRateLimitEnv,
       },
       layers: [jwt, postgres],
       functionName: `${id}-DefaultFunction`,
@@ -2616,6 +2644,19 @@ export class ApiGatewayStack extends cdk.Stack {
     wsConnectionsTable.grant(connectFunction, "dynamodb:PutItem");
     wsConnectionsTable.grant(disconnectFunction, "dynamodb:DeleteItem");
     wsConnectionsTable.grant(defaultFunction, "dynamodb:GetItem", "dynamodb:UpdateItem");
+    // $connect also counts each handshake on an "ip#connect#<hmac>" item
+    // (ipLimit.js). Its UpdateItem is pinned to those keys, so it cannot touch
+    // connection bindings or the per-user and per-IP generate counters.
+    connectFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["dynamodb:UpdateItem"],
+      resources: [wsConnectionsTable.tableArn],
+      conditions: {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["ip#connect#*"] },
+      },
+    }));
+    wsIpHashSecret.grantRead(connectFunction);
+    wsIpHashSecret.grantRead(defaultFunction);
 
     // Anonymous surface: the WebSocket functions' auto-created roles carry the same
     // boundary as the request-handling roles above.
@@ -2681,7 +2722,10 @@ export class ApiGatewayStack extends cdk.Stack {
       // Stage-wide backstop against anonymous message floods (all routes, all clients).
       // These throttles are aggregate, not per client. WAFv2 cannot attach to a
       // WebSocket API, so per-client protection is the per-guest generate_text
-      // limit in lambda/websocket/default.js (WS_GENERATE_RATE_* above).
+      // limit in lambda/websocket/default.js (WS_GENERATE_RATE_* above) and the
+      // per-IP handshake and generate_text limits in ipLimit.js (WS_IP_*). Those
+      // run in Lambda, after these throttles, so one client can still use up
+      // this shared budget.
       defaultRouteSettings: {
         throttlingRateLimit: 20,
         throttlingBurstLimit: 40,

@@ -651,6 +651,34 @@ describe("WebSocket ManageConnections scope", () => {
   });
 });
 
+// Per-IP WebSocket limits (lambda/websocket/ipLimit.js): $connect may update only
+// its own "ip#connect#*" counters, never connection bindings or other counters.
+describe("WebSocket per-IP counter scope", () => {
+  test("connect's UpdateItem is pinned to ip#connect# keys", () => {
+    const updates = statementsFor(roleOf(fnIdByName("KC-Api-ConnectFunction")))
+      .filter((s) => s.Effect === "Allow" && [s.Action].flat().includes("dynamodb:UpdateItem"));
+    expect(updates).toHaveLength(1);
+    expect([updates[0].Action].flat()).toEqual(["dynamodb:UpdateItem"]);
+    expect(updates[0].Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["ip#connect#*"] },
+    });
+  });
+
+  test("connect and default get the IP hash key and the WS_IP_* limits", () => {
+    for (const name of ["KC-Api-ConnectFunction", "KC-Api-DefaultFunction"]) {
+      const fn = resources[fnIdByName(name)];
+      const vars = fn.Properties.Environment.Variables;
+      expect(vars).toMatchObject({
+        WS_IP_CONNECT_RATE_LIMIT: "30",
+        WS_IP_GENERATE_RATE_LIMIT: "30",
+        WS_IP_RATE_WINDOW_SECONDS: "60",
+      });
+      expect(JSON.stringify(vars.WS_IP_HASH_SECRET)).toContain("WsIpHashSecret");
+      expect(allowActionsFor(roleOf(fnIdByName(name)))).toContain("secretsmanager:GetSecretValue");
+    }
+  });
+});
+
 // Finding A-08: the ingestion tasks authenticate to the DB with the Secrets Manager
 // credential (RDS Proxy takes no IAM tokens), so their roles get no rds-db:connect.
 describe("Ingestion task DB access", () => {
