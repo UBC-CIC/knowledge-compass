@@ -984,14 +984,16 @@ Update one or more system settings (partial update).
 
 **Parameters (all optional):**
 
-- `max_messages_per_day` (integer, 1–1000): Max messages per user per day
+The five usage limits below have code-level ceilings. Saves above a ceiling are rejected with 400, and the chat runtime also caps any stored value at its ceiling, so a value written straight to the database cannot raise a limit past it.
+
+- `max_messages_per_day` (integer, 1–100): Max messages per user per day
 - `min_messages_before_suggest` (integer, 0–500): Fixed mode: exchanges before guidance. Dynamic mode: the latest exchange by which guidance is given
 - `routing_mode` (string): `fixed` (exchange count decides) or `dynamic` (the per-turn router decides)
 - `min_exchanges_before_answer` (integer, 0–500): Dynamic mode floor before guidance
-- `max_characters_per_user_message` (integer, 1–200000): Max length of one user message
-- `max_characters_per_day` (integer): Characters one user may send per UTC day
-- `max_messages_per_day_global` (integer): Messages all public users together may send per UTC day
-- `max_characters_per_ai_message` (integer): Max AI response length
+- `max_characters_per_user_message` (integer, 1–4000): Max length of one user message
+- `max_characters_per_day` (integer, 1–20000): Characters one user may send per UTC day
+- `max_messages_per_day_global` (integer, 1–20000): Messages all public users together may send per UTC day
+- `max_characters_per_ai_message` (integer, 1–10000): Max AI response length
 - `support_score_threshold`, `scope_alignment_score_threshold`, `grounded_threshold`, `partially_grounded_threshold` (number, 0–1): Grounding check thresholds
 - `service_status` (string): `normal`, `banner` (show `service_message` above the chat) or `read_only` (show it and refuse new chat turns)
 - `service_message` (string, up to 500 characters): Text shown to families; `null` when unused

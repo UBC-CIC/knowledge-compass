@@ -136,15 +136,17 @@ test("the stored cap is returned and reused until the TTL, then refreshed", asyn
   }
 });
 
-test("a numeric string is accepted; an empty, zero, or out-of-range row is the default", async () => {
+test("a numeric string is accepted; an empty or invalid row is the default; a value over the ceiling is capped", async () => {
   const restore = withDbEnv();
   try {
     for (const [value, expected] of [
-      ["4000", 4000],
-      [200000, 200000],
+      ["3000", 3000],
+      [4000, 4000],
+      [4001, 4000],
+      [200000, 4000],
+      ["200000", 4000],
       [undefined, 2000],
       [0, 2000],
-      [200001, 2000],
       [1.5, 2000],
       [-5, 2000],
     ]) {

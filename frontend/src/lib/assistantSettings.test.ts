@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FLOW_PRESETS,
+  LIMIT_CEILINGS,
   RECOMMENDED,
   changedSettings,
   flowPresetFor,
@@ -89,6 +90,23 @@ describe("recommended values stay in sync with the backend", () => {
       `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
     );
     expect(read("frontend/src/components/ChatInterface/userInput.tsx")).toContain(`maxLength = ${cap},`);
+  });
+
+  it("uses the same limit ceilings in the frontend, adminHandler.js, config.py and the cap readers", () => {
+    const read = (rel: string) => readFileSync(resolve(repo, rel), "utf8");
+    const admin = read("cdk/lambda/handlers/adminHandler.js");
+    const adminBlock = admin.slice(admin.indexOf("const LIMIT_CEILINGS"), admin.indexOf("});", admin.indexOf("const LIMIT_CEILINGS")));
+    const py = read("cdk/lambda/textGeneration/helpers/config.py");
+    const pyBlock = py.slice(py.indexOf("LIMIT_CEILINGS = {"), py.indexOf("}", py.indexOf("LIMIT_CEILINGS = {")));
+    for (const [key, value] of Object.entries(LIMIT_CEILINGS)) {
+      expect(adminBlock).toContain(`${key}: ${value},`);
+      expect(pyBlock).toContain(`'${key}': ${value},`);
+      // Every ceiling is at or above the recommended value.
+      expect(value).toBeGreaterThanOrEqual(RECOMMENDED[key as keyof typeof LIMIT_CEILINGS]);
+    }
+    const cap = LIMIT_CEILINGS.max_characters_per_user_message;
+    expect(read("cdk/lambda/websocket/messageLimit.js")).toContain(`const ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`);
+    expect(read("cdk/lambda/handlers/systemMessagesHandler.js")).toContain(`const MAX_CHARACTERS_PER_USER_MESSAGE_CEILING = ${cap};`);
   });
 
   it("matches the GET fallback in adminHandler.js", () => {

@@ -44,6 +44,20 @@ const SYSTEM_MESSAGE_TYPES = new Set([
 
 const UI_ONLY_SYSTEM_MESSAGE_TYPES = new Set(["welcome_message", "disclaimer"]);
 
+// Code-level ceilings on the public usage limits. Saves above these are
+// rejected. textGeneration/helpers/config.py (LIMIT_CEILINGS) also caps the
+// loaded values at the same numbers, so a value written straight to the
+// database cannot raise a limit either. Keep the two in sync, along with
+// websocket/messageLimit.js, systemMessagesHandler.js and
+// frontend/src/lib/assistantSettings.ts.
+const LIMIT_CEILINGS = Object.freeze({
+  max_messages_per_day: 100,
+  max_characters_per_user_message: 4000,
+  max_characters_per_day: 20000,
+  max_messages_per_day_global: 20000,
+  max_characters_per_ai_message: 10000,
+});
+
 // Used only when a type has no existing row to inherit character_limit from.
 // Mirrors the limits seeded in migrations 002/004/010.
 const DEFAULT_CHARACTER_LIMITS = {
@@ -1087,7 +1101,7 @@ exports.handler = async (event) => {
 
         // Safe fallback when the table has no row. max_characters_per_user_message
         // is 2000, the same missed-load default as textGeneration/helpers/config.py,
-        // the public GET route, and websocket/messageLimit.js. The 1..200000 write
+        // the public GET route, and websocket/messageLimit.js. The 1..LIMIT_CEILINGS write
         // check below is the range an administrator may save, not a fallback.
         const fallback = {
           max_messages_per_day: 45,
@@ -1271,11 +1285,11 @@ exports.handler = async (event) => {
           patch.max_messages_per_day !== undefined &&
           (!isFiniteInt(patch.max_messages_per_day) ||
             patch.max_messages_per_day < 1 ||
-            patch.max_messages_per_day > 1000)
+            patch.max_messages_per_day > LIMIT_CEILINGS.max_messages_per_day)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_messages_per_day must be an integer between 1 and 1000",
+            error: `max_messages_per_day must be an integer between 1 and ${LIMIT_CEILINGS.max_messages_per_day}`,
           });
           break;
         }
@@ -1317,18 +1331,18 @@ exports.handler = async (event) => {
           break;
         }
 
-        // 1..200000 is the range an administrator may save. A missing value
+        // 1..ceiling is the range an administrator may save. A missing value
         // stays 2000 (config.py, the admin GET fallback, and the public read),
         // not this upper bound.
         if (
           patch.max_characters_per_user_message !== undefined &&
           (!isFiniteInt(patch.max_characters_per_user_message) ||
             patch.max_characters_per_user_message < 1 ||
-            patch.max_characters_per_user_message > 200000)
+            patch.max_characters_per_user_message > LIMIT_CEILINGS.max_characters_per_user_message)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_user_message must be a positive integer",
+            error: `max_characters_per_user_message must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_user_message}`,
           });
           break;
         }
@@ -1337,11 +1351,11 @@ exports.handler = async (event) => {
           patch.max_characters_per_day !== undefined &&
           (!isFiniteInt(patch.max_characters_per_day) ||
             patch.max_characters_per_day < 1 ||
-            patch.max_characters_per_day > 1000000)
+            patch.max_characters_per_day > LIMIT_CEILINGS.max_characters_per_day)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_day must be an integer between 1 and 1000000",
+            error: `max_characters_per_day must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_day}`,
           });
           break;
         }
@@ -1350,11 +1364,11 @@ exports.handler = async (event) => {
           patch.max_messages_per_day_global !== undefined &&
           (!isFiniteInt(patch.max_messages_per_day_global) ||
             patch.max_messages_per_day_global < 1 ||
-            patch.max_messages_per_day_global > 1000000)
+            patch.max_messages_per_day_global > LIMIT_CEILINGS.max_messages_per_day_global)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_messages_per_day_global must be an integer between 1 and 1000000",
+            error: `max_messages_per_day_global must be an integer between 1 and ${LIMIT_CEILINGS.max_messages_per_day_global}`,
           });
           break;
         }
@@ -1363,11 +1377,11 @@ exports.handler = async (event) => {
           patch.max_characters_per_ai_message !== undefined &&
           (!isFiniteInt(patch.max_characters_per_ai_message) ||
             patch.max_characters_per_ai_message < 1 ||
-            patch.max_characters_per_ai_message > 200000)
+            patch.max_characters_per_ai_message > LIMIT_CEILINGS.max_characters_per_ai_message)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_ai_message must be a positive integer",
+            error: `max_characters_per_ai_message must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_ai_message}`,
           });
           break;
         }

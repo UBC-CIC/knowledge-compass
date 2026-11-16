@@ -11,6 +11,10 @@ const crypto = require("crypto");
 // MAX_CHARACTERS_PER_USER_MESSAGE. A missing row must not publish a higher
 // cap than that runtime fallback will enforce.
 const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
+// Code-level ceiling (textGeneration/helpers/config.py LIMIT_CEILINGS). A
+// stored value above it is published as the ceiling, which is what the
+// runtime enforces.
+const MAX_CHARACTERS_PER_USER_MESSAGE_CEILING = 4000;
 
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
@@ -138,12 +142,14 @@ exports.handler = async (event) => {
                 LIMIT 1
                 `;
 
-                const fallback = {
-                max_characters_per_user_message: DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE,
-                };
+                const stored = rows[0]?.max_characters_per_user_message;
+                const cap =
+                Number.isInteger(stored) && stored >= 1
+                    ? Math.min(stored, MAX_CHARACTERS_PER_USER_MESSAGE_CEILING)
+                    : DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE;
 
                 response.statusCode = 200;
-                response.body = JSON.stringify(rows[0] ?? fallback);
+                response.body = JSON.stringify({ max_characters_per_user_message: cap });
                 break;
             }
 

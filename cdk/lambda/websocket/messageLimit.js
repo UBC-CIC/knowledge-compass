@@ -18,8 +18,10 @@ const {
 } = require("@aws-sdk/client-secrets-manager");
 
 const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
-// adminHandler.js rejects saves above this. A corrupt row must not raise the cap.
-const ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE = 200000;
+// Code-level ceiling (textGeneration/helpers/config.py LIMIT_CEILINGS).
+// adminHandler.js rejects saves above it, and a stored value above it is
+// capped to it here, so a row written straight to the database cannot raise it.
+const ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE = 4000;
 const CACHE_TTL_MS = 300_000;
 // Don't stall every frame on a down database; retry after this backoff.
 const FAILURE_BACKOFF_MS = 30_000;
@@ -36,8 +38,8 @@ function parseCap(value) {
       : typeof value === "string" && /^[0-9]+$/.test(value)
         ? Number(value)
         : NaN;
-  if (!Number.isInteger(n) || n < 1 || n > ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE) return null;
-  return n;
+  if (!Number.isInteger(n) || n < 1) return null;
+  return Math.min(n, ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE);
 }
 
 async function getSql() {

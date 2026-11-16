@@ -12,6 +12,7 @@ import { changedBy } from "@/lib/promptVersions";
 import {
   DEVELOPER_KEYS,
   FLOW_PRESETS,
+  LIMIT_CEILINGS,
   RECOMMENDED,
   URGENT_NOTE,
   changedSettings,
@@ -298,7 +299,7 @@ export default function SystemSettings() {
                 label="Messages a person can send per day"
                 help="Counted over 24 hours for each person."
                 min={1}
-                max={1000}
+                max={LIMIT_CEILINGS.max_messages_per_day}
                 value={draft.max_messages_per_day}
                 onChange={set("max_messages_per_day")}
                 error={errors.max_messages_per_day}
@@ -307,6 +308,7 @@ export default function SystemSettings() {
                 label="Longest message a person can send"
                 help="In characters. About 2,000 characters is a long paragraph or two."
                 min={1}
+                max={LIMIT_CEILINGS.max_characters_per_user_message}
                 value={draft.max_characters_per_user_message}
                 onChange={set("max_characters_per_user_message")}
                 error={errors.max_characters_per_user_message}
@@ -315,7 +317,7 @@ export default function SystemSettings() {
                 label="Characters a person can send per day"
                 help="Counted for each person from midnight UTC. 10,000 characters is about five long messages."
                 min={1}
-                max={1000000}
+                max={LIMIT_CEILINGS.max_characters_per_day}
                 value={draft.max_characters_per_day}
                 onChange={set("max_characters_per_day")}
                 error={errors.max_characters_per_day}
@@ -324,7 +326,7 @@ export default function SystemSettings() {
                 label="Messages everyone can send per day, in total"
                 help="Counted across all families from midnight UTC. When it's reached, the assistant pauses for everyone until the next day."
                 min={1}
-                max={1000000}
+                max={LIMIT_CEILINGS.max_messages_per_day_global}
                 value={draft.max_messages_per_day_global}
                 onChange={set("max_messages_per_day_global")}
                 error={errors.max_messages_per_day_global}
@@ -384,6 +386,7 @@ export default function SystemSettings() {
                   label="Longest reply (characters)"
                   help="Caps reply length to avoid runaway outputs."
                   min={1}
+                  max={LIMIT_CEILINGS.max_characters_per_ai_message}
                   value={draft.max_characters_per_ai_message}
                   onChange={set("max_characters_per_ai_message")}
                   error={errors.max_characters_per_ai_message}

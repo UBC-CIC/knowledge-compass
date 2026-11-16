@@ -50,6 +50,35 @@ MAX_CHARACTERS_PER_DAY = 10000            # characters one user can send per UTC
 MAX_MESSAGES_PER_DAY_GLOBAL = 5000        # messages all public users together can send per UTC day (migration 036)
 MAX_CHARACTERS_PER_AI_MESSAGE = 5000
 
+# Code-level ceilings on the admin-configurable limits above. load_config caps
+# the system_settings values at these, so a value written straight to the
+# database (or saved before these ceilings existed) cannot raise a limit past
+# them. Keep in sync with the save validation in handlers/adminHandler.js, the
+# public read in handlers/systemMessagesHandler.js, websocket/messageLimit.js,
+# and frontend/src/lib/assistantSettings.ts.
+LIMIT_CEILINGS = {
+    'max_messages_per_day': 100,
+    'max_characters_per_user_message': 4000,
+    'max_characters_per_day': 20000,
+    'max_messages_per_day_global': 20000,
+    'max_characters_per_ai_message': 10000,
+}
+
+
+def _bounded_limit(settings, key, current):
+    """
+    The setting `key` from `settings`, capped at LIMIT_CEILINGS[key]. A missing
+    or non-positive-integer value keeps `current`.
+    """
+    value = settings.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return current
+    ceiling = LIMIT_CEILINGS[key]
+    if value > ceiling:
+        logger.warning("system_settings.%s is above its ceiling; using %d", key, ceiling)
+        return ceiling
+    return value
+
 # Bedrock Configuration
 MAX_TOKENS = 4000
 
@@ -424,14 +453,14 @@ def load_config(db_connection):
     # 1. Update System Settings
     settings = data.get('settings', {})
     if settings:
-        MAX_MESSAGES_PER_DAY = settings.get('max_messages_per_day', MAX_MESSAGES_PER_DAY)
+        MAX_MESSAGES_PER_DAY = _bounded_limit(settings, 'max_messages_per_day', MAX_MESSAGES_PER_DAY)
         MIN_EXCHANGES_BEFORE_SUGGEST = settings.get('min_messages_before_suggest', MIN_EXCHANGES_BEFORE_SUGGEST)
         MIN_EXCHANGES_BEFORE_ANSWER = settings.get('min_exchanges_before_answer', MIN_EXCHANGES_BEFORE_ANSWER)
         ROUTING_MODE = settings.get('routing_mode', ROUTING_MODE)
-        MAX_CHARACTERS_PER_USER_MESSAGE = settings.get('max_characters_per_user_message', MAX_CHARACTERS_PER_USER_MESSAGE)
-        MAX_CHARACTERS_PER_DAY = settings.get('max_characters_per_day', MAX_CHARACTERS_PER_DAY)
-        MAX_MESSAGES_PER_DAY_GLOBAL = settings.get('max_messages_per_day_global', MAX_MESSAGES_PER_DAY_GLOBAL)
-        MAX_CHARACTERS_PER_AI_MESSAGE = settings.get('max_characters_per_ai_message', MAX_CHARACTERS_PER_AI_MESSAGE)
+        MAX_CHARACTERS_PER_USER_MESSAGE = _bounded_limit(settings, 'max_characters_per_user_message', MAX_CHARACTERS_PER_USER_MESSAGE)
+        MAX_CHARACTERS_PER_DAY = _bounded_limit(settings, 'max_characters_per_day', MAX_CHARACTERS_PER_DAY)
+        MAX_MESSAGES_PER_DAY_GLOBAL = _bounded_limit(settings, 'max_messages_per_day_global', MAX_MESSAGES_PER_DAY_GLOBAL)
+        MAX_CHARACTERS_PER_AI_MESSAGE = _bounded_limit(settings, 'max_characters_per_ai_message', MAX_CHARACTERS_PER_AI_MESSAGE)
         SUPPORT_SCORE_THRESHOLD = settings.get('support_score_threshold', SUPPORT_SCORE_THRESHOLD)
         SCOPE_ALIGNMENT_SCORE_THRESHOLD = settings.get('scope_alignment_score_threshold', SCOPE_ALIGNMENT_SCORE_THRESHOLD)
         GROUNDED_THRESHOLD = settings.get('grounded_threshold', GROUNDED_THRESHOLD)

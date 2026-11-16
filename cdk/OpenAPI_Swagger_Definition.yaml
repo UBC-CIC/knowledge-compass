@@ -2185,7 +2185,8 @@ paths:
             schema:
               type: object
               properties:
-                max_messages_per_day: { type: integer }
+                max_messages_per_day:
+                  { type: integer, minimum: 1, maximum: 100 }
                 min_messages_before_suggest:
                   type: integer
                   description: Fixed mode - exchange that switches to guidance. Dynamic mode - guidance by this exchange at the latest.
@@ -2196,16 +2197,18 @@ paths:
                 min_exchanges_before_answer:
                   type: integer
                   description: Dynamic mode floor (questions before guidance, urgent turns bypass it). Must be <= min_messages_before_suggest.
-                max_characters_per_user_message: { type: integer }
+                max_characters_per_user_message: { type: integer, minimum: 1, maximum: 4000 }
                 max_characters_per_day:
                   type: integer
+                  minimum: 1
+                  maximum: 20000
                   description: Characters a user can send per UTC day
                 max_messages_per_day_global:
                   type: integer
                   minimum: 1
-                  maximum: 1000000
+                  maximum: 20000
                   description: Messages all public users together can send per UTC day
-                max_characters_per_ai_message: { type: integer }
+                max_characters_per_ai_message: { type: integer, minimum: 1, maximum: 10000 }
                 support_score_threshold: { type: number }
                 scope_alignment_score_threshold: { type: number }
                 grounded_threshold: { type: number }

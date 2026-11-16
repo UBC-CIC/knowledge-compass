@@ -77,7 +77,7 @@ test("system settings GET falls back to the default daily character limit", asyn
 });
 
 test("system settings rejects an out-of-range global daily message budget", async () => {
-  for (const value of [0, 1000001, 2.5, "5000"]) {
+  for (const value of [0, 20001, 2.5, "5000"]) {
     const sql = fakeSql();
     const res = await invoke(sql, {
       httpMethod: "PUT",
@@ -88,6 +88,41 @@ test("system settings rejects an out-of-range global daily message budget", asyn
     assert.equal(res.statusCode, 400, String(value));
     assert.match(res.body.error, /max_messages_per_day_global/);
     assert.ok(!sql.queries().some((q) => q.text.includes("UPDATE system_settings")));
+  }
+});
+
+test("system settings accepts each usage limit at its ceiling and rejects one above", async () => {
+  const ceilings = {
+    max_messages_per_day: 100,
+    max_characters_per_user_message: 4000,
+    max_characters_per_day: 20000,
+    max_messages_per_day_global: 20000,
+    max_characters_per_ai_message: 10000,
+  };
+  for (const [field, ceiling] of Object.entries(ceilings)) {
+    const over = fakeSql();
+    const rejected = await invoke(over, {
+      httpMethod: "PUT",
+      resource: "/admin/system-settings",
+      requestContext: adminContext,
+      body: JSON.stringify({ [field]: ceiling + 1 }),
+    });
+    assert.equal(rejected.statusCode, 400, field);
+    assert.match(rejected.body.error, new RegExp(`${field} must be an integer between 1 and ${ceiling}`));
+    assert.ok(!over.queries().some((q) => q.text.includes("UPDATE system_settings")), field);
+
+    const at = fakeSql((text) => {
+      if (text.includes("UPDATE system_settings")) return [{ id: "s1", [field]: ceiling }];
+      if (text.includes("FROM users")) return [{ id: "a1", role: "admin" }];
+      return [];
+    });
+    const saved = await invoke(at, {
+      httpMethod: "PUT",
+      resource: "/admin/system-settings",
+      requestContext: adminContext,
+      body: JSON.stringify({ [field]: ceiling }),
+    });
+    assert.equal(saved.statusCode, 200, field);
   }
 });
 
@@ -313,7 +348,7 @@ test("system settings: invalid patches return 400 without updating", async () =>
   const cases = [
     [{ support_score_threshold: 3 }, "support_score_threshold must be a number between 0 and 1"],
     [{ temperature: 0.3, top_p: 0.6 }, "No valid fields to update"],
-    [{ max_messages_per_day: null }, "max_messages_per_day must be an integer between 1 and 1000"],
+    [{ max_messages_per_day: null }, "max_messages_per_day must be an integer between 1 and 100"],
     [{}, "No valid fields to update"],
   ];
   for (const [patch, error] of cases) {

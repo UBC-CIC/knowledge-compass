@@ -246,6 +246,10 @@ test("the public character cap returns the stored value, or 2000 when the row is
   const missing = await getCap(fakeSql(() => []));
   assert.equal(missing.statusCode, 200);
   assert.deepEqual(missing.body, { max_characters_per_user_message: 2000 });
+
+  // A stored value above the code-level ceiling is published as the ceiling.
+  const over = await getCap(fakeSql(() => [{ max_characters_per_user_message: 200000 }]));
+  assert.deepEqual(over.body, { max_characters_per_user_message: 4000 });
 });
 
 test("read_only is returned as-is", async () => {
