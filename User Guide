@@ -25,8 +25,6 @@ Users are immediately greeted with a welcome message and prompted to start a new
 * My child is being left out of field trips and activities  
 * We’re getting ready for the move to high school
 
-![][image1]
-
 **Chat Interface**  
 Once the user selects a predesignated scenario or enters a message, the chatbot will ask a series of follow-up questions to learn more about the user’s situation. When the assistant has a sufficient understanding of the situation it provides guidance: practical steps, what to ask for, and how to work with the school. 
 
