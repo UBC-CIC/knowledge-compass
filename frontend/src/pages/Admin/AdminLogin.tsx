@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router";
 import { confirmSignIn, type SignInOutput } from "aws-amplify/auth";
+import { QRCodeSVG } from "qrcode.react";
 import { AuthService } from "@/functions/authService";
 import BrandMark from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/demo";
@@ -459,7 +460,18 @@ export default function AdminLogin() {
                       add a new account.
                     </li>
                     <li>
-                      Choose to enter a setup key, and type this key:
+                      Scan this QR code with the app:
+                      {/* Drawn in the browser as inline SVG: the setup key
+                          never leaves the page. */}
+                      <div className="mt-2 w-fit rounded-[9px] border-[1.5px] border-foreground/20 bg-white p-3">
+                        <QRCodeSVG
+                          value={totpSetup.uri}
+                          size={176}
+                          marginSize={2}
+                          title="QR code for setting up your authenticator app"
+                        />
+                      </div>
+                      <p className="mt-3">Can't scan it? Choose to enter a setup key, and type this key:</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <code
                           className="rounded-[9px] border-[1.5px] border-foreground/20 bg-muted px-3 py-2 font-mono text-[14px] tracking-[0.04em] break-all text-foreground select-all"
