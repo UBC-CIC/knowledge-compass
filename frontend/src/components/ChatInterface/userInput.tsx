@@ -97,7 +97,6 @@ export function AiChatInput({
     if (!selection || !editableRef.current) return;
 
     let charCount = 0;
-    let foundPosition = false;
 
     // Use a tree walker for more efficient traversal
     const walker = document.createTreeWalker(
@@ -110,11 +109,7 @@ export function AiChatInput({
     while ((textNode = walker.nextNode() as Text | null)) {
       const nextCharCount = charCount + textNode.length;
 
-      if (
-        !foundPosition &&
-        position >= charCount &&
-        position <= nextCharCount
-      ) {
+      if (position >= charCount && position <= nextCharCount) {
         const range = document.createRange();
         range.setStart(
           textNode,
@@ -123,7 +118,6 @@ export function AiChatInput({
         range.collapse(true);
         selection.removeAllRanges();
         selection.addRange(range);
-        foundPosition = true;
         break;
       }
 

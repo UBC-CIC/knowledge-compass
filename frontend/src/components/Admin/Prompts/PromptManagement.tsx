@@ -152,7 +152,7 @@ export default function PromptManagement() {
 
   // ---- current page ----
   const loading = (sys.loading && Object.keys(sys.messages).length === 0) || (jr.loading && jr.journeys.length === 0);
-  let pane: ReactNode = null;
+  let pane: ReactNode;
   const currentJourney = page.type === "journey" ? journeys.find((j) => j.id === page.id) ?? null : null;
   const currentSituation = page.type === "situation" ? findSituation(page.id) : null;
 
