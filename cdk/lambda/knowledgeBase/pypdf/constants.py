@@ -4,7 +4,7 @@ import sys
 from enum import Enum, IntFlag, auto, unique
 from typing import Any
 
-from ._utils import deprecate_with_replacement
+from ._utils import deprecation_with_replacement
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -273,6 +273,7 @@ class FilterTypes(StrEnum):
     CCITT_FAX_DECODE = "/CCITTFaxDecode"  # abbreviation: CCF
     DCT_DECODE = "/DCTDecode"  # abbreviation: DCT
     JPX_DECODE = "/JPXDecode"
+    BROTLI_DECODE = "/BrotliDecode"  # abbreviation: Br, PDF 2.0
     JBIG2_DECODE = "/JBIG2Decode"
 
 
@@ -646,13 +647,13 @@ class _CatalogDictionaryMeta(type):
         value = super().__getattribute__(name)
 
         if not name.startswith("__"):
-            deprecate_with_replacement("CatalogDictionary", "CatalogAttributes", "7.0.0")
+            deprecation_with_replacement("CatalogDictionary", "CatalogAttributes", "7.0.0")
         return value
 
 
 class CatalogDictionary(CatalogAttributes, metaclass=_CatalogDictionaryMeta):
     def __init__(self) -> None:
-        deprecate_with_replacement("CatalogDictionary", "CatalogAttributes", "7.0.0")
+        deprecation_with_replacement("CatalogDictionary", "CatalogAttributes", "7.0.0")
 
 
 class OutlineFontFlag(IntFlag):
@@ -730,10 +731,12 @@ class ImageType(IntFlag):
 
 
 _INLINE_IMAGE_VALUE_MAPPING = {
+    # Short color space names.
     "/G": "/DeviceGray",
     "/RGB": "/DeviceRGB",
     "/CMYK": "/DeviceCMYK",
     "/I": "/Indexed",
+    # Short filter names.
     "/AHx": "/ASCIIHexDecode",
     "/A85": "/ASCII85Decode",
     "/LZW": "/LZWDecode",
@@ -741,10 +744,12 @@ _INLINE_IMAGE_VALUE_MAPPING = {
     "/RL": "/RunLengthDecode",
     "/CCF": "/CCITTFaxDecode",
     "/DCT": "/DCTDecode",
+    # Long color space names.
     "/DeviceGray": "/DeviceGray",
     "/DeviceRGB": "/DeviceRGB",
     "/DeviceCMYK": "/DeviceCMYK",
     "/Indexed": "/Indexed",
+    # Long filter names.
     "/ASCIIHexDecode": "/ASCIIHexDecode",
     "/ASCII85Decode": "/ASCII85Decode",
     "/LZWDecode": "/LZWDecode",
@@ -752,7 +757,11 @@ _INLINE_IMAGE_VALUE_MAPPING = {
     "/RunLengthDecode": "/RunLengthDecode",
     "/CCITTFaxDecode": "/CCITTFaxDecode",
     "/DCTDecode": "/DCTDecode",
+    # Rendering intents (table 69 of ISO 3200-2:2020).
+    "/AbsoluteColorimetric": "/AbsoluteColorimetric",
     "/RelativeColorimetric": "/RelativeColorimetric",
+    "/Saturation": "/Saturation",
+    "/Perceptual": "/Perceptual",
 }
 
 _INLINE_IMAGE_KEY_MAPPING = {

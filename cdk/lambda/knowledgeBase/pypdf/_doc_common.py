@@ -34,19 +34,17 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import (
     Any,
-    NoReturn,
-    Optional,
-    Union,
+    NamedTuple,
     cast,
 )
 
 from ._configuration import get_configuration
 from ._encryption import Encryption
 from ._page import PageObject, _VirtualList
-from ._page_labels import index2label as page_index2page_label
+from ._page_labels import index2labels
 from ._utils import (
     _TraversalState,
-    deprecation_with_replacement,
+    deprecation_no_replacement,
     logger_warning,
     parse_iso8824_date,
 )
@@ -62,14 +60,12 @@ from .constants import DocumentInformationAttributes as DI
 from .constants import FieldDictionaryAttributes as FA
 from .constants import PageAttributes as PG
 from .errors import LimitReachedError, PdfReadError, PyPdfError
-from .filters import _decompress_with_limit
 from .generic import (
     ArrayObject,
     BooleanObject,
     ByteStringObject,
     Destination,
     DictionaryObject,
-    EncodedStreamObject,
     Field,
     Fit,
     FloatObject,
@@ -77,6 +73,7 @@ from .generic import (
     NameObject,
     NullObject,
     PdfObject,
+    StreamObject,
     TextStringObject,
     TreeObject,
     ViewerPreferences,
@@ -88,12 +85,38 @@ from .types import OutlineType, PagemodeType
 from .xmp import XmpInformation
 
 
-def convert_to_int(d: bytes, size: int) -> Union[int, tuple[Any, ...]]:
+def convert_to_int(d: bytes, size: int) -> int | tuple[Any, ...]:
     if size > 8:
         raise PdfReadError("Invalid size in convert_to_int")
     d = b"\x00\x00\x00\x00\x00\x00\x00\x00" + d
     d = d[-8:]
     return cast(int, struct.unpack(">Q", d)[0])
+
+
+# Attributes a page inherits from its ancestors in the page tree.
+_INHERITABLE_PAGE_ATTRIBUTES = (
+    NameObject(PG.RESOURCES),
+    NameObject(PG.MEDIABOX),
+    NameObject(PG.CROPBOX),
+    NameObject(PG.ROTATE),
+)
+
+
+class _PageTreeItem(NamedTuple):
+    """A page tree node waiting to be flattened by :meth:`PdfDocCommon._flatten`."""
+
+    node: DictionaryObject
+    #: Inherited attributes. Shared read-only between the kids of one node.
+    inherit: dict[str, Any]
+    indirect_reference: IndirectObject | None
+    depth: int
+
+
+#: A ``/Pages`` node currently being walked: the node - carrying the attributes its
+#: kids inherit - and the part of its ``/Kids`` which has not been reached yet.
+_PageTreeFrame = tuple[_PageTreeItem, Iterator[PdfObject]]
+
+_UNSET = object()
 
 
 class DocumentInformation(DictionaryObject):
@@ -114,7 +137,7 @@ class DocumentInformation(DictionaryObject):
     def __init__(self) -> None:
         DictionaryObject.__init__(self)
 
-    def _get_text(self, key: str) -> Optional[str]:
+    def _get_text(self, key: str) -> str | None:
         retval = self.get(key, None)
         if isinstance(retval, TextStringObject):
             return retval
@@ -123,7 +146,7 @@ class DocumentInformation(DictionaryObject):
         return None
 
     @property
-    def title(self) -> Optional[str]:
+    def title(self) -> str | None:
         """
         Read-only property accessing the document's title.
 
@@ -137,12 +160,12 @@ class DocumentInformation(DictionaryObject):
         )
 
     @property
-    def title_raw(self) -> Optional[str]:
+    def title_raw(self) -> str | None:
         """The "raw" version of title; can return a ``ByteStringObject``."""
         return self.get(DI.TITLE)
 
     @property
-    def author(self) -> Optional[str]:
+    def author(self) -> str | None:
         """
         Read-only property accessing the document's author.
 
@@ -152,12 +175,12 @@ class DocumentInformation(DictionaryObject):
         return self._get_text(DI.AUTHOR)
 
     @property
-    def author_raw(self) -> Optional[str]:
+    def author_raw(self) -> str | None:
         """The "raw" version of author; can return a ``ByteStringObject``."""
         return self.get(DI.AUTHOR)
 
     @property
-    def subject(self) -> Optional[str]:
+    def subject(self) -> str | None:
         """
         Read-only property accessing the document's subject.
 
@@ -167,12 +190,12 @@ class DocumentInformation(DictionaryObject):
         return self._get_text(DI.SUBJECT)
 
     @property
-    def subject_raw(self) -> Optional[str]:
+    def subject_raw(self) -> str | None:
         """The "raw" version of subject; can return a ``ByteStringObject``."""
         return self.get(DI.SUBJECT)
 
     @property
-    def creator(self) -> Optional[str]:
+    def creator(self) -> str | None:
         """
         Read-only property accessing the document's creator.
 
@@ -184,12 +207,12 @@ class DocumentInformation(DictionaryObject):
         return self._get_text(DI.CREATOR)
 
     @property
-    def creator_raw(self) -> Optional[str]:
+    def creator_raw(self) -> str | None:
         """The "raw" version of creator; can return a ``ByteStringObject``."""
         return self.get(DI.CREATOR)
 
     @property
-    def producer(self) -> Optional[str]:
+    def producer(self) -> str | None:
         """
         Read-only property accessing the document's producer.
 
@@ -201,17 +224,17 @@ class DocumentInformation(DictionaryObject):
         return self._get_text(DI.PRODUCER)
 
     @property
-    def producer_raw(self) -> Optional[str]:
+    def producer_raw(self) -> str | None:
         """The "raw" version of producer; can return a ``ByteStringObject``."""
         return self.get(DI.PRODUCER)
 
     @property
-    def creation_date(self) -> Optional[datetime]:
+    def creation_date(self) -> datetime | None:
         """Read-only property accessing the document's creation date."""
         return parse_iso8824_date(self._get_text(DI.CREATION_DATE))
 
     @property
-    def creation_date_raw(self) -> Optional[str]:
+    def creation_date_raw(self) -> str | None:
         """
         The "raw" version of creation date; can return a ``ByteStringObject``.
 
@@ -221,7 +244,7 @@ class DocumentInformation(DictionaryObject):
         return self.get(DI.CREATION_DATE)
 
     @property
-    def modification_date(self) -> Optional[datetime]:
+    def modification_date(self) -> datetime | None:
         """
         Read-only property accessing the document's modification date.
 
@@ -230,7 +253,7 @@ class DocumentInformation(DictionaryObject):
         return parse_iso8824_date(self._get_text(DI.MOD_DATE))
 
     @property
-    def modification_date_raw(self) -> Optional[str]:
+    def modification_date_raw(self) -> str | None:
         """
         The "raw" version of modification date; can return a
         ``ByteStringObject``.
@@ -241,7 +264,7 @@ class DocumentInformation(DictionaryObject):
         return self.get(DI.MOD_DATE)
 
     @property
-    def keywords(self) -> Optional[str]:
+    def keywords(self) -> str | None:
         """
         Read-only property accessing the document's keywords.
 
@@ -251,7 +274,7 @@ class DocumentInformation(DictionaryObject):
         return self._get_text(DI.KEYWORDS)
 
     @property
-    def keywords_raw(self) -> Optional[str]:
+    def keywords_raw(self) -> str | None:
         """The "raw" version of keywords; can return a ``ByteStringObject``."""
         return self.get(DI.KEYWORDS)
 
@@ -265,9 +288,9 @@ class PdfDocCommon(ABC):
 
     strict: bool = False  # default
 
-    flattened_pages: Optional[list[PageObject]] = None
+    flattened_pages: list[PageObject] | None = None
 
-    _encryption: Optional[Encryption] = None
+    _encryption: Encryption | None = None
 
     _readonly: bool = False
 
@@ -283,21 +306,21 @@ class PdfDocCommon(ABC):
 
     @abstractmethod
     def get_object(
-        self, indirect_reference: Union[int, IndirectObject]
-    ) -> Optional[PdfObject]:
+        self, indirect_reference: int | IndirectObject
+    ) -> PdfObject | None:
         ...  # pragma: no cover
 
     @abstractmethod
-    def _replace_object(self, indirect: IndirectObject, obj: PdfObject) -> PdfObject:
+    def _replace_object(self, indirect_reference: IndirectObject, obj: PdfObject) -> PdfObject:
         ...  # pragma: no cover
 
     @property
     @abstractmethod
-    def _info(self) -> Optional[DictionaryObject]:
+    def _info(self) -> DictionaryObject | None:
         ...  # pragma: no cover
 
     @property
-    def metadata(self) -> Optional[DocumentInformation]:
+    def metadata(self) -> DocumentInformation | None:
         """
         Retrieve the PDF file's document information dictionary, if it exists.
 
@@ -313,11 +336,11 @@ class PdfDocCommon(ABC):
 
     @property
     @abstractmethod
-    def xmp_metadata(self) -> Optional[XmpInformation]:
+    def xmp_metadata(self) -> XmpInformation | None:
         ...  # pragma: no cover
 
     @property
-    def viewer_preferences(self) -> Optional[ViewerPreferences]:
+    def viewer_preferences(self) -> ViewerPreferences | None:
         """Returns the existing ViewerPreferences as an overloaded dictionary."""
         o = self.root_object.get(CA.VIEWER_PREFERENCES, None)
         if o is None:
@@ -349,10 +372,12 @@ class PdfDocCommon(ABC):
             PdfReadError: If restrictions prevent this action.
 
         """
-        # Flattened pages will not work on an encrypted PDF;
-        # the PDF file's page count is used in this case. Otherwise,
-        # the original method (flattened page count) is used.
-        if self.is_encrypted:
+        # The page tree cannot be walked while the document is still encrypted;
+        # the PDF file's page count is used in this case. Once the document has
+        # been decrypted (or if it is not encrypted at all), the flattened page
+        # tree is used instead, as the /Count value might be wrong.
+        encryption = self._encryption
+        if self.is_encrypted and (encryption is None or not encryption.is_decrypted()):
             return self.root_object["/Pages"]["/Count"]  # type: ignore[no-any-return, index]
         if self.flattened_pages is None:
             self._flatten(self._readonly)
@@ -390,7 +415,7 @@ class PdfDocCommon(ABC):
 
         def recursive_call(
             _node: DictionaryObject, mi: int
-        ) -> tuple[Optional[PdfObject], int]:
+        ) -> tuple[PdfObject | None, int]:
             _node_id = id(_node)
             if _node_id in visited:
                 raise LimitReachedError("Detected cycle in /Pages hierarchy when retrieving page.")
@@ -460,9 +485,11 @@ class PdfDocCommon(ABC):
     def _get_named_destinations(
         self,
         *,
-        tree: Optional[DictionaryObject] = None,
-        retval: Optional[dict[str, Destination]] = None,
-        visited: Optional[set[int]] = None,
+        tree: DictionaryObject | None = None,
+        retval: dict[str, Destination] | None = None,
+        visited: set[int] | None = None,
+        depth: int = 0,
+        traversal_state: _TraversalState | None = None,
     ) -> dict[str, Destination]:
         """
         Retrieve the named destinations present in the document.
@@ -471,11 +498,16 @@ class PdfDocCommon(ABC):
             tree: The current tree.
             retval: The previously retrieved destinations for nested calls.
             visited: Already known/visited objects.
+            depth: Current name tree nesting depth.
+            traversal_state: Shared visitor counters.
 
         Returns:
             A dictionary which maps names to destinations.
 
         """
+        if traversal_state is None:
+            traversal_state = _TraversalState()
+
         if visited is None:
             visited = set()
         if retval is None:
@@ -483,7 +515,7 @@ class PdfDocCommon(ABC):
             catalog = self.root_object
 
             # get the name tree
-            candidate: Optional[PdfObject] = None
+            candidate: PdfObject | None = None
             if CA.DESTS in catalog:
                 candidate = catalog[CA.DESTS].get_object()
             elif CA.NAMES in catalog:
@@ -504,11 +536,25 @@ class PdfDocCommon(ABC):
             return retval
         assert tree is not None, "mypy"
 
+        configuration = get_configuration()
+        if depth > configuration.named_destinations_maximum_depth:
+            raise LimitReachedError(
+                f"Maximum named destination depth exceeded: "
+                f"{depth} > {configuration.named_destinations_maximum_depth}."
+            )
+
         tree_id = id(tree)
         if tree_id in visited:
             logger_warning("Detected cycle in destination tree.", source=__name__)
             return retval
         visited.add(tree_id)
+
+        traversal_state.entry_count += 1
+        if traversal_state.entry_count > configuration.named_destinations_maximum_entries:
+            raise LimitReachedError(
+                f"Maximum named destination entry limit exceeded: "
+                f"{traversal_state.entry_count} > {configuration.named_destinations_maximum_entries}."
+            )
 
         if PagesAttributes.KIDS in tree:
             kids = tree[PagesAttributes.KIDS].get_object()
@@ -521,7 +567,13 @@ class PdfDocCommon(ABC):
                 return retval
             # recurse down the tree
             for kid in kids:
-                self._get_named_destinations(tree=kid.get_object(), retval=retval, visited=visited)
+                self._get_named_destinations(
+                    tree=kid.get_object(),
+                    retval=retval,
+                    visited=visited,
+                    depth=depth + 1,
+                    traversal_state=traversal_state,
+                )
         # §7.9.6, entries in a name tree node dictionary
         elif CA.NAMES in tree:  # /Kids and /Names are exclusives (§7.9.6)
             names = tree[CA.NAMES].get_object()
@@ -571,22 +623,29 @@ class PdfDocCommon(ABC):
 
     def get_fields(
         self,
-        tree: Optional[DictionaryObject] = None,
-        retval: Optional[dict[Any, Any]] = None,
-        fileobj: Optional[Any] = None,
-        stack: Optional[list[PdfObject]] = None,
-    ) -> Optional[dict[str, Any]]:
+        tree: DictionaryObject | None = None,
+        retval: dict[Any, Any] | None = None,
+        fileobj: Any | None = None,
+        stack: Any = _UNSET,
+        *,
+        _visited: set[int] | None = None,
+        _depth: int = 0,
+        _traversal_state: _TraversalState | None = None,
+    ) -> dict[str, Any] | None:
         """
         Extract field data if this PDF contains interactive form fields.
 
-        The *tree*, *retval*, *stack* parameters are for recursive use.
+        The *tree*, *retval*, *visited*, *depth* parameters are for internal use.
 
         Args:
             tree: Current object to parse.
             retval: In-progress list of fields.
             fileobj: A file object (usually a text file) to write
                 a report to on all interactive form fields found.
-            stack: List of already parsed objects.
+            stack: The stack to use. Deprecated.
+            _visited: Set of already visited IDs. Callers should usually omit this.
+            _depth: The current field depth.
+            _traversal_state: The current traversal state.
 
         Returns:
             A dictionary where each key is a field name, and each
@@ -595,12 +654,26 @@ class PdfDocCommon(ABC):
             ``None`` if form data could not be located.
 
         """
+        if stack is not _UNSET:
+            deprecation_no_replacement(name="stack", removed_in="7.0.0")
+
+        configuration = get_configuration()
+        if _depth >= configuration.form_fields_maximum_depth:
+            raise LimitReachedError("Reached maximum allowed form field depth.")
+        if _traversal_state is None:
+            _traversal_state = _TraversalState()
+
+        def _check_field_limit(_increment: int) -> None:
+            _traversal_state.entry_count += _increment
+            if _traversal_state.entry_count > configuration.form_fields_maximum_entries:
+                raise LimitReachedError("Exceeded maximum number of fields allowed.")
+
         field_attributes = FA.attributes_dict()
         field_attributes.update(CheckboxRadioButtonAttributes.attributes_dict())
         if retval is None:
             retval = {}
             catalog = self.root_object
-            stack = []
+            _visited = set()
             # get the AcroForm tree
             if CA.ACRO_FORM in catalog:
                 entry = catalog[CA.ACRO_FORM]
@@ -619,7 +692,7 @@ class PdfDocCommon(ABC):
                 return None
         if tree is None:
             return retval
-        assert stack is not None
+        assert _visited is not None
         if "/Fields" in tree:
             fields = tree["/Fields"].get_object()
             if not isinstance(fields, ArrayObject):
@@ -629,19 +702,27 @@ class PdfDocCommon(ABC):
                     fields=fields,
                 )
                 return retval
+            _check_field_limit(len(fields))
             for f in fields:
                 field = f.get_object()
-                self._build_field(field, retval, fileobj, field_attributes, stack)
+                self._build_field(
+                    field=field, retval=retval, fileobj=fileobj, field_attributes=field_attributes,
+                    visited=_visited, depth=_depth, traversal_state=_traversal_state,
+                )
         elif any(attr in tree for attr in field_attributes):
             # Tree is a field
-            self._build_field(tree, retval, fileobj, field_attributes, stack)
+            _check_field_limit(1)
+            self._build_field(
+                field=tree, retval=retval, fileobj=fileobj, field_attributes=field_attributes,
+                visited=_visited, depth=_depth, traversal_state=_traversal_state,
+            )
         return retval
 
     def _get_qualified_field_name(
             self,
             *,
             parent: DictionaryObject,
-            visited: Optional[set[int]] = None
+            visited: set[int] | None = None
     ) -> str:
         if visited is None:
             visited = set()
@@ -678,11 +759,14 @@ class PdfDocCommon(ABC):
 
     def _build_field(
         self,
-        field: Union[TreeObject, DictionaryObject],
+        *,
+        field: TreeObject | DictionaryObject,
         retval: dict[Any, Any],
         fileobj: Any,
         field_attributes: Any,
-        stack: list[PdfObject],
+        visited: set[int],
+        depth: int,
+        traversal_state: _TraversalState,
     ) -> None:
         if not isinstance(field, DictionaryObject):
             logger_warning(
@@ -725,28 +809,37 @@ class PdfDocCommon(ABC):
             ):
                 del retval[key]["/_States_"][retval[key]["/_States_"].index("/Off")]
         # at last for order
-        self._check_kids(field, retval, fileobj, stack)
+        self._check_kids(
+            tree=field, retval=retval, fileobj=fileobj, visited=visited, depth=depth, traversal_state=traversal_state
+        )
 
     def _check_kids(
         self,
-        tree: Union[TreeObject, DictionaryObject],
+        *,
+        tree: TreeObject | DictionaryObject,
         retval: Any,
         fileobj: Any,
-        stack: list[PdfObject],
+        visited: set[int],
+        depth: int,
+        traversal_state: _TraversalState,
     ) -> None:
-        if tree in stack:
+        tree_id = id(tree)
+        if tree_id in visited:
             logger_warning(
                 "%(field_name)s already parsed",
                 source=__name__,
                 field_name=self._get_qualified_field_name(parent=tree),
             )
             return
-        stack.append(tree)
+        visited.add(tree_id)
         if PagesAttributes.KIDS in tree:
             # recurse down the tree
             for kid in tree[PagesAttributes.KIDS]:  # type: ignore[attr-defined]
                 kid = kid.get_object()
-                self.get_fields(kid, retval, fileobj, stack)
+                self.get_fields(
+                    tree=kid, retval=retval, fileobj=fileobj,
+                    _visited=visited, _depth=depth + 1, _traversal_state=traversal_state
+                )
 
     def _write_field(self, fileobj: Any, field: Any, field_attributes: Any) -> None:
         field_attributes_tuple = FA.attributes()
@@ -824,7 +917,7 @@ class PdfDocCommon(ABC):
         return ff
 
     def get_pages_showing_field(
-        self, field: Union[Field, PdfObject, IndirectObject]
+        self, field: Field | PdfObject | IndirectObject
     ) -> list[PageObject]:
         """
         Provides list of pages where the field is called.
@@ -886,7 +979,7 @@ class PdfDocCommon(ABC):
     @property
     def open_destination(
         self,
-    ) -> Union[Destination, TextStringObject, ByteStringObject, None]:
+    ) -> Destination | TextStringObject | ByteStringObject | None:
         """
         Property to access the opening destination (``/OpenAction`` entry in
         the PDF catalog). It returns ``None`` if the entry does not exist
@@ -909,12 +1002,12 @@ class PdfDocCommon(ABC):
                 fit = Fit(typ, tuple(array))
                 return Destination("OpenAction", page, fit)
             except Exception as exc:
-                raise Exception(f"Invalid Destination {oa}: {exc}")
+                raise Exception(f"Invalid Destination {oa}: {exc}") from exc
         else:
             return None
 
     @open_destination.setter
-    def open_destination(self, dest: Union[str, Destination, PageObject, None]) -> None:
+    def open_destination(self, dest: str | Destination | PageObject | None) -> None:
         raise NotImplementedError("No setter for open_destination")
 
     @property
@@ -929,11 +1022,11 @@ class PdfDocCommon(ABC):
     def _get_outline(
         self,
         *,
-        node: Optional[DictionaryObject] = None,
-        outline: Optional[Any] = None,
-        visited: Optional[set[int]] = None,
+        node: DictionaryObject | None = None,
+        outline: Any | None = None,
+        visited: set[int] | None = None,
         depth: int = 0,
-        traversal_state: Optional[_TraversalState] = None
+        traversal_state: _TraversalState | None = None
     ) -> OutlineType:
         if traversal_state is None:
             traversal_state = _TraversalState()
@@ -944,9 +1037,11 @@ class PdfDocCommon(ABC):
 
             # get the outline dictionary and named destinations
             if Core.OUTLINES in catalog:
-                lines = catalog[Core.OUTLINES].get_object()
+                lines = catalog[Core.OUTLINES]
 
-                if isinstance(lines, NullObject):
+                # A reference to an object which is missing or free in the xref table
+                # resolves to None.
+                if is_null_or_none(lines):
                     return outline
 
                 if not isinstance(lines, DictionaryObject):
@@ -1019,7 +1114,7 @@ class PdfDocCommon(ABC):
         return outline
 
     @property
-    def threads(self) -> Optional[ArrayObject]:
+    def threads(self) -> ArrayObject | None:
         """
         Read-only property for the list of threads.
 
@@ -1041,11 +1136,11 @@ class PdfDocCommon(ABC):
 
     @abstractmethod
     def _get_page_number_by_indirect(
-        self, indirect_reference: Union[int, NullObject, IndirectObject, None]
-    ) -> Optional[int]:
+        self, indirect_reference: int | NullObject | IndirectObject | None
+    ) -> int | None:
         ...  # pragma: no cover
 
-    def get_page_number(self, page: PageObject) -> Optional[int]:
+    def get_page_number(self, page: PageObject) -> int | None:
         """
         Retrieve page number of a given PageObject.
 
@@ -1059,7 +1154,7 @@ class PdfDocCommon(ABC):
         """
         return self._get_page_number_by_indirect(page.indirect_reference)
 
-    def get_destination_page_number(self, destination: Destination) -> Optional[int]:
+    def get_destination_page_number(self, destination: Destination) -> int | None:
         """
         Retrieve page number of a given Destination object.
 
@@ -1074,8 +1169,8 @@ class PdfDocCommon(ABC):
 
     def _build_destination(
         self,
-        title: Union[str, bytes],
-        array: Optional[ArrayObject],
+        title: str | bytes,
+        array: ArrayObject | None,
     ) -> Destination:
         page, typ = None, None
         # A valid destination is an array of at least a page and a fit type.
@@ -1084,26 +1179,35 @@ class PdfDocCommon(ABC):
         if not isinstance(array, ArrayObject) or len(array) < 2:
             page = NullObject()
             return Destination(title, page, Fit.fit())
-        page, typ, *array = array  # type: ignore[assignment]
+        page, typ, *fit_args = array
         try:
-            return Destination(title, page, Fit(fit_type=typ, fit_args=array))
+            return Destination(title, page, Fit(fit_type=typ, fit_args=fit_args))
         except PdfReadError:
-            logger_warning("Unknown destination: %(title)r %(array)s", source=__name__, title=title, array=array)
+            logger_warning(
+                "Unknown destination: %(title)r %(fit_args)s",
+                source=__name__,
+                title=title,
+                fit_args=fit_args,
+            )
             if self.strict:
                 raise
-            # create a link to first Page
-            tmp = self.pages[0].indirect_reference
+            # create a link to the first page if the document has one,
+            # and to a null target otherwise
+            if self.pages:
+                tmp = self.pages[0].indirect_reference
+            else:
+                tmp = None
             indirect_reference = NullObject() if tmp is None else tmp
             return Destination(title, indirect_reference, Fit.fit())
 
-    def _build_outline_item(self, node: DictionaryObject) -> Optional[Destination]:
+    def _build_outline_item(self, node: DictionaryObject) -> Destination | None:
         dest, title, outline_item = None, None, None
 
         # title required for valid outline
         # §12.3.3, entries in an outline item dictionary
-        try:
+        if "/Title" in node:
             title = cast("str", node["/Title"])
-        except KeyError:
+        else:
             if self.strict:
                 raise PdfReadError(f"Outline Entry Missing /Title attribute: {node!r}")
             title = ""
@@ -1111,12 +1215,15 @@ class PdfDocCommon(ABC):
         if "/A" in node:
             # Action, PDF 1.7 and PDF 2.0 §12.6 (only type GoTo supported)
             action = cast(DictionaryObject, node["/A"])
-            action_type = cast(NameObject, action[GoToActionArguments.S])
-            if action_type == "/GoTo":
-                if GoToActionArguments.D in action:
-                    dest = action[GoToActionArguments.D]
-                elif self.strict:
-                    raise PdfReadError(f"Outline Action Missing /D attribute: {node!r}")
+            if GoToActionArguments.S in action:
+                action_type = cast(NameObject, action[GoToActionArguments.S])
+                if action_type == "/GoTo":
+                    if GoToActionArguments.D in action:
+                        dest = action[GoToActionArguments.D]
+                    elif self.strict:
+                        raise PdfReadError(f"Outline Action Missing /D attribute: {node!r}")
+            elif self.strict:
+                raise PdfReadError(f"Outline Action Missing /S attribute: {node!r}")
         elif "/Dest" in node:
             # Destination, PDF 1.7 and PDF 2.0 §12.3.2
             dest = node["/Dest"]
@@ -1190,7 +1297,7 @@ class PdfDocCommon(ABC):
 
         The returned object supports indexing, slicing, ``len()``, iteration and
         (for PdfWriter) ``del``, but it is not a :class:`list` - pages are looked
-        up on demand rather than materialised up front, so list-only operations
+        up on demand rather than materialized up front, so list-only operations
         such as ``append()`` or concatenation with ``+`` are not available.
 
         Note:
@@ -1212,10 +1319,10 @@ class PdfDocCommon(ABC):
         This property is read-only. The labels are in the order that the pages
         appear in the document.
         """
-        return [page_index2page_label(self, i) for i in range(len(self.pages))]
+        return index2labels(self, len(self.pages))
 
     @property
-    def page_layout(self) -> Optional[str]:
+    def page_layout(self) -> str | None:
         """
         Get the page layout currently being used.
 
@@ -1243,7 +1350,7 @@ class PdfDocCommon(ABC):
             return None
 
     @property
-    def page_mode(self) -> Optional[PagemodeType]:
+    def page_mode(self) -> PagemodeType | None:
         """
         Get the page mode currently being used.
 
@@ -1268,16 +1375,7 @@ class PdfDocCommon(ABC):
         except KeyError:
             return None
 
-    def _flatten(
-        self,
-        list_only: bool = False,
-        pages: Union[DictionaryObject, PageObject, None] = None,
-        inherit: Optional[dict[str, Any]] = None,
-        indirect_reference: Optional[IndirectObject] = None,
-        visited: Optional[set[int]] = None,
-        depth: int = 0,
-        traversal_state: Optional[_TraversalState] = None,
-    ) -> None:
+    def _flatten(self, list_only: bool = False) -> None:
         """
         Process the document pages to ease searching.
 
@@ -1285,84 +1383,87 @@ class PdfDocCommon(ABC):
         in the page tree. Flattening means moving
         any inheritance data into descendant nodes,
         effectively removing the inheritance dependency.
+        The result is stored in ``self.flattened_pages``.
 
         Note: It is distinct from another use of "flattening" applied to PDFs.
         Flattening a PDF also means combining all the contents into one single layer
         and making the file less editable.
 
+        The page tree is walked with an explicit stack instead of recursion, so the
+        traversal is bound by ``Configuration.page_tree_maximum_depth`` and
+        ``Configuration.page_tree_maximum_entries`` only, not by the interpreter
+        recursion limit.
+
         Args:
-            list_only: Will only list the pages within _flatten_pages.
-            pages:
-            inherit:
-            indirect_reference: Used recursively to flatten the /Pages object.
-            visited: Set of id() values on the active page-tree traversal path.
-                Detects multi-hop cycles such as A→B→C→A that the single-parent
-                check misses.
-            depth: Current page-tree traversal depth.
-            traversal_state: State shared across the complete traversal.
+            list_only: If True, the page's own entries are not copied into the
+                generated :class:`PageObject`. Attributes inherited from ancestor
+                nodes are applied either way. Note that a page reached through an
+                indirect reference is already populated by :class:`PageObject`
+                itself, so this only has an effect for ``/Kids`` entries that are
+                inline dictionaries.
 
         """
-        if inherit is None:
-            inherit = {}
-        if visited is None:
-            visited = set()
-        if traversal_state is None:
-            traversal_state = _TraversalState()
         configuration = get_configuration()
-        if depth > configuration.page_tree_maximum_depth:
-            raise LimitReachedError(
-                f"Maximum page tree depth reached: {depth} > {configuration.page_tree_maximum_depth}."
-            )
-        if is_null_or_none(pages):
-            # Fix issue 327: set flattened_pages attribute only for
-            # decrypted file
-            catalog = self.root_object
-            pages = catalog.get("/Pages").get_object()  # type: ignore[union-attr]
-            if not isinstance(pages, DictionaryObject):
-                raise PdfReadError("Invalid object in /Pages")
-            self.flattened_pages = []
-        assert pages is not None, "mypy"
+        self.flattened_pages = None
+        pages = self.root_object.get("/Pages", NullObject()).get_object()
+        if not isinstance(pages, DictionaryObject):
+            raise PdfReadError("Invalid object in /Pages")
 
-        # Get the current node_type
-        if PagesAttributes.TYPE in pages:
-            node_type = cast(str, pages[PagesAttributes.TYPE])
-        # if the page tree node has no /Type, consider as a page if /Kids is also missing
-        elif PagesAttributes.KIDS not in pages:
-            # Without /Type, only accept it as a page if it carries a structural page key.
-            if self.strict and not any(key in pages for key in (PG.CONTENTS, PG.MEDIABOX, PG.PARENT)):
-                raise PdfReadError(f"Non-page object reached through /Kids: {pages!r}")
-            node_type = "/Page"
-        else:
-            node_type = "/Pages"
-
-        # Flatten that type of node
-        if node_type == "/Pages":
-            self._flatten_page_tree_node(pages, list_only, inherit, visited, depth, traversal_state)
-        elif node_type == "/Page":
-            self._flatten_leaf_page(pages, list_only, inherit, indirect_reference)
-
-    def _flatten_page_tree_node(
-        self,
-        pages: DictionaryObject,
-        list_only: bool,
-        inherit: dict[str, Any],
-        visited: set[int],
-        depth: int,
-        traversal_state: _TraversalState,
-    ) -> None:
-        """
-        Handle an intermediate ``/Pages`` node: propagate its inheritable
-        attributes into ``inherit`` and recurse into each entry of ``/Kids``.
-
-        Cyclic references and the configured page-tree entry limit are enforced here.
-        """
-        inheritable_page_attributes = (
-            NameObject(PG.RESOURCES),
-            NameObject(PG.MEDIABOX),
-            NameObject(PG.CROPBOX),
-            NameObject(PG.ROTATE),
+        flattened_pages: list[PageObject] = []
+        traversal_state = _TraversalState()
+        remaining_page_entries = _TraversalState(entry_count=configuration.page_tree_maximum_page_entries)
+        # id() values of the nodes on the path from the root to the current node.
+        # Detects multi-hop cycles such as A→B→C→A that the single-parent check misses.
+        ancestor_ids: set[int] = set()
+        # The /Pages nodes of that path whose /Kids are not exhausted yet.
+        stack: list[_PageTreeFrame] = []
+        item: _PageTreeItem | None = _PageTreeItem(
+            node=pages, inherit={}, indirect_reference=None, depth=0
         )
-        for attr in inheritable_page_attributes:
+        while item is not None:
+            if item.depth > configuration.page_tree_maximum_depth:
+                raise LimitReachedError(
+                    f"Maximum page tree depth reached: {item.depth} > {configuration.page_tree_maximum_depth}."
+                )
+
+            # Get the current node_type
+            node = item.node
+            if PagesAttributes.TYPE in node:
+                node_type = cast(str, node[PagesAttributes.TYPE])
+            # if the page tree node has no /Type, consider as a page if /Kids is also missing
+            elif PagesAttributes.KIDS not in node:
+                # Without /Type, only accept it as a page if it carries a structural page key.
+                if self.strict and not any(key in node for key in (PG.CONTENTS, PG.MEDIABOX, PG.PARENT)):
+                    raise PdfReadError(f"Non-page object reached through /Kids: {node!r}")
+                node_type = "/Page"
+            else:
+                node_type = "/Pages"
+
+            # Flatten that type of node
+            if node_type == "/Pages":
+                ancestor_ids.add(id(node))
+                stack.append(self._enter_page_tree_node(item))
+            elif node_type == "/Page":
+                flattened_pages.append(
+                    self._flatten_leaf_page(
+                        item=item, list_only=list_only, remaining_page_entries=remaining_page_entries
+                    )
+                )
+
+            item = self._pop_next_page_tree_kid(stack, ancestor_ids, traversal_state)
+
+        # Assigned only here, so that a failed traversal does not leave a partial page list behind.
+        self.flattened_pages = flattened_pages
+
+    def _enter_page_tree_node(self, item: _PageTreeItem) -> _PageTreeFrame:
+        """
+        Start walking an intermediate ``/Pages`` node: propagate its inheritable
+        attributes and pair it with an iterator over its ``/Kids``.
+        """
+        pages = item.node
+        # Copied before being modified, as the kids of the enclosing node share it.
+        inherit = dict(item.inherit)
+        for attr in _INHERITABLE_PAGE_ATTRIBUTES:
             if attr in pages:
                 inherit[attr] = pages[attr]
 
@@ -1372,71 +1473,102 @@ class PdfDocCommon(ABC):
         elif not isinstance(kids, ArrayObject):
             raise PdfReadError(f"Expected /Kids to be an array, got {type(kids).__name__}.")
 
-        configuration = get_configuration()
-        pages_reference = getattr(pages, "indirect_reference", object())
-        for page in kids:
-            if getattr(page, "indirect_reference", object()) == pages_reference:
-                raise PdfReadError("Detected cyclic page references.")
+        return item._replace(inherit=inherit), iter(kids)
 
-            additional_arguments = {}
-            if isinstance(page, IndirectObject):
-                additional_arguments["indirect_reference"] = page
-            obj = page.get_object()
-            if not is_null_or_none(obj) and not isinstance(obj, DictionaryObject):
-                logger_warning(
-                    "Ignoring page tree entry that is not a dictionary: %(entry)s",
-                    source=__name__,
-                    entry=obj,
+    def _pop_next_page_tree_kid(
+        self,
+        stack: list[_PageTreeFrame],
+        ancestor_ids: set[int],
+        traversal_state: _TraversalState,
+    ) -> _PageTreeItem | None:
+        """
+        Return the next page tree node to flatten, leaving the ``/Pages`` nodes whose
+        ``/Kids`` are exhausted, or ``None`` when the traversal is complete.
+
+        Cyclic references and the configured page-tree entry limit are enforced here.
+        """
+        configuration = get_configuration()
+        while stack:
+            parent, kids = stack[-1]
+            pages_reference = getattr(parent.node, "indirect_reference", object())
+            for page in kids:
+                if getattr(page, "indirect_reference", object()) == pages_reference:
+                    raise PdfReadError("Detected cyclic page references.")
+
+                obj = page.get_object()
+                if not isinstance(obj, DictionaryObject):
+                    if not is_null_or_none(obj):
+                        logger_warning(
+                            "Ignoring page tree entry that is not a dictionary: %(entry)s",
+                            source=__name__,
+                            entry=obj,
+                        )
+                    # damaged file may have invalid child in /Pages
+                    continue
+                if not obj:
+                    # An empty dictionary would otherwise be read as a blank page.
+                    continue
+                if id(obj) in ancestor_ids:
+                    raise PdfReadError("Detected cyclic page references.")
+                traversal_state.entry_count += 1
+                if traversal_state.entry_count > configuration.page_tree_maximum_entries:
+                    raise LimitReachedError(
+                        "Maximum page tree entry limit reached: "
+                        f"{traversal_state.entry_count} > {configuration.page_tree_maximum_entries}."
+                    )
+                return _PageTreeItem(
+                    node=obj,
+                    inherit=parent.inherit,
+                    indirect_reference=page if isinstance(page, IndirectObject) else None,
+                    depth=parent.depth + 1,
                 )
-                continue
-            if not obj:
-                # damaged file may have invalid child in /Pages
-                continue
-            obj_id = id(obj)
-            if obj_id in visited:
-                raise PdfReadError("Detected cyclic page references.")
-            traversal_state.entry_count += 1
-            if traversal_state.entry_count > configuration.page_tree_maximum_entries:
-                raise LimitReachedError(
-                    "Maximum page tree entry limit reached: "
-                    f"{traversal_state.entry_count} > {configuration.page_tree_maximum_entries}."
-                )
-            visited.add(obj_id)
-            try:
-                self._flatten(
-                    list_only,
-                    cast(DictionaryObject, obj),
-                    inherit.copy(),
-                    visited=visited,
-                    depth=depth + 1,
-                    traversal_state=traversal_state,
-                    **additional_arguments,
-                )
-            finally:
-                visited.remove(obj_id)
+            stack.pop()
+            ancestor_ids.discard(id(parent.node))
+        return None
 
     def _flatten_leaf_page(
-        self,
-        page: DictionaryObject,
-        list_only: bool,
-        inherit: dict[str, Any],
-        indirect_reference: Optional[IndirectObject],
-    ) -> None:
-        """Build the :class:`PageObject` for a leaf ``/Page`` node and append it to ``flattened_pages``."""
-        page_obj = PageObject(self, indirect_reference)
-        if not list_only:
-            page_obj.update(page)
-        for attr, value in inherit.items():
-            # if the page has its own value, it does not inherit the parent's value
-            if attr not in page_obj:
-                page_obj[attr] = value
+            self, *, item: _PageTreeItem, list_only: bool, remaining_page_entries: _TraversalState
+    ) -> PageObject:
+        """
+        Build the :class:`PageObject` for a leaf ``/Page`` node.
 
-        # TODO: Could flattened_pages be None at this point?
-        self.flattened_pages.append(page_obj)  # type: ignore[union-attr]
+        ``list_only`` suppresses copying the page's own entries; the inherited
+        attributes are applied regardless. When the node has an indirect reference,
+        :class:`PageObject` has already copied those entries in its constructor,
+        so the flag only matters for inline ``/Kids`` dictionaries.
+        """
+        node = item.node
+
+        # Indirect PageObjects are populated by the constructor even when
+        # list_only=True. Inline dictionaries are copied only when list_only=False.
+        entry_count = (
+            len(node)
+            if item.indirect_reference is not None or not list_only
+            else 0
+        )
+
+        # Inherited attributes are inserted only when missing from the page.
+        entry_count += sum(
+            attribute not in node for attribute in item.inherit
+        )
+
+        remaining_page_entries.entry_count -= entry_count
+        if remaining_page_entries.entry_count < 0:
+            raise LimitReachedError("Maximum page tree page entry limit exceeded!")
+
+        page = PageObject(self, item.indirect_reference)
+        if not list_only:
+            page.update(node)
+        for attribute, value in item.inherit.items():
+            # If the page has its own value, it does not inherit the parent's value.
+            if attribute not in page:
+                page[attribute] = value
+
+        return page
 
     def remove_page(
         self,
-        page: Union[int, PageObject, IndirectObject],
+        page: int | PageObject | IndirectObject,
         clean: bool = False,
     ) -> None:
         """
@@ -1480,7 +1612,7 @@ class PdfDocCommon(ABC):
         if clean and ind is not None:
             self._replace_object(ind, NullObject())
 
-    def _get_indirect_object(self, num: int, gen: int) -> Optional[PdfObject]:
+    def _get_indirect_object(self, num: int, gen: int) -> PdfObject | None:
         """
         Used to ease development.
 
@@ -1496,18 +1628,8 @@ class PdfDocCommon(ABC):
         """
         return IndirectObject(num, gen, self).get_object()
 
-    def decode_permissions(
-        self, permissions_code: int
-    ) -> NoReturn:  # pragma: no cover
-        """Take the permissions as an integer, return the allowed access."""
-        deprecation_with_replacement(
-            old_name="decode_permissions",
-            new_name="user_access_permissions",
-            removed_in="5.0.0",
-        )
-
     @property
-    def user_access_permissions(self) -> Optional[UserAccessPermissions]:
+    def user_access_permissions(self) -> UserAccessPermissions | None:
         """
         Get the user access permissions for encrypted documents.
         Returns None if not encrypted.
@@ -1524,7 +1646,7 @@ class PdfDocCommon(ABC):
         return UserAccessPermissions(self._encryption.P)
 
     @property
-    def are_permissions_valid(self) -> Optional[bool]:
+    def are_permissions_valid(self) -> bool | None:
         """
         Whether the ``/Perms`` integrity check passed for this document.
 
@@ -1555,33 +1677,54 @@ class PdfDocCommon(ABC):
         ...  # pragma: no cover
 
     @property
-    def xfa(self) -> Optional[dict[str, Any]]:
-        retval: dict[str, Any] = {}
+    def xfa(self) -> dict[str, bytes] | None:
+
         catalog = self.root_object
 
         if "/AcroForm" not in catalog or not catalog["/AcroForm"]:
             return None
 
         tree = cast(TreeObject, catalog["/AcroForm"])
+        retval: dict[str, bytes] = {}
 
-        if "/XFA" in tree:
-            fields = tree["/XFA"].get_object()
-            if not isinstance(fields, ArrayObject):
-                logger_warning(
-                    "XFA entry is not an array: %(fields)s",
-                    source=__name__,
-                    fields=fields,
+        if "/XFA" not in tree:
+            return retval
+
+        fields = tree["/XFA"].get_object()
+        if not isinstance(fields, ArrayObject):
+            logger_warning(
+                "XFA entry is not an array: %(fields)s",
+                source=__name__,
+                fields=fields,
+            )
+            return retval
+
+        accumulated_length = 0
+        decoding_work_maximum_length = get_configuration().xfa_decoding_work_maximum_length
+
+        field_iterator = iter(fields)
+        for field in field_iterator:
+            tag = field
+            field = next(field_iterator, None)
+            if is_null_or_none(field):
+                continue
+            assert field is not None, "mypy"
+
+            field = cast(StreamObject | None, field.get_object())
+            if is_null_or_none(field):
+                continue
+            assert field is not None, "mypy"
+
+            decoded_data = field.get_data()
+            accumulated_length += len(decoded_data)
+
+            if accumulated_length > decoding_work_maximum_length:
+                raise LimitReachedError(
+                    "XFA decoding exceeded the maximum accumulated "
+                    f"decoding work of {decoding_work_maximum_length} bytes."
                 )
-                return retval
-            i = iter(fields)
-            for f in i:
-                tag = f
-                f = next(i, None)
-                if isinstance(f, IndirectObject):
-                    field = cast(Optional[EncodedStreamObject], f.get_object())
-                    if field:
-                        es = _decompress_with_limit(field._data)
-                        retval[tag] = es
+
+            retval[tag] = decoded_data
         return retval
 
     @property
@@ -1612,8 +1755,8 @@ class PdfDocCommon(ABC):
     @abstractmethod
     def _repr_mimebundle_(
         self,
-        include: Union[Iterable[str], None] = None,
-        exclude: Union[Iterable[str], None] = None,
+        include: Iterable[str] | None = None,
+        exclude: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         """
         Integration into Jupyter Notebooks.

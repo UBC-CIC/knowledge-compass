@@ -29,6 +29,7 @@ import secrets
 
 from cryptography import __version__
 from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.decrepit.ciphers.algorithms import ARC4
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.base import Cipher
 from cryptography.hazmat.primitives.ciphers.modes import CBC, ECB
@@ -37,12 +38,6 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from pypdf._crypt_providers._base import CryptBase
 from pypdf._utils import logger_warning
 from pypdf.errors import PdfStreamError
-
-try:
-    # 43.0.0: https://cryptography.io/en/latest/changelog/#v43-0-0
-    from cryptography.hazmat.decrepit.ciphers.algorithms import ARC4
-except ImportError:
-    from cryptography.hazmat.primitives.ciphers.algorithms import ARC4
 
 crypt_provider = ("cryptography", __version__)
 
@@ -132,14 +127,14 @@ class CryptAES(CryptBase):
             padded_data = decryptor.update(data) + decryptor.finalize()
         except ValueError as exception:
             # Only raised in strict mode. Non-strict mode fixes padding.
-            raise PdfStreamError(exception)
+            raise PdfStreamError(exception) from exception
 
         unpadder = PKCS7(128).unpadder()
         try:
             return unpadder.update(padded_data) + unpadder.finalize()
         except ValueError as exception:
             if strict:
-                raise PdfStreamError(exception)
+                raise PdfStreamError(exception) from exception
             logger_warning("Ignoring padding error: %(exception)s", source=__name__, exception=exception)
             return padded_data[: -padded_data[-1]]
 

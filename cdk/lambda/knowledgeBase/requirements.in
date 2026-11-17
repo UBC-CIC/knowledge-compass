@@ -23,7 +23,7 @@
 # old version's dist-info if the version changed).
 # tests/test_vendored_requirements.py checks the pins and the vendored
 # dist-info folders agree.
-pypdf==6.19.0
+pypdf==7.1.0
 python-docx==1.2.0
 # Transitive (python-docx), pinned to what is vendored.
 lxml==6.1.3
