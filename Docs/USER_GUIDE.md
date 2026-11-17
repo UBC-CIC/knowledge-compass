@@ -1,7 +1,7 @@
 # User Guide
 
 Please ensure the application is deployed, instructions are available in the deployment guide here:  
-[https\://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT\_GUIDE.md](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT_GUIDE.md) 
+[Click here](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT_GUIDE.md)
 
 Once you have deployed the solution, the following user guide will help you navigate the functions available. 
 
@@ -29,8 +29,8 @@ Users are immediately greeted with a welcome message and prompted to start a new
 
 **Chat Interface**  
 Once the user selects a predesignated scenario or enters a message, the chatbot will ask a series of follow-up questions to learn more about the user’s situation. When the assistant has a sufficient understanding of the situation it provides guidance: practical steps, what to ask for, and how to work with the school. 
-
-![Chat follow-up questions](media/user-guide/user-chat-follow-up.png)![Chat guidance](media/user-guide/user-chat-guidance.png)
+<img width="1909" height="785" alt="Screenshot 2026-10-27 111410" src="https://github.com/user-attachments/assets/82bb1507-9db7-4d08-a216-e6ba9c44dac7" />
+<img width="1909" height="700" alt="Screenshot 2026-10-27 111437" src="https://github.com/user-attachments/assets/c3e89469-b629-4bfa-8599-303fb75de37c" />
 
 Personal details such as names, phone numbers, email and street addresses, and health or SIN numbers are removed from the message before it is cached or sent to the AI model. If the application spots personal details, a note will appear that says your personal details will be redacted. **Inputting personal details is not required to get sound advice from the assistant.**   
 **![Personal details removed from a message](media/user-guide/user-personal-details-removed.png)**
@@ -57,7 +57,7 @@ Daily limits on how many messages and characters each person can send, or the nu
 Using the Amplify link, administrators are directed to the sign-in page. Administrator accounts and permissions are configured through Amazon Cognito in the AWS Console. Administrators must use the credentials associated with their Cognitio account to sign in. Please refer to the [deployment guide](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT_GUIDE.md#step-2-configure-admin-user) for further information on setting up administrator accounts and permissions.   
 ![Administrator sign-in page](media/user-guide/admin-sign-in.png)  
 After entering an email and password, the administrator will be prompted to set up a two-step sign in for authentication. Later sign-ins will ask for a code from the application.  
-![Two-step sign-in setup](media/user-guide/admin-two-step-setup.png)
+<img width="943" height="866" alt="Screenshot 2026-11-16 095725" src="https://github.com/user-attachments/assets/d55ab802-380b-45c2-ac5c-615013760382" />
 
 **Overview**  
 Upon logging in, the administrator is brought to the **overview** page. At the top of the screen, there are three categories of analytics: users reached, conversations, and messages exchanged. 
@@ -65,8 +65,7 @@ Upon logging in, the administrator is brought to the **overview** page. At the t
 * Users reached provides an overview on how many users have started a conversation.   
 * Conversations provides the exact number of conversations on the platform.  
 * Messages exchanged provides the exact number of messages exchanged on the platform, by both the chatbot assistant and the user.
-
-![Administrator overview page](media/user-guide/admin-overview.png)
+<img width="1917" height="868" alt="Screenshot 2026-10-27 144839" src="https://github.com/user-attachments/assets/9257cd35-e9c0-4d9b-a7d4-03eab48a2df0" />
 
 ### **Data Sources**
 
@@ -77,8 +76,8 @@ Under **“Data sources,”** the administrator can add web URLs and upload file
 Administrators can add website URLs to incorporate information from external web sources into the knowledge base. Once a URL has been submitted, the system automatically retrieves and indexes once sync is pressed by the admin.
 
 If a URL cannot be processed, it may be due to an invalid link, restricted website access, or unsupported webpage content. Administrators should verify that the URL is accessible and correctly entered before trying again.![URL that could not be processed](media/user-guide/admin-add-url-error.png)
+<img width="948" height="859" alt="Screenshot 2026-11-16 100436" src="https://github.com/user-attachments/assets/554d0988-17f9-47d1-bed9-59835d7c6736" /><img width="1917" height="842" alt="Screenshot 2026-11-16 115853" src="https://github.com/user-attachments/assets/af0f5415-5eee-4a37-8aa7-b17934da1cf0" />
 
-![Add web URL dialog](media/user-guide/admin-add-web-url.png)
 
 **Uploading files and documents**
 
@@ -147,10 +146,10 @@ Quick Summary of “the assistant” prompts:
 Under the “How it talks” section of the prompts, the administrator can input text that influences how the assistant runs a conversation, across various scenarios. How the assistant provides guidance on each scenario, or “journey,” can be configured within the “Guides” section of the prompts page.
 
 By filling out the “Asking questions” field, the administrator outlines which questions the assistant asks, and in what order. For instance, the administrator can instruct the assistant to “ask exactly ONE warm, focused question” before starting to identify the journey.  
-![How it talks: asking questions](media/user-guide/prompts-asking-questions.png)
+<img width="1917" height="842" alt="Screenshot 2026-11-16 115853" src="https://github.com/user-attachments/assets/fca1ae69-c421-4d88-b96f-6471e5300297" />
 
 Under the “Giving guidance” field, the administrator inputs information on how the assistant should provide advice to the user. For instance, the administrator could decide that the assistant should acknowledge the user’s concern before asking any questions.  
-![How it talks: giving guidance](media/user-guide/prompts-giving-guidance.png)
+<img width="1911" height="875" alt="Screenshot 2026-11-16 130816" src="https://github.com/user-attachments/assets/078348df-82ea-49d9-851f-1e1ca62229ac" />
 
 *Guides*  
 In addition to filling out text fields to shape the assistant, the administrator can upload files that the assistant can answer from under the “Guides” section of the prompts. By uploading guides, the administrator provides the assistant with the appropriate information to address the user's concerns. To get the assistant to answer questions based on uploaded guides, the “answering with your uploaded guidelines” toggle must be switched on:  
