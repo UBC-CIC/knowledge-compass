@@ -15,10 +15,14 @@ describe("sign-in steps", () => {
     expect(adminStepFor("CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED")).toBe("newPassword");
     expect(adminStepFor("CONTINUE_SIGN_IN_WITH_TOTP_SETUP")).toBe("totpSetup");
     expect(adminStepFor("CONFIRM_SIGN_IN_WITH_TOTP_CODE")).toBe("totpCode");
+    expect(adminStepFor("CONTINUE_SIGN_IN_WITH_MFA_SELECTION")).toBe("mfaSelection");
+    expect(adminStepFor("CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION")).toBe("mfaSelection");
+    expect(adminStepFor("CONTINUE_SIGN_IN_WITH_EMAIL_SETUP")).toBe("emailSetup");
+    expect(adminStepFor("CONFIRM_SIGN_IN_WITH_EMAIL_CODE")).toBe("emailCode");
   });
 
   it("reports steps the page does not handle", () => {
-    for (const step of [undefined, "", "CONFIRM_SIGN_IN_WITH_SMS_CODE", "CONTINUE_SIGN_IN_WITH_MFA_SELECTION", "CONFIRM_SIGN_UP"]) {
+    for (const step of [undefined, "", "CONFIRM_SIGN_IN_WITH_SMS_CODE", "CONFIRM_SIGN_UP"]) {
       expect(adminStepFor(step)).toBeNull();
     }
   });
@@ -36,6 +40,8 @@ describe("TOTP codes", () => {
     expect(totpCodeError("12345")).toMatch(/6 digits/);
     expect(totpCodeError("1234567")).toMatch(/6 digits/);
     expect(totpCodeError("12a456")).toMatch(/6 digits/);
+    expect(totpCodeError("", "email")).toMatch(/the email/);
+    expect(totpCodeError("12345", "email")).toMatch(/your email/);
   });
 
   it("groups the secret in blocks of four", () => {

@@ -322,6 +322,10 @@ interface ApiGatewayStackProps extends cdk.StackProps {
   // Off by default: needs an account concurrency quota of at least 350 (100 must
   // stay unreserved), otherwise the deploy fails.
   enableReservedConcurrency?: boolean;
+  // Verified SES identity Cognito sends from (context `cognitoSesFromEmail`).
+  // When set, the pool sends email through SES and admins may use email codes
+  // as their second sign-in step. Unset keeps TOTP as the only MFA factor.
+  cognitoSesFromEmail?: string;
 }
 
 export class ApiGatewayStack extends cdk.Stack {
@@ -461,10 +465,24 @@ export class ApiGatewayStack extends cdk.Stack {
       // protection + RETAIN guard against replacement. If Cognito rejects the
       // change on the existing pool, revert to cognito.Mfa.OPTIONAL.
       mfa: cognito.Mfa.REQUIRED,
+      // Email codes need SES as the sender and the Essentials feature plan.
+      // Admins pick a factor on the login page or switch to email from the
+      // authenticator-app step.
       mfaSecondFactor: {
         otp: true,
         sms: false,
+        email: Boolean(props.cognitoSesFromEmail),
       },
+      ...(props.cognitoSesFromEmail
+        ? {
+            featurePlan: cognito.FeaturePlan.ESSENTIALS,
+            email: cognito.UserPoolEmail.withSES({
+              fromEmail: props.cognitoSesFromEmail,
+              fromName: "Knowledge Compass",
+              sesRegion: this.region,
+            }),
+          }
+        : {}),
       deletionProtection: true,
       autoVerify: {
         email: true,

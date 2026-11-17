@@ -1,8 +1,15 @@
 // Helpers for the admin sign-in steps (pages/Admin/AdminLogin.tsx).
-// The admin Cognito pool allows TOTP (authenticator app) MFA only; see the
-// UserPool in cdk/lib/api-stack.ts.
+// The admin Cognito pool allows TOTP (authenticator app) MFA and, when SES is
+// configured, email MFA; see the UserPool in cdk/lib/api-stack.ts.
 
-export type AdminSignInStep = "credentials" | "newPassword" | "totpSetup" | "totpCode";
+export type AdminSignInStep =
+  | "credentials"
+  | "newPassword"
+  | "totpSetup"
+  | "totpCode"
+  | "mfaSelection"
+  | "emailSetup"
+  | "emailCode";
 
 // Issuer shown in the authenticator app next to the admin's email.
 export const TOTP_ISSUER = "Knowledge Compass";
@@ -10,7 +17,7 @@ export const TOTP_ISSUER = "Knowledge Compass";
 /**
  * Maps an Amplify v6 `nextStep.signInStep` to what the admin login shows next:
  * "done" when signed in, a step to render, or null for a step this page does
- * not support (the pool only enables TOTP, so SMS/email steps never occur).
+ * not support (SMS is never enabled on the pool).
  */
 export function adminStepFor(
   signInStep: string | undefined
@@ -24,6 +31,13 @@ export function adminStepFor(
       return "totpSetup";
     case "CONFIRM_SIGN_IN_WITH_TOTP_CODE":
       return "totpCode";
+    case "CONTINUE_SIGN_IN_WITH_MFA_SELECTION":
+    case "CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION":
+      return "mfaSelection";
+    case "CONTINUE_SIGN_IN_WITH_EMAIL_SETUP":
+      return "emailSetup";
+    case "CONFIRM_SIGN_IN_WITH_EMAIL_CODE":
+      return "emailCode";
     default:
       return null;
   }
@@ -35,13 +49,24 @@ export function cleanTotpCode(input: string): string {
 }
 
 /** Returns an error message for a cleaned code, or null when it is 6 digits. */
-export function totpCodeError(code: string): string | null {
-  if (!code) return "Enter the 6-digit code from your authenticator app.";
+export function totpCodeError(
+  code: string,
+  source: "authenticator app" | "email" = "authenticator app"
+): string | null {
+  if (!code) {
+    return `Enter the 6-digit code from ${source === "email" ? "the email" : "your authenticator app"}.`;
+  }
   if (!/^\d{6}$/.test(code)) {
-    return "The code should be 6 digits. Check your authenticator app and try again.";
+    return `The code should be 6 digits. Check ${source === "email" ? "your email" : "your authenticator app"} and try again.`;
   }
   return null;
 }
+
+/** Cognito MFA factor names offered on the selection step, as shown to admins. */
+export const MFA_TYPE_LABELS: Record<string, string> = {
+  TOTP: "Authenticator app",
+  EMAIL: "Email",
+};
 
 /** Groups a shared secret in blocks of four so it is easier to type by hand. */
 export function formatTotpSecret(secret: string): string {
