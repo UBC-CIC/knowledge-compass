@@ -51,3 +51,5 @@ evals/.venv/
 .worktrees
 # Inclusion Canada user stories: kept locally only, not published.
 Docs/user-stories/
+# Local AWS cost estimate workbook: not published.
+Docs/KnowledgeCompass_AWS_Cost_Estimate.xlsx
