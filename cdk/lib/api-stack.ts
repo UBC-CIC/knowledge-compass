@@ -1308,7 +1308,7 @@ export class ApiGatewayStack extends cdk.Stack {
     // invalidates nothing live: 90 days exceeds the 30-day guest credential
     // lifetime. Never on deploy (rotateImmediatelyOnUpdate: false), so a
     // rotation cannot run before the two-key verifiers are live. To revoke a
-    // leaked key, rotate twice (Docs/runbooks/app-secret-rotation.md).
+    // leaked key, rotate twice.
     const appSecretRotation = new lambda.Function(this, `${id}-AppSecretRotation`, {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "index.handler",

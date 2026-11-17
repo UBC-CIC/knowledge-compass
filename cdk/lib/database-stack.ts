@@ -23,7 +23,7 @@ export class DatabaseStack extends Stack {
     scope: Construct,
     id: string,
     vpcStack: VpcStack,
-    props?: StackProps
+    props?: StackProps,
   ) {
     super(scope, id, props);
 
@@ -31,19 +31,19 @@ export class DatabaseStack extends Stack {
       this,
       `${id}-RDSServiceLinkedRoleResource`,
       {
-      onCreate: {
-        service: "IAM",
-        action: "createServiceLinkedRole",
-        parameters: {
-          AWSServiceName: "rds.amazonaws.com",
+        onCreate: {
+          service: "IAM",
+          action: "createServiceLinkedRole",
+          parameters: {
+            AWSServiceName: "rds.amazonaws.com",
+          },
+          ignoreErrorCodesMatching: "InvalidInput",
+          physicalResourceId: cr.PhysicalResourceId.of("RDSServiceLinkedRole"),
         },
-        ignoreErrorCodesMatching: "InvalidInput",
-        physicalResourceId: cr.PhysicalResourceId.of("RDSServiceLinkedRole"),
+        policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+          resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+        }),
       },
-      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-      }),
-      }
     );
     /**
      * Retrieve a secret from Secret Manager
@@ -51,7 +51,7 @@ export class DatabaseStack extends Stack {
     const secret = secretmanager.Secret.fromSecretNameV2(
       this,
       "ImportedSecrets",
-      "KCSecrets"
+      "KCSecrets",
     );
 
     /**
@@ -81,7 +81,7 @@ export class DatabaseStack extends Stack {
           username: SecretValue.unsafePlainText("applicationUsername"), // will be changed at runtime
           password: SecretValue.unsafePlainText("applicationPassword"), // will be changed at runtime
         },
-      }
+      },
     );
 
     // RDS retires old minor versions for new instances; keep this on a
@@ -100,7 +100,7 @@ export class DatabaseStack extends Stack {
         parameters: {
           "rds.force_ssl": "1",
         },
-      }
+      },
     );
 
     /**
@@ -116,13 +116,13 @@ export class DatabaseStack extends Stack {
       }),
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.BURSTABLE4_GRAVITON,
-        ec2.InstanceSize.MEDIUM
+        ec2.InstanceSize.MEDIUM,
       ),
       credentials: rds.Credentials.fromUsername(
         secret.secretValueFromJson("DB_Username").unsafeUnwrap(),
         {
           secretName: this.secretPathAdminName,
-        }
+        },
       ),
       multiAz: false,
       allocatedStorage: 100,
@@ -154,13 +154,13 @@ export class DatabaseStack extends Stack {
         dbSecurityGroup.addIngressRule(
           ec2.Peer.ipv4(cidr),
           ec2.Port.tcp(5432),
-          `Allow PostgreSQL traffic from private subnet CIDR range ${cidr}`
+          `Allow PostgreSQL traffic from private subnet CIDR range ${cidr}`,
         );
       });
     } else {
       throw new Error(
         "vpcStack.privateSubnetsCidrStrings is empty; refusing to fall back to " +
-        "VPC-wide RDS ingress. Populate it for this VPC path before deploying."
+          "VPC-wide RDS ingress. Populate it for this VPC path before deploying.",
       );
     }
 
@@ -181,7 +181,7 @@ export class DatabaseStack extends Stack {
     const secretPathAdmin = secretmanager.Secret.fromSecretNameV2(
       this,
       "AdminSecret",
-      this.secretPathAdminName
+      this.secretPathAdminName,
     );
 
     const rdsProxy = this.dbInstance.addProxy(id + "-proxy", {
