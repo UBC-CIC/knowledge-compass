@@ -1,7 +1,7 @@
 # User Guide
 
 Please ensure the application is deployed, instructions are available in the deployment guide here:  
-[Click here](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT_GUIDE.md)
+[Click here](./DEPLOYMENT_GUIDE.md)
 
 Once you have deployed the solution, the following user guide will help you navigate the functions available. 
 

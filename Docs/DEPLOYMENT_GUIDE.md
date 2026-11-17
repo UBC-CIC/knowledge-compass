@@ -371,7 +371,7 @@ To create the first admin user:
 3. Enter your email address as the username and email, and a temporary password. The email's domain must be in `/KC/AllowedEmailDomains`; otherwise creation fails with `PreSignUp failed with error Error validating email domain during pre-signup.`
 4. Choose **Don't send an email invitation**, then **Create user**.
 5. Select the user, click **Add user to group**, and choose `admin`.
-6. Sign in at `<web app URL>/admin/login`. At first sign-in you set a new password and an authenticator app (TOTP MFA is required).
+6. Sign in at `<web app URL>/admin/login`. At first sign-in you set a new password.
 
 Once one admin exists, add further admins through the API: `POST /admin/users` with `{ "display_name": "...", "email": "..." }` (admin ID token in `Authorization`). It creates the Cognito user, adds it to the `admin` group and records the admin in the database. Cognito emails the new admin a temporary password. The email must be in an allowed sign-up domain (`/KC/AllowedEmailDomains`). If the email already has a Cognito account, it is added to the `admin` group instead (response `200` rather than `201`).
 

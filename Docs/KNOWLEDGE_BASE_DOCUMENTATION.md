@@ -2,7 +2,7 @@
 
 How content gets into the Knowledge Compass knowledge base and how it is searched: the admin routes, how each kind of data source is staged and ingested, the ingestion-run state machine, embedding spaces, and how to debug a source that will not ingest.
 
-Everything is stored in PostgreSQL with **pgvector**: source text, chunks, and one vector per chunk per embedding space. There is no Bedrock Knowledge Base or OpenSearch collection; those were retired (see the historical [migration plan](./PGVECTOR_MIGRATION_PLAN.md)).
+Everything is stored in PostgreSQL with **pgvector**: source text, chunks, and one vector per chunk per embedding space. There is no Bedrock Knowledge Base or OpenSearch collection; those were retired.
 
 ## Table of Contents
 

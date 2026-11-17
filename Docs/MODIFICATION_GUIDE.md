@@ -196,7 +196,7 @@ See [`DATABASE_MIGRATIONS.md`](./DATABASE_MIGRATIONS.md) for the full workflow.
 
 ## Message Limits
 
-These limits are admin settings in `system_settings` (admin console: [Assistant settings](./USER_GUIDE.md#assistant-settings)); changes apply without a deploy:
+These limits are admin settings in `system_settings` (admin console: Assistant settings, see the [User Guide](./USER_GUIDE.md#administrator-view)); changes apply without a deploy:
 
 - `max_characters_per_user_message`: length of one message
 - `max_characters_per_day` and `max_messages_per_day`: per user, per UTC day

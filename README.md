@@ -112,7 +112,7 @@ The following architecture diagram illustrates the various AWS components utiliz
 ### Backend
 
 - **AWS Lambda** (Python 3.12 and Node.js 22)
-- **Amazon Bedrock**: Claude Haiku 5.5 for generation; Amazon Titan Text Embeddings V2 for embeddings (Cohere Embed English v3 on installs created before migration 049, until an admin switches; see the [embedding model swap runbook](Docs/runbooks/embedding-model-swap.md))
+- **Amazon Bedrock**: Claude Haiku 5.5 for generation; Amazon Titan Text Embeddings V2 for embeddings (Cohere Embed English v3 on installs created before migration 049, until an admin switches; see [Embedding Spaces](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md#embedding-spaces))
 - **PostgreSQL 16** on RDS with **pgvector** for relational data, vector storage and similarity search
 - **Amazon S3** for uploaded documents and transcription outputs
 - **Amazon ECS on Fargate** for the website crawler and video transcriber

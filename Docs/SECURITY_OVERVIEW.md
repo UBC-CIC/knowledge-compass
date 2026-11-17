@@ -61,7 +61,6 @@ AWS Shield Standard applies automatically to AWS edge and API endpoints; the sta
 | | Admin users | Public users |
 |---|---|---|
 | **Identity** | Amazon Cognito: email and password, verified email, `admin` group | Anonymous; no account or email |
-| **MFA** | TOTP MFA required | None |
 | **Token** | Cognito ID token (1 hour) | Custom JWT access token (15 minutes), minted from a 30-day credential and refreshed automatically |
 | **Authorizer** | Admin authorizer (Cognito JWT and `admin` group) | User authorizer (custom JWT bound to one user) |
 
@@ -359,7 +358,7 @@ Known gaps that are accepted by design, and settings an operator must change out
 |--------|-------|------|
 | **Add WAF to the SPA** [A-03] | Amplify Hosting supports a WAF web ACL directly (Amplify console → Hosting → Firewall, or CDK). The web ACL must be CLOUDFRONT-scoped, created in us-east-1, in the same account as the app. AWS and Amplify bill separately for it. | Optional: the SPA serves static files only, and the APIs it calls already have their own controls |
 | **Reserve Lambda concurrency** [A-14] | Request an account Lambda concurrency quota of at least 350, then deploy with `-c enableReservedConcurrency=true` | Before public launch. Until then the public Lambdas run unreserved, so a traffic spike can starve admin functions; WAF rate rules and WebSocket throttles are the backstop |
-| **Enable Cognito threat protection** [A-17] | Cognito Plus feature plan with threat protection (compromised-credential and adaptive authentication) in ENFORCED mode, on the admin user pool | Optional. Admin sign-in already requires TOTP MFA, a strong password policy and SRP; only users in the `admin` group reach the admin role |
+| **Enable Cognito threat protection** [A-17] | Cognito Plus feature plan with threat protection (compromised-credential and adaptive authentication) in ENFORCED mode, on the admin user pool | Optional. Admin sign-in already requires a strong password policy and SRP; only users in the `admin` group reach the admin role |
 | **Accept or fix ECR scan findings** | `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts` (each entry needs a reason), or a newer base image | Whenever the image scan gate blocks a build on a CRITICAL or HIGH finding |
 
 ### 9.3 Authorization model (reviewed, no change needed) [A-17]

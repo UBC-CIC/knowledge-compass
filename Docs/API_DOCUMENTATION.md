@@ -20,7 +20,7 @@
 Every endpoint except `GET /user/publicToken` requires a token in the `Authorization` header. There are two kinds:
 
 - **Public users (no account).** `POST /user` creates an anonymous user and returns a 30-day `credential`. Send it as `Authorization: Bearer <credential>` to `GET /user/publicToken` to get a 15-minute access token bound to that user. Without a credential, `GET /user/publicToken` returns an anonymous token that can only create a user and read public settings.
-- **Administrators.** Sign in with Amazon Cognito (TOTP MFA required) and send the Cognito ID token.
+- **Administrators.** Sign in with Amazon Cognito and send the Cognito ID token.
 
 Token lifetimes:
 

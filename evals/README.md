@@ -240,7 +240,7 @@ Each turn in the app makes:
 - a Haiku answer
 - a Haiku grounding check on guidance turns
 - a title call on the first turn
-- a Cohere embedding and a guardrail check
+- an embedding call and a guardrail check
 
 A journey is usually about 5 turns, plus about 4 Haiku simulator calls and one Opus judge call
 (about 10k input tokens). A full run of all 71 stories in both modes is roughly:
