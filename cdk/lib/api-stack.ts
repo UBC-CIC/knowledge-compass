@@ -464,7 +464,11 @@ export class ApiGatewayStack extends cdk.Stack {
       // MfaConfiguration is "Update requires: No interruption", and deletion
       // protection + RETAIN guard against replacement. If Cognito rejects the
       // change on the existing pool, revert to cognito.Mfa.OPTIONAL.
-      mfa: cognito.Mfa.REQUIRED,
+      // TEMPORARY (prototype): MFA is OFF so admins sign in with email and
+      // password only while visuals are reviewed. Restore cognito.Mfa.REQUIRED
+      // and the matching assertion in cdk/test/api-iam-least-privilege.test.ts
+      // before production. The mfaSecondFactor block below is ignored while OFF.
+      mfa: cognito.Mfa.OFF,
       // Email codes need SES as the sender and the Essentials feature plan.
       // Admins pick a factor on the login page or switch to email from the
       // authenticator-app step.

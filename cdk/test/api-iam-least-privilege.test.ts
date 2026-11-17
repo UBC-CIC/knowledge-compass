@@ -377,14 +377,16 @@ describe("API Lambda IAM least privilege", () => {
     expect(writable).not.toContain("email");
   });
 
-  test("the admin user pool requires TOTP MFA and keeps its logical ID", () => {
+  // TEMPORARY (prototype): MFA is OFF in api-stack.ts. When it is restored,
+  // put back the "ON" and ["SOFTWARE_TOKEN_MFA"] assertions below.
+  test("the admin user pool (MFA temporarily off) keeps its logical ID", () => {
     const pools = Object.entries(resources).filter(([, r]) => r.Type === "AWS::Cognito::UserPool");
     expect(pools).toHaveLength(1);
     const [poolId, pool] = pools[0];
     // Recorded before the MFA change; a different ID would mean pool replacement.
     expect(poolId).toBe("KCApipoolA08D0866");
-    expect(pool.Properties.MfaConfiguration).toBe("ON");
-    expect(pool.Properties.EnabledMfas).toEqual(["SOFTWARE_TOKEN_MFA"]);
+    expect(pool.Properties.MfaConfiguration).toBe("OFF");
+    expect(pool.Properties.EnabledMfas).toBeUndefined();
     expect(pool.Properties.SmsConfiguration).toBeUndefined();
     expect(pool.Properties.DeletionProtection).toBe("ACTIVE");
     expect(pool.Properties.AdminCreateUserConfig.AllowAdminCreateUserOnly).toBe(true);
