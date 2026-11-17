@@ -92,6 +92,12 @@ export class AmplifyStack extends cdk.Stack {
             phases:
               preBuild:
                 commands:
+                  # Pin the build Node version: vitest 5 and ESLint 10 need
+                  # Node >= 22.13, and Node 20 is end-of-life. Node 24 is LTS
+                  # until 2028-04-30.
+                  - nvm install 24
+                  - nvm use 24
+                  - node -v
                   - pwd
                   - npm ci
               build:
