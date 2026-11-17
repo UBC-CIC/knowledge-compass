@@ -441,7 +441,7 @@ export class ApiGatewayStack extends cdk.Stack {
     const powertoolsLayer = lambda.LayerVersion.fromLayerVersionArn(
       this,
       `${id}-PowertoolsLayer`,
-      `arn:aws:lambda:${this.region}:017000801446:layer:AWSLambdaPowertoolsPythonV2:78`
+      `arn:aws:lambda:${this.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-x86_64:43`
     );
 
     this.layerList["jwt"] = jwt;
