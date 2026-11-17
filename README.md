@@ -65,8 +65,6 @@ The following architecture diagram illustrates the various AWS components utiliz
 │
 ├── Docs/
 │   ├── media/
-│   ├── runbooks/
-│   ├── user-stories/
 │   ├── API_DOCUMENTATION.md
 │   ├── ARCHITECTURE_DEEP_DIVE.md
 │   ├── AWS_MANAGED_KEYS.md
@@ -77,8 +75,6 @@ The following architecture diagram illustrates the various AWS components utiliz
 │   ├── EVALS.md
 │   ├── KNOWLEDGE_BASE_DOCUMENTATION.md
 │   ├── MODIFICATION_GUIDE.md
-│   ├── PGVECTOR_MIGRATION_PLAN.md    # historical
-│   ├── RETIREMENT_RUNBOOK.md         # historical
 │   ├── SECURITY_OVERVIEW.md
 │   └── USER_GUIDE.md
 │
@@ -151,7 +147,6 @@ The following architecture diagram illustrates the various AWS components utiliz
 - **[Database Migrations](Docs/DATABASE_MIGRATIONS.md)**: Guide to the database migration system and best practices
 - **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Where each component's Python dependencies come from and how to change them
 - **[Knowledge Base](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md)**: How uploaded files, websites and videos are chunked, embedded and stored in pgvector, and how ingestion runs and retries work
-- **[Embedding Model Swap Runbook](Docs/runbooks/embedding-model-swap.md)**: Changing the embedding model with a rebuild and cutover
 - **[Evaluations](Docs/EVALS.md)**: The conversation evaluation harness
 
 ### API and Usage

@@ -6,7 +6,7 @@
 
 1. Users reach the React frontend hosted on AWS Amplify (served through Amazon CloudFront). The REST API sits behind AWS WAF; AWS Shield Standard covers both.
 
-2. Administrators sign in with Amazon Cognito (TOTP MFA required); only members of the `admin` group reach the admin dashboard and admin APIs. Public users have no account: the browser creates an anonymous user (`POST /user`), keeps a 30-day credential, and exchanges it at `GET /user/publicToken` for 15-minute access tokens bound to that user.
+2. Administrators sign in with Amazon Cognito; only members of the `admin` group reach the admin dashboard and admin APIs. Public users have no account: the browser creates an anonymous user (`POST /user`), keeps a 30-day credential, and exchanges it at `GET /user/publicToken` for 15-minute access tokens bound to that user.
 
 3. The frontend calls the REST API (API Gateway → Lambda) for users, chat sessions, system messages and admin operations. Each route is protected by a Lambda authorizer: the user authorizer for public access tokens, the admin authorizer for Cognito ID tokens. Chat turns go over the WebSocket API: `$connect` verifies the access token and binds the connection to the user, and `$default` rate-limits each frame and invokes the text generation Lambda, which streams the reply back over the connection.
 
@@ -24,7 +24,7 @@
 
 7. Administrators add content from the dashboard. Files (PDF, DOCX, TXT, CSV, Markdown) are uploaded to the S3 ingest bucket through presigned URLs and processed by the knowledge base Lambda (Amazon Textract reads PDFs, including scanned ones). Websites are crawled by a container on **Amazon ECS (Fargate)**. Uploaded video and audio files are transcribed by Amazon Transcribe and then chunked by a second container. Every path chunks the text, embeds it with Amazon Bedrock, and writes sources, chunks and vectors to PostgreSQL.
 
-8. The embedding model is swappable. Vectors are stored per **embedding space** (model + dimension), so a new model can be built next to the live one, validated, and activated from the admin dashboard without downtime. New installs start on Amazon Titan Text Embeddings V2. See the [embedding model swap runbook](./runbooks/embedding-model-swap.md).
+8. The embedding model is swappable. Vectors are stored per **embedding space** (model + dimension), so a new model can be built next to the live one, validated, and activated from the admin dashboard without downtime. New installs start on Amazon Titan Text Embeddings V2. See [Embedding Spaces](./KNOWLEDGE_BASE_DOCUMENTATION.md#embedding-spaces).
 
 9. AWS CodePipeline runs the unit tests, then builds, scans and pushes the crawler and transcriber images to Amazon ECR. A weekly Lambda alerts when a Bedrock model the system depends on approaches end of life. CloudWatch alarms and cost alerts publish to an SNS topic.
 
@@ -36,7 +36,7 @@ Migrations in `cdk/lambda/db_setup/migrations/` are the source of truth for the 
 
 The diagrams show each table's keys and main columns as of migration 050 (which adds a unique index allowing one active row per `type` in `system_messages` and changes no columns). Tables without lines have no foreign keys. The `created_by` and `updated_by` columns that point at an administrator's `users` row (on `data_sources`, `system_messages`, `system_settings`, `journeys`, `journey_clusters` and `journey_prompt_versions`) are not drawn.
 
-#### Users, chat, prompts and limits
+### Users, chat, prompts and limits
 
 ```mermaid
 erDiagram
@@ -188,7 +188,7 @@ erDiagram
     }
 ```
 
-#### Knowledge base and embeddings
+### Knowledge base and embeddings
 
 ```mermaid
 erDiagram

@@ -49,3 +49,5 @@ evals/.venv/
 .agents/tasks
 .agents
 .worktrees
+# Inclusion Canada user stories: kept locally only, not published.
+Docs/user-stories/

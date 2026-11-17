@@ -270,8 +270,6 @@ An embedding space is one model + dimension. Vectors live in `chunk_embeddings` 
 
 From the admin dashboard (**Search index**) an administrator can create a space for another model, dry-run and rebuild it next to the live one, validate it against the golden question set, then activate it. Activation sets the cutover lock, waits for in-flight ingestion to finish, embeds anything still missing, revalidates, flips the pointer, and releases the lock. Rollback flips back to a retired space; purge deletes a retired space's vectors. Jobs persist their progress in `embedding_jobs`, so a crashed invocation resumes.
 
-The full procedure is in the [embedding model swap runbook](./runbooks/embedding-model-swap.md).
-
 ## Retrieval
 
 Text generation embeds the router's rewritten query with the active space's model and runs the similarity search in `kc_shared/retrieval_core.py`, which space validation also uses, so both run the same SQL. Each space has its own partial HNSW index, and a vector only counts if it was computed from the chunk's current text. Results are de-duplicated, filtered by the space's `min_score` when one is set, and passed to the model marked as untrusted data. Only guidance turns retrieve; clarifying (detective) turns do not.

@@ -34,7 +34,7 @@ There are **71 scenarios**, one YAML file per user story, under `evals/scenarios
 | Journey 1 | A child is being sent home or put on a reduced schedule without the family’s choice | Feature 1: what to do next (18). Feature 2: plain-language explanations (12). Feature 3: rights and advocacy (15) | 45 |
 | Journey 2 | Planning courses, transitions, and supports | Feature 1: keeping options open (11). Feature 3: transition planning (8). Feature 4: support quality (7) | 26 |
 
-Story ids look like `111`, `11A`, `211`. The same ids are used in [`Docs/user-stories/`](user-stories/README.md).
+Story ids look like `111`, `11A`, `211`. They match the ids in the Inclusion Canada user stories, which are kept outside this repository.
 
 Each scenario carries:
 
@@ -340,5 +340,4 @@ The chat API itself uses whatever models the deployed stack is configured with. 
 ## 7. Related documents
 
 - [`evals/README.md`](../evals/README.md) — setup, environment variables, commands, and production cautions.
-- [`Docs/user-stories/README.md`](user-stories/README.md) — the stories these scenarios come from.
 - [`evals/judge/rubrics/`](../evals/judge/rubrics/) — the judge’s instructions, detective rubric, and product rules.

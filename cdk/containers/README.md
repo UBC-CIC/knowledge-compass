@@ -113,6 +113,4 @@ either drifts.
 - [`crawler/README.md`](crawler/README.md) — web crawler pipeline
 - [`transcriber/README.md`](transcriber/README.md) — video transcription pipeline
 - [`Docs/KNOWLEDGE_BASE_DOCUMENTATION.md`](../../Docs/KNOWLEDGE_BASE_DOCUMENTATION.md) — ingestion end to end
-- [`Docs/PGVECTOR_MIGRATION_PLAN.md`](../../Docs/PGVECTOR_MIGRATION_PLAN.md) — the original migration plan and decision log (historical)
-- [`Docs/user-stories/`](../../Docs/user-stories/) — user stories and prompt design
 - `cdk/lambda/textGeneration/helpers/` — production Lambda helpers that consume this pipeline's data

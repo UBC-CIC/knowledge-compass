@@ -251,7 +251,7 @@ def build_message(findings: List[Dict[str, Any]], unresolved: List[str], notes: 
         lines.append("")
         lines.append("Could not be resolved to a model id (not checked): " + ", ".join(unresolved))
     lines.append("")
-    lines.append("Next steps: see Docs/runbooks/embedding-model-swap.md (lifecycle alerts).")
+    lines.append("Next steps: switch models from Search index in the admin dashboard (Docs/KNOWLEDGE_BASE_DOCUMENTATION.md, Embedding Spaces).")
     return subject[:_SNS_SUBJECT_MAX], "\n".join(lines)
 
 
