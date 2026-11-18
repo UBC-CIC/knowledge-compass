@@ -21,8 +21,11 @@ from helpers.retrieval import (
     DEFAULT_MIN_SCORE, effective_min_score, public_http_url, retrieve_from_pgvector, to_public_source,
 )
 from helpers.citations import (
+    merge_cited_and_linked,
     parse_cited_indices,
+    parse_cited_refs,
     select_cited_sources,
+    select_linked_sources,
     stream_settled_length,
     strip_internal_links,
 )
@@ -46,14 +49,17 @@ GUIDELINE_RESOURCE_COUNT = 6
 # no resource itself (matches the prompt's "no more than two").
 GUIDELINE_FALLBACK_RESOURCE_COUNT = 2
 
-# Appended on guidance turns that retrieved a journey's documents. Numbers
-# match the combined source list: guide sections first, then library sources.
+# Appended on guidance turns that retrieved a journey's documents. Guide
+# sections are labeled G1, G2, ...; library sources keep their own numbers
+# from 1, so a plain number in <cited_indices> always means a library source.
 GUIDE_CITE_NOTE = """
-The <guide_sections> block is numbered [1], [2], ... and the library sources in
-<retrieved_context> continue after them. When you give guidance from a section,
-include that section's number in <cited_indices>, plus any library source you
-linked. Also output <guide_state>section: n</guide_state> with that section's
-number, or 0 if you did not use one.
+The <guide_sections> block is labeled [G1], [G2], ... and the library sources in
+<retrieved_context> are numbered separately as [1], [2], .... When you give
+guidance from a section, include that section's label (for example G1) in
+<cited_indices>, plus the number of every library source you linked, for
+example <cited_indices>[G1, 2]</cited_indices>. Also output
+<guide_state>section: Gn</guide_state> with that section's label, or
+<guide_state>section: 0</guide_state> if you did not use one.
 """.strip()
 
 # Per-answer character cap (finding A-06). The admin setting
@@ -308,20 +314,22 @@ def _prepare_conversation(
         "route": route,
         "state": routing_state,
         "has_guides": bool(sections),
+        "guide_count": len(sections),
         "previous_section": previous_section,
     }
 
-    # 8. Guide sections are numbered first. Library sources continue after them
-    # so <cited_indices> refers to one list.
+    # 8. Guide sections are labeled [G1..Gn]; library sources are numbered
+    # separately from [1]. The returned list is still sections + library;
+    # get_response splits it with routing_ctx["guide_count"].
     if sections:
-        context_block = format_context_for_prompt(sources, start=len(sections) + 1)
+        context_block = format_context_for_prompt(sources)
         sources = list(sections) + list(sources)
         dynamic_prompt = f"""{phase_instructions}
 
 {GUIDE_CITE_NOTE}
 
 <guide_sections>
-{format_sections(sections)}
+{format_sections(sections, label_prefix="G")}
 </guide_sections>
 
 <retrieved_context>
@@ -626,6 +634,10 @@ def get_response(
     # skipped journey and routing state.
     exclusive_guideline = routing_ctx.get("mode") == "guideline"
     has_guides = exclusive_guideline or bool(routing_ctx.get("has_guides"))
+    # The merged path labels guides G1..Gn and numbers library sources from 1;
+    # the retired pipeline keeps one shared numbering.
+    merged_guides = has_guides and not exclusive_guideline
+    guide_count = int(routing_ctx.get("guide_count") or 0) if merged_guides else 0
     # Hidden metadata tags that must never reach the stream. Guideline mode
     # adds <guide_state>; standard mode keeps its original tag lists.
     stream_stop_tags = ["</answer>", "<cited", "<detective_state", "<journey_state"]
@@ -727,10 +739,22 @@ def get_response(
 
             # Parse cited_indices tolerantly: one malformed token must not drop
             # every citation.
-            parsed_indices = parse_cited_indices(full_response_text)
-            if parsed_indices is not None:
-                cited_indices = parsed_indices
-            elif sources and "<answer>" in full_response_text:
+            if merged_guides:
+                # G<n> is guide section n, a plain <n> is library source n.
+                # Mapped onto positions in sources (sections, then library).
+                refs = parse_cited_refs(full_response_text)
+                if refs is not None:
+                    guide_refs, library_refs = refs
+                    parsed_indices = guide_refs + library_refs
+                    cited_indices = (
+                        [n for n in guide_refs if 1 <= n <= guide_count]
+                        + [guide_count + n for n in library_refs if n >= 1]
+                    )
+            else:
+                parsed_indices = parse_cited_indices(full_response_text)
+                if parsed_indices is not None:
+                    cited_indices = parsed_indices
+            if parsed_indices is None and sources and "<answer>" in full_response_text:
                 # Guidance reply without the citation block: sources can't be shown.
                 logger.warning(
                     "Guidance reply had no <cited_indices> block (phase=%s, retrieved=%d)",
@@ -790,28 +814,55 @@ def get_response(
     # Guide citations stay internal: they ground the answer but are never
     # streamed or saved, so families never see guide names. The section in
     # use is still recorded for admins in chat_sessions.metadata.guide_state.
-    used_sources = select_cited_sources(sources, cited_indices)
-    public_sources = [
-        to_public_source(source)
-        for source in used_sources
-        if source.get("source_type") != GUIDELINE_SOURCE_TYPE
-    ]
-    guide_state = parse_guide_state(full_response_text, sources) if has_guides else None
+    #
+    # Library sources the answer links ([Title](URL)) also get a card and are
+    # grounding, even when <cited_indices> leaves them out, is missing or is
+    # []. Matched on the answer before strip_internal_links, since uploaded
+    # documents are shown to the model by internal URI. Only sources retrieved
+    # this turn can match; guide sections never do.
+    cited_sources = select_cited_sources(sources, cited_indices)
+    linked_sources: List[Dict[str, Any]] = []
+    if expect_answer_tags and answer_text and not (output_blocked or generation_failed):
+        linked_sources = select_linked_sources(sources, answer_text)
+    used_sources = merge_cited_and_linked(cited_sources, linked_sources)
+    library_used = [s for s in used_sources if s.get("source_type") != GUIDELINE_SOURCE_TYPE]
+    public_sources = [to_public_source(source) for source in library_used]
+    guide_state = None
+    if has_guides:
+        # Merged path: only guide sections can be chosen, so "G2" and "2" both mean guide 2.
+        guide_state = parse_guide_state(
+            full_response_text, sources[:guide_count] if merged_guides else sources
+        )
 
     # Guideline mode: a guidance answer that cited only its guide section
     # still keeps "More resources", using library resources only (never
     # guides). An explicit [] marks a clarifying turn, which shows none.
-    # Fallback items are display-only and are not sent to grounding.
+    # Linked sources come first; fallback items fill the rest, are
+    # display-only and are not sent to grounding.
     fallback_count = 0
-    if (has_guides and guide_state and not public_sources and parsed_indices != []
+    cited_library = any(s.get("source_type") != GUIDELINE_SOURCE_TYPE for s in cited_sources)
+    if (has_guides and guide_state and not cited_library and parsed_indices != []
             and answer_text and not generation_failed):
-        public_sources = [
-            to_public_source(s)
-            for s in _fallback_resources(
+        shown = merge_cited_and_linked(
+            library_used,
+            _fallback_resources(
                 sources, answer_text, min_score=effective_min_score(db_connection, region)
-            )
-        ]
-        fallback_count = len(public_sources)
+            ),
+        )
+        shown = shown[:max(GUIDELINE_FALLBACK_RESOURCE_COUNT, len(library_used))]
+        fallback_count = len(shown) - len(library_used)
+        public_sources = [to_public_source(s) for s in shown]
+
+    library_retrieved = sum(1 for s in sources if s.get("source_type") != GUIDELINE_SOURCE_TYPE)
+    if (expect_answer_tags and not public_sources and library_retrieved and answer_text
+            and not output_blocked and not generation_failed):
+        # Counts only: never the message text or URLs.
+        logger.warning(
+            "Answer turn ended with no public sources (library_retrieved=%d, guides=%d, "
+            "cited_block=%s, cited=%d, linked=%d)",
+            library_retrieved, len(sources) - library_retrieved,
+            parsed_indices is not None, len(cited_sources), len(linked_sources),
+        )
 
     warning_text = None
     intervention_result = None
@@ -848,8 +899,8 @@ def get_response(
     # Journey and routing state are still saved on the merged path.
     if has_guides:
         logger.info(
-            "Guideline turn: sources=%d cited=%d fallback_resources=%d selected_section=%s",
-            len(sources), len(used_sources), fallback_count,
+            "Guideline turn: sources=%d cited=%d linked=%d fallback_resources=%d selected_section=%s",
+            len(sources), len(cited_sources), len(linked_sources), fallback_count,
             guide_state["section_key"] if guide_state else None,
         )
         if guide_state and answer_text and not generation_failed:

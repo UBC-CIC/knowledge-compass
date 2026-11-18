@@ -102,7 +102,8 @@ NO_SECTIONS_NOTE = (
 )
 
 _OUTLINE_MAX_ITEMS = 200
-_GUIDE_STATE_RE = re.compile(r"<guide_state>\s*section\s*:\s*\[?\s*(\d+)\s*\]?\s*</guide_state>", re.IGNORECASE)
+# "section: 2" and, on turns that label guides G1, G2, ..., "section: G2".
+_GUIDE_STATE_RE = re.compile(r"<guide_state>\s*section\s*:\s*\[?\s*G?(\d+)\s*\]?\s*</guide_state>", re.IGNORECASE)
 
 
 def build_outline(outline: List[Dict[str, Any]]) -> str:
@@ -130,9 +131,11 @@ def build_outline(outline: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_sections(sections: List[Dict[str, Any]]) -> str:
+def format_sections(sections: List[Dict[str, Any]], label_prefix: str = "") -> str:
     """
     Numbered [1]..[n]; numbers line up with <cited_indices> and <guide_state>.
+    `label_prefix` "G" labels them [G1]..[Gn] (the merged prompt + guides path,
+    where library sources are numbered separately from [1]).
 
     Title, heading and content come from an uploaded guide document, so they
     are third-party text: tags are neutralized as in
@@ -145,7 +148,7 @@ def format_sections(sections: List[Dict[str, Any]]) -> str:
     for i, section in enumerate(sections, 1):
         metadata = section.get("metadata") or {}
         title = neutralize_tags(str(section.get("title") or "Guidance"))
-        header = f"[{i}] Situation: {title}"
+        header = f"[{label_prefix}{i}] Situation: {title}"
         heading = metadata.get("heading_path")
         if heading:
             header += f"\n    Heading: {neutralize_tags(str(heading))}"

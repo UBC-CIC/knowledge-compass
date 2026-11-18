@@ -15,8 +15,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers.citations import (  # noqa: E402
+    merge_cited_and_linked,
     parse_cited_indices,
+    parse_cited_refs,
     select_cited_sources,
+    select_linked_sources,
     stream_settled_length,
     strip_internal_links,
 )
@@ -51,6 +54,59 @@ class SelectCitedSourcesTests(unittest.TestCase):
         sources = [{"title": "a"}, {"title": "b"}, {"title": "c"}]
         selected = select_cited_sources(sources, [3, 1, 0, 9])
         self.assertEqual([s["title"] for s in selected], ["a", "c"])
+
+
+class ParseCitedRefsTests(unittest.TestCase):
+    def test_mixed_guide_and_library(self):
+        self.assertEqual(parse_cited_refs("<cited_indices>[G1, 2]</cited_indices>"), ([1], [2]))
+
+    def test_plain_integers_are_library(self):
+        self.assertEqual(parse_cited_refs("<cited_indices>[1, 3, 1]</cited_indices>"), ([], [1, 3]))
+
+    def test_lowercase_and_quoted_guide_labels(self):
+        self.assertEqual(parse_cited_refs('<cited_indices>["g2", "G2", 4]</cited_indices>'), ([2], [4]))
+
+    def test_empty_and_missing(self):
+        self.assertEqual(parse_cited_refs("<cited_indices>[]</cited_indices>"), ([], []))
+        self.assertIsNone(parse_cited_refs("<answer>x</answer>"))
+
+
+LINK_SOURCES = [
+    {"title": "guide", "source_type": "guideline", "url": "https://example.org/guide", "uri": "https://example.org/guide"},
+    {"title": "video", "source_type": "video", "url": "https://example.org/v", "uri": "https://example.org/v"},
+    {"title": "doc", "source_type": "document", "url": "", "uri": "upload://document/h.pdf"},
+    {"title": "page", "source_type": "http", "url": "https://example.org/p", "uri": "https://example.org/p"},
+]
+
+
+class SelectLinkedSourcesTests(unittest.TestCase):
+    def titles(self, text):
+        return [s["title"] for s in select_linked_sources(LINK_SOURCES, text)]
+
+    def test_link_order_and_internal_uri(self):
+        text = "See [Page](https://example.org/p), then [Doc](upload://document/h.pdf) and https://example.org/v."
+        self.assertEqual(self.titles(text), ["page", "doc", "video"])
+
+    def test_guides_and_invented_urls_are_ignored(self):
+        self.assertEqual(self.titles("[G](https://example.org/guide) [X](https://example.org/x)"), [])
+
+    def test_longer_url_does_not_match_a_prefix(self):
+        self.assertEqual(self.titles("Open https://example.org/video and https://example.org/p/2"), [])
+
+    def test_empty_text(self):
+        self.assertEqual(self.titles(""), [])
+
+    def test_one_source_per_linked_value(self):
+        chunks = [LINK_SOURCES[1], dict(LINK_SOURCES[1], title="video chunk 2")]
+        self.assertEqual([s["title"] for s in select_linked_sources(chunks, "https://example.org/v")], ["video"])
+
+
+class MergeCitedAndLinkedTests(unittest.TestCase):
+    def test_cited_first_without_duplicates(self):
+        video, doc, page = LINK_SOURCES[1], LINK_SOURCES[2], LINK_SOURCES[3]
+        other_video_chunk = dict(video, title="video chunk 2")
+        merged = merge_cited_and_linked([page], [video, page, other_video_chunk, doc])
+        self.assertEqual([s["title"] for s in merged], ["page", "video", "doc"])
 
 
 class StripInternalLinksTests(unittest.TestCase):

@@ -150,6 +150,18 @@ class ParseGuideStateTest(unittest.TestCase):
         self.assertIsNone(gp.parse_guide_state("<guide_state>section: 5</guide_state>", STRUCTURED))
         self.assertIsNone(gp.parse_guide_state("no tag", STRUCTURED))
 
+    def test_accepts_guide_labels(self):
+        self.assertEqual(
+            gp.parse_guide_state("<guide_state>section: G2</guide_state>", STRUCTURED)["section_key"],
+            "J1 > Reduced day",
+        )
+        self.assertIsNone(gp.parse_guide_state("<guide_state>section: G0</guide_state>", STRUCTURED))
+
+    def test_format_sections_label_prefix(self):
+        self.assertIn("[G1] Situation:", gp.format_sections(STRUCTURED, label_prefix="G"))
+        self.assertIn("[1] Situation:", gp.format_sections(STRUCTURED))
+        self.assertNotIn("[G1]", gp.format_sections(STRUCTURED))
+
     def test_tolerates_brackets_and_spacing(self):
         state = gp.parse_guide_state("<guide_state>\n Section : [1]\n</guide_state>", STRUCTURED)
         self.assertEqual(state["section_key"], "J1 > Sent home")
