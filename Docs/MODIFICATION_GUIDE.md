@@ -15,6 +15,7 @@ This guide covers practical modifications developers commonly need to make: styl
 - [Database Schema Changes (Migrations)](#database-schema-changes-migrations)
 - [Message Limits](#message-limits)
 - [Data Ingestion Modifications](#data-ingestion-modifications)
+- [Deploying into an Existing VPC](#deploying-into-an-existing-vpc)
 - [Deployment & Testing](#deployment--testing)
 - [Encryption & KMS Keys](#encryption--kms-keys)
 - [Troubleshooting & Best Practices](#troubleshooting--best-practices)
@@ -215,6 +216,34 @@ Ingestion has two parts:
 - `cdk/containers/crawler/` and `cdk/containers/transcriber/` run on ECS Fargate for websites and videos. Changes are rebuilt and deployed by CodePipeline.
 
 Code shared by both Python Lambdas (CORS, embeddings, retrieval) lives in the `kc_shared` layer at `cdk/layers/shared_python/`. Add a DB migration if new metadata tables are needed. See [`KNOWLEDGE_BASE_DOCUMENTATION.md`](./KNOWLEDGE_BASE_DOCUMENTATION.md).
+
+---
+
+## Deploying into an Existing VPC
+
+By default, `cdk/lib/vpc-stack.ts` creates a new VPC (`10.0.0.0/16`, two Availability Zones, one NAT gateway). The [Deployment Guide](./DEPLOYMENT_GUIDE.md) assumes this default.
+
+The file also has a second code path, used when `existingVpcId` is not empty, that imports an existing VPC instead. That path was written for VPCs created by the AWS Control Tower Account Factory. It reads subnet and route table IDs from that stack set's CloudFormation exports, so it does not work as-is for any other VPC.
+
+**What the existing-VPC path expects:**
+
+- Three private subnets, one per Availability Zone, hard-coded as `ca-central-1a`, `ca-central-1b` and `ca-central-1d`. The same subnets are used as both the private and the isolated tier, so Lambdas, ECS tasks and RDS share them.
+- CloudFormation exports named `<AWSControlTowerStackSet>-PrivateSubnet{1,2,3}AID`, `-PrivateSubnet{1,2,3}ARouteTable`, `-PrivateSubnet{1,2,3}ACIDR` and `-VPCCIDR`.
+- `vpcCidrString` (hard-coded to `172.31.0.0/16`) equal to the real VPC CIDR. The ingestion security group in `cdk/lib/ingestion-stack.ts` uses it for its Postgres and DNS egress rules.
+- No existing `0.0.0.0/0` route in the private route tables. The stack adds one to its own NAT gateway, and CloudFormation fails if a default route is already there (for example, to a Transit Gateway or another NAT).
+
+**Internet access:**
+
+- If `existingPublicSubnetID` is empty, the stack creates a public subnet (`publicSubnetCidr`, which must not overlap any existing subnet), an Internet Gateway and a NAT gateway. A VPC can have only one Internet Gateway, so this fails if the VPC already has one.
+- If `existingPublicSubnetID` is set (for example, for a second deployment into the same VPC), the stack only adds a NAT gateway in that subnet.
+
+**Using a VPC that is not managed by Control Tower:**
+
+1. Set `existingVpcId` to your VPC ID.
+2. Replace each `Fn.importValue(...)` call with the literal subnet ID, route table ID or CIDR from the VPC console (**VPC → Subnets** and **Route tables**), or with your own stack's exports if your VPC is defined in CloudFormation.
+3. Update `availabilityZones` to match your subnets, in the same order, and set `vpcCidrString` to the VPC CIDR. If you have fewer or more than three private subnets, adjust the subnet arrays and the `PrivateSubnetRoute1`–`3` routes to match.
+4. Set `existingPublicSubnetID` or `publicSubnetCidr` as described above. If your private subnets already have outbound internet access, remove the NAT gateway and `CfnRoute` resources from this path instead.
+5. From `cdk/`, run `npm run build` and `npx cdk synth`, then `npx cdk diff` against the account to review what will be created before deploying.
 
 ---
 

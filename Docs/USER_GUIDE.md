@@ -10,6 +10,27 @@ Once you have deployed the solution, the following user guide will help you navi
 | User View | The user can start a conversation with the chatbot and ask for guidance. |
 | Administrator View | The administrator can view user usage, upload and manage data sources, view analytics, manage prompts and settings for the chatbot assistant, and manage the search index. |
 
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [User View](#user-view)
+  - [Home Page](#home-page)
+  - [Chat Interface](#chat-interface)
+  - [Feedback](#feedback)
+  - [Daily Limits for Users](#daily-limits-for-users)
+- [Administrator View](#administrator-view)
+  - [Signing In](#signing-in)
+  - [Overview](#overview)
+  - [Data Sources](#data-sources)
+    - [Adding Web URLs](#adding-web-urls)
+    - [Uploading Files and Documents](#uploading-files-and-documents)
+    - [How to Add Each Type of Source](#how-to-add-each-type-of-source)
+    - [Managing Existing Data Sources](#managing-existing-data-sources)
+  - [Analytics](#analytics)
+  - [Prompts](#prompts)
+  - [Assistant Settings](#assistant-settings)
+  - [Search Index](#search-index)
+
 ## Getting Started
 
 Open the hosted Amplify URL provided during deployment, or run the frontend locally. There is no account required for the user interface, but the administrative interface requires an account. 
@@ -18,7 +39,7 @@ Open the hosted Amplify URL provided during deployment, or run the frontend loca
 
 The user-facing interface is a chat assistant that provides users with actionable guidance that is tailored to their situation, problem, or question. 
 
-**Home page**  
+### Home Page
 Users are immediately greeted with a welcome message and prompted to start a new conversation. The user can either type their scenario, or they can select a situation from the predefined list below the welcome message:
 
 * My child keeps getting sent home before lunch  
@@ -27,7 +48,7 @@ Users are immediately greeted with a welcome message and prompted to start a new
 
 ![User home page](media/user-guide/user-home.png)
 
-**Chat Interface**  
+### Chat Interface
 Once the user selects a predesignated scenario or enters a message, the chatbot will ask a series of follow-up questions to learn more about the user’s situation. When the assistant has a sufficient understanding of the situation it provides guidance: practical steps, what to ask for, and how to work with the school. 
 <img width="1909" height="785" alt="Screenshot 2026-10-27 111410" src="https://github.com/user-attachments/assets/82bb1507-9db7-4d08-a216-e6ba9c44dac7" />
 <img width="1909" height="700" alt="Screenshot 2026-10-27 111437" src="https://github.com/user-attachments/assets/c3e89469-b629-4bfa-8599-303fb75de37c" />
@@ -43,23 +64,23 @@ If the user would like to **download the conversation as a text file**, they can
 
 ![Download conversation menu](media/user-guide/user-download-conversation.png)
 
-**Feedback**
+### Feedback
 
 After receiving advice from the assistant throughout the conversation, the user has the option to submit feedback. Next to “was this helpful?” there are thumbs up and thumbs down icons. Clicking on either icon provides quantitative feedback to the administrator, who can view the percentage of positive ratings and the number of conversations deemed helpful and unhelpful. Clicking either icon enables the user to provide more information to the administrator about why the guidance was helpful or unhelpful.  
 ![Feedback buttons](media/user-guide/user-feedback.png)
 
-**Additional Information**  
+### Daily Limits for Users
 Daily limits on how many messages and characters each person can send, or the number of conversations they can start, are set by the administrator. If the user has reached their limit, a message will appear that says so. **Sending many messages at once will produce a “please wait a moment” message.**
 
 ## Administrator View
 
-**Getting Started**  
+### Signing In
 Using the Amplify link, administrators are directed to the sign-in page. Administrator accounts and permissions are configured through Amazon Cognito in the AWS Console. Administrators must use the credentials associated with their Cognitio account to sign in. Please refer to the [deployment guide](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/DEPLOYMENT_GUIDE.md#step-2-configure-admin-user) for further information on setting up administrator accounts and permissions.   
 ![Administrator sign-in page](media/user-guide/admin-sign-in.png)  
 After entering an email and password, the administrator will be prompted to set up a two-step sign in for authentication. Later sign-ins will ask for a code from the application.  
 <img width="943" height="866" alt="Screenshot 2026-11-16 095725" src="https://github.com/user-attachments/assets/d55ab802-380b-45c2-ac5c-615013760382" />
 
-**Overview**  
+### Overview
 Upon logging in, the administrator is brought to the **overview** page. At the top of the screen, there are three categories of analytics: users reached, conversations, and messages exchanged. 
 
 * Users reached provides an overview on how many users have started a conversation.   
@@ -67,11 +88,11 @@ Upon logging in, the administrator is brought to the **overview** page. At the t
 * Messages exchanged provides the exact number of messages exchanged on the platform, by both the chatbot assistant and the user.
 <img width="1917" height="868" alt="Screenshot 2026-10-27 144839" src="https://github.com/user-attachments/assets/9257cd35-e9c0-4d9b-a7d4-03eab48a2df0" />
 
-### **Data Sources**
+### Data Sources
 
 Under **“Data sources,”** the administrator can add web URLs and upload files, videos, or documents to expand the assistant's knowledge base. The assistant uses this information to retrieve relevant content and provide guidance to users.
 
-**Adding web URLs**
+#### Adding Web URLs
 
 Administrators can add website URLs to incorporate information from external web sources into the knowledge base. Once a URL has been submitted, the system automatically retrieves and indexes once sync is pressed by the admin.
 
@@ -79,7 +100,7 @@ If a URL cannot be processed, it may be due to an invalid link, restricted websi
 <img width="948" height="859" alt="Screenshot 2026-11-16 100436" src="https://github.com/user-attachments/assets/554d0988-17f9-47d1-bed9-59835d7c6736" /><img width="1917" height="842" alt="Screenshot 2026-11-16 115853" src="https://github.com/user-attachments/assets/af0f5415-5eee-4a37-8aa7-b17934da1cf0" />
 
 
-**Uploading files and documents**
+#### Uploading Files and Documents
 
 Administrators can upload files to add information to the assistant's knowledge base. Supported file formats include mp4, m4v, webm, mp3, wav, flac, ogg, m4a, amr, PDFs, and websites. The maximum file size is 50MB for documents and 1GB for video.
 
@@ -93,19 +114,19 @@ Multiple files can be uploaded simultaneously or individually, allowing administ
 
 ![Uploading multiple files](media/user-guide/admin-upload-multiple.png)
 
-**Below is a table summarizing how to add different data sources:**
+#### How to Add Each Type of Source
 
 | Add a Website | Add a Document | Add a Video (transcription) | Add a CSV or Markdown file |
 | :---- | :---- | :---- | :---- |
 | Click Add web URL. Enter the site's public address. **Only public http or https addresses are accepted.** Include patterns and exclude patterns empty. They are saved but not yet applied, so the crawler reads the whole site from that address. Click Stage URL. The website appears in the table as Pending. Click Sync now. The status changes to Queued, then Running, then Completed. | Click Upload files, video, or documents and open the Document tab. Drag in or choose a PDF, Word (.docx) or text (.txt) file, up to 50 MB. Save older .doc files as .docx first. Check the Title. It is filled in from the file name; change it to what families should see, for example "Family rights handbook". Enter the Public link (required): an http or https address where families can open the document, such as its page on your website. Answers cite this link, never the uploaded file. Click Upload & embed. The text is read and added automatically; you do not need to click Sync now. | Click Upload files, video, or documents and open the Video tab. Drag in or choose the recording: video (.mp4, .m4v, .webm) or audio (.mp3, .m4a, .wav, .flac, .ogg, .amr), up to 1 GB. Upload the file itself; the app cannot download a video from YouTube. Check the Title, for example "Inclusive education webinar". Enter the Public video URL, usually the YouTube link. Answers cite this link, and video cards open it at the moment that supports the answer. Click Upload & transcribe. Amazon Transcribe creates the transcript, then the transcript is split by timestamp and added automatically. The item shows Transcribing while the transcript is made; you do not need to click Sync now. A video URL that is already used by a crawled web page or another source is rejected, so each video is added once. | Click Upload files, video, or documents and open the Single File tab. Choose the CSV or Markdown file. A CSV needs a header row. Add the matching metadata file. It must be named exactly \<file name\>.metadata.json (for example guidance-resources.csv.metadata.json). The dialog shows an example you can copy or download. For a CSV whose rows each link to a web page or PDF, choose the link column. Optionally choose the columns for a stable row id, title, description and the link families should see. The assistant then fetches each linked page and can cite individual rows. Click Upload & Stage, then Sync now. To add several files at once, put each file and its metadata file in one .zip and use the Zip Upload tab. |
 
-**Managing existing data sources**
+#### Managing Existing Data Sources
 
 Administrators can view previously uploaded documents and added URLs under the data sources section. Existing sources can be deleted or recrawled. If a document or URL is updated, administrators should ensure that the latest version is reflected in the knowledge base.
 
 If a document or URL cannot be processed, the administrator should check that the file format is supported, that the file does not exceed the upload limit, and that the URL is accessible. If the issue persists, the administrator may need to try uploading the resource again or consult the [deployment documentation](https://github.com/UBC-CIC/knowledge-compass/blob/main/Docs/KNOWLEDGE_BASE_DOCUMENTATION.md#monitoring-and-debugging).
 
-**Analytics**   
+### Analytics
 The administrator can also view “analytics” including:
 
 * Users reached  
@@ -122,7 +143,7 @@ Under “comments,” the administrator can view the latest written feedback fro
 Under the “review later” tab, administrators have the option to download a PDF of the comments.  
 ![Review later tab](media/user-guide/analytics-review-later.png)
 
-**Prompts**  
+### Prompts
 Shared by Every Journey  
 Prompts are instructions provided to an artificial intelligence model that guides how it responds, communicates, and provides information to users. Under the “prompts” tab, the administrator can type out prompts that determine who the assistant is, how it asks questions, and how it provides guidance. 
 
@@ -188,7 +209,7 @@ Shown on Screen
 Under the “Welcome and disclaimer” screen, the administrator can type in the welcome message displayed at the start of every conversation, and add any disclaimers for users to view.  
 ![Welcome and disclaimer](media/user-guide/prompts-welcome-disclaimer.png)
 
-**Assistant Settings**  
+### Assistant Settings
 The assistant settings tab includes daily limits and two drop-down menus; one on how the conversation flows, and the other on service status.
 
 Daily Usage Limits
@@ -219,7 +240,7 @@ The service status allows the administrator to inform users about planned work o
 ![Service status](media/user-guide/settings-service-status.png)  
 Clicking “save service status” saves the status. 
 
-### **Search Index**
+### Search Index
 
 Changing the embedding model
 

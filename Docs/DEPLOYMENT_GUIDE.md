@@ -12,9 +12,6 @@
     - [Step 1: Fork \& Clone The Repository](#step-1-fork--clone-the-repository)
     - [Step 2: Upload Secrets \& Parameters](#step-2-upload-secrets--parameters)
     - [Step 3: CDK Deployment](#step-3-cdk-deployment)
-      - [CDK Deployment with an Existing VPC (Optional)](#cdk-deployment-with-an-existing-vpc-optional)
-        - [Step-by-Step Instructions](#step-by-step-instructions)
-        - [Second Deployment in the Same Environment with an Existing VPC](#second-deployment-in-the-same-environment-with-an-existing-vpc)
       - [Initialize the CDK stack](#initialize-the-cdk-stack)
       - [Deploy the stacks](#deploy-the-stacks)
       - [Optional context flags](#optional-context-flags)
@@ -171,79 +168,9 @@ aws ssm put-parameter `
 
 The CDK deployment also creates the Bedrock guardrail; see [`BEDROCK_GUARDRAILS.md`](./BEDROCK_GUARDRAILS.md) to customize it.
 
+The deployment creates a new VPC. To deploy into a VPC you already have, see [Deploying into an Existing VPC](./MODIFICATION_GUIDE.md#deploying-into-an-existing-vpc) before continuing.
+
 Run the commands below from the `cdk/` directory.
-
-#### CDK Deployment with an Existing VPC (Optional)
-
-The following instructions are only relevant if you want to deploy this application using an **existing VPC** (e.g., an AWS Control Tower-managed VPC). If you are deploying with a new VPC, skip this section and proceed to [Initialize the CDK stack](#initialize-the-cdk-stack).
-
-To use an existing VPC, you will need access to the **aws-controltower-VPC** and the name of your **AWSControlTowerStackSet**.
-
-##### Step-by-Step Instructions
-
-**1. Set your existing VPC ID**
-
-Open `cdk/lib/vpc-stack.ts` and set the `existingVpcId` variable to your existing VPC ID:
-
-```typescript
-const existingVpcId: string = "your-vpc-id"; // CHANGE IF DEPLOYING WITH EXISTING VPC
-```
-
-You can find your VPC ID in the **VPC dashboard** of the AWS Console under **Your VPCs**.
-
-![VPC ID](media/ExistingVPCId.png)
-
-**2. Set your AWS Control Tower Stack Set name**
-
-In the same file, update the `AWSControlTowerStackSet` variable with your stack set name:
-
-```typescript
-const AWSControlTowerStackSet = "your-stackset-name"; // CHANGE TO YOUR CONTROL TOWER STACK SET
-```
-
-You can find this in the **CloudFormation** console under **Stacks**. Look for a stack whose name starts with `StackSet-AWSControlTowerBP-VPC-ACCOUNT-FACTORY`.
-
-![AWS Control Tower Stack Set](media/AWSControlTowerStack.png)
-
-The stack set name is used to import the private subnet IDs, route table IDs, and subnet CIDR ranges via CloudFormation exports, so it must match exactly.
-
----
-
-##### Second Deployment in the Same Environment with an Existing VPC
-
-The following instructions only apply if this is the **second project** you are deploying into the same existing VPC. If this is your first deployment, skip this section.
-
-When deploying a second project into the same VPC, a new public subnet is created for the NAT Gateway. You need to provide an available **Public Subnet ID** from the first deployment and an unused **CIDR range** within the VPC.
-
-**1. Set the existing public subnet ID**
-
-Update the `existingPublicSubnetID` variable in `cdk/lib/vpc-stack.ts`:
-
-```typescript
-const existingPublicSubnetID: string = "your-public-subnet-id"; // CHANGE IF DEPLOYING WITH EXISTING PUBLIC SUBNET
-```
-
-To find the public subnet ID:
-- Go to **VPC → Subnets** in the AWS Console
-- Identify the public subnet from your first deployment (it will have a route table entry pointing to an Internet Gateway)
-- Copy its **Subnet ID**
-
-**2. Update the public subnet CIDR range**
-
-The `publicSubnetCidr` variable defines the CIDR block for the new public subnet. It must not overlap with any existing subnets in the VPC:
-
-```typescript
-const publicSubnetCidr = "172.31.0.0/20"; // Must not overlap with private subnets
-```
-
-To find an available CIDR block:
-- Go to **VPC → Subnets** and note the CIDR blocks of all existing subnets in your VPC
-- The third octet of a `/20` block must be a **multiple of 16** within the VPC range (e.g., `172.31.0.0/20`, `172.31.16.0/20`, `172.31.32.0/20`, etc.)
-- Pick the first unused block
-
-For example, if existing subnets use `172.31.0.0/20` and `172.31.16.0/20`, use `172.31.32.0/20` as your next available range.
-
----
 
 #### Initialize the CDK stack
 
@@ -323,35 +250,38 @@ Embeddings and vector search run on pgvector in the RDS database.
 
 ### Step 4: Authorize the GitHub Connection and Build the Images
 
-The CICD stack creates a CodeConnections GitHub connection that stays `PENDING` until you authorize it. The Ingestion stack cannot finish until CodePipeline has pushed the crawler and transcriber images to ECR.
+Do this step **while `cdk deploy --all` is still running**, in the AWS console in a browser. Leave the terminal running.
 
-1. When `<STACK-PREFIX>-CICD` finishes, open **Developer Tools → Settings → Connections**, select `<STACK-PREFIX>-CICD-github-conn`, click **Update pending connection** and authorize your GitHub account and the `knowledge-compass` repository. The status changes to `Available`. (The CDK output `GitHubConnectionArn` names this connection.)
-2. The Ingestion stack's `ecrImageWaiter` custom resource starts `<STACK-PREFIX>-CICD-DockerImagePipeline` if an image is missing, then waits up to about 14 minutes for both `latest` tags. Every image is scanned before it is tagged `latest`; a CRITICAL or HIGH finding blocks the build (see `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts`).
-3. If the Ingestion stack times out, open the pipeline in **CodePipeline**, fix the failure (usually an unauthorized connection or a blocked scan finding), click **Release change**, and when `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` both have a `latest` tag in ECR, redeploy:
+**Why:** AWS cannot read your GitHub fork until you approve it. Until then, the crawler and transcriber images cannot be built, and the `<STACK-PREFIX>-Ingestion` stack waits for them.
 
-   ```bash
-   npx cdk deploy <YOUR-STACK-PREFIX>-Ingestion \
-     --context StackPrefix=<YOUR-STACK-PREFIX> \
-     --context environment=dev \
-     --context versionNumber=1.0.0 \
-     --context githubRepo=knowledge-compass \
-     --profile <YOUR-PROFILE-NAME>
-   ```
+**When:** watch the terminal. Once it shows `<STACK-PREFIX>-CICD` as deployed, do the steps below. You have about 14 minutes before the Ingestion stack gives up waiting.
 
-   PowerShell:
+**1. Approve the GitHub connection**
 
-   ```powershell
-   npx cdk deploy <YOUR-STACK-PREFIX>-Ingestion `
-     --context StackPrefix=<YOUR-STACK-PREFIX> `
-     --context environment=dev `
-     --context versionNumber=1.0.0 `
-     --context githubRepo=knowledge-compass `
-     --profile <YOUR-PROFILE-NAME>
-   ```
+1. Sign in to the AWS console with the same account and Region you are deploying to.
+2. In the search bar at the top, type **CodePipeline** and open it.
+3. In the left menu, expand **Settings** and click **Connections**.
+4. Click the connection named `<STACK-PREFIX>-CICD-github-conn`. Its status is **Pending**.
+5. Click **Update pending connection**. A GitHub window opens.
+6. Sign in to GitHub if asked, and allow access for your GitHub account. When asked which repositories to allow, choose your `knowledge-compass` fork.
+7. Click **Connect**. Back in the AWS console, the status changes to **Available**.
 
-   Use the same `--context` values as your `--all` deploy, including any optional flags you set.
+**2. Let the images build**
 
-This is needed only on the first deployment. Later pushes that change `cdk/containers/` start a new build automatically.
+You don't need to do anything else. The deployment starts the `<STACK-PREFIX>-CICD-DockerImagePipeline` pipeline itself, and the terminal continues once both images are built. To follow progress, open **CodePipeline → Pipelines** and select that pipeline.
+
+Each image is scanned for vulnerabilities before it is used. A CRITICAL or HIGH finding stops the build (the allow-list is `ECR_SCAN_ALLOWED_FINDINGS` in `cdk/lib/cicd-stack.ts`).
+
+**3. If the terminal shows the Ingestion stack failed or timed out**
+
+This usually means the connection was approved too late, or the image scan blocked the build.
+
+1. Make sure the connection shows **Available** (part 1 above).
+2. In **CodePipeline → Pipelines**, open `<STACK-PREFIX>-CICD-DockerImagePipeline`. If a stage is red, click **View details** to see why, fix it, then click **Release change** at the top right.
+3. Wait until the pipeline shows every stage as **Succeeded**. You can confirm in **Amazon ECR → Repositories**: both `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` should have an image tagged `latest`.
+4. Back in the terminal, from `cdk/`, run the same `npx cdk deploy --all ...` command from [Deploy the stacks](#deploy-the-stacks) again, with the same `--context` values and optional flags. Stacks that already finished are skipped, and the Ingestion, Api and Amplify stacks are created.
+
+You only do this on the first deployment. After that, any push that changes `cdk/containers/` rebuilds the images automatically.
 
 ## Post-Deployment
 
