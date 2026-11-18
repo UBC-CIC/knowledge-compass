@@ -357,6 +357,16 @@ aws() {
     expect(r.stderr).toContain(putLatest);
   });
 
+  test("scan status polling disables CLI pagination", () => {
+    // The CLI paginator crashes on in-progress responses that have no
+    // imageScanFindings ("'NoneType' object does not support item assignment").
+    const r = runGate({ statuses: "IN_PROGRESS COMPLETE" });
+    expect(r.status).toBe(0);
+    const polls = r.stderr.split("\n").filter((l) => l.includes("imageScanStatus.status"));
+    expect(polls.length).toBe(2);
+    for (const call of polls) expect(call).toContain("--no-paginate");
+  });
+
   test("failed build phase pushes nothing", () => {
     const r = runGate({ succeeding: "0" });
     expect(r.status).not.toBe(0);

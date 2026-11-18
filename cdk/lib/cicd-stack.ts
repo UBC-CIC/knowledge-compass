@@ -83,8 +83,11 @@ echo "Waiting for vulnerability scan of $IMAGE_TAG ($DIGEST)..."
 attempt=0
 while :; do
   attempt=$((attempt + 1))
+  # --no-paginate: while a scan is in progress the response has no
+  # imageScanFindings, and the CLI paginator crashes merging its result keys
+  # ("'NoneType' object does not support item assignment").
   if OUT=$(aws ecr describe-image-scan-findings --repository-name "$REPO_NAME" --image-id imageDigest="$DIGEST" \\
-        --query 'imageScanStatus.status' --output text 2>&1); then
+        --no-paginate --query 'imageScanStatus.status' --output text 2>&1); then
     STATUS="$OUT"
   elif printf '%s' "$OUT" | grep -q ScanNotFoundException; then
     STATUS="NOT_STARTED"

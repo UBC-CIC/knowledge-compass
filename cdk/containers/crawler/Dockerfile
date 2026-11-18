@@ -16,13 +16,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Pull current Ubuntu security fixes so the ECR scan gate (blocks on CRITICAL)
 # doesn't fail on CVEs patched after the base image was published.
-# Also purge the system ffmpeg (libav*) and cjson libraries: they carry
-# unpatched CRITICAL CVEs and are only used by the WebKit/GStreamer media stack.
-# Chromium bundles its own media codecs, so the crawler doesn't need them.
+# Also purge these source packages' binaries: they carry unpatched CRITICAL/HIGH
+# CVEs and are only used by the WebKit/GStreamer media stack (ffmpeg/libav*,
+# cjson, gst-plugins-bad1.0, fluidsynth, zvbi, openexr). Chromium bundles its
+# own media codecs, so the crawler doesn't need them; the smoke launch after
+# the browser install below fails the build if Chromium loses a library.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && PURGE="$(dpkg-query -W -f='${Package} ${source:Package}\n' \
-         | awk '$2=="ffmpeg" || $2=="cjson" {print $1}')" \
+         | awk '$2 ~ /^(ffmpeg|cjson|gst-plugins-bad1\.0|fluidsynth|zvbi|openexr)$/ {print $1}')" \
     && if [ -n "$PURGE" ]; then apt-get purge -y --auto-remove $PURGE; fi \
     && rm -rf /var/lib/apt/lists/*
 
@@ -52,7 +54,8 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Chromium is preinstalled in the base image; ensure the browser matching the
 # pinned playwright package is present (no-op if already installed).
-RUN python -m playwright install chromium
+RUN python -m playwright install chromium \
+    && python -c "from playwright.sync_api import sync_playwright as p; pw = p().start(); b = pw.chromium.launch(); b.new_page().set_content('<p>ok</p>'); b.close(); pw.stop()"
 
 # DB_HOST is the RDS Proxy endpoint, not the RDS instance directly. RDS Proxy
 # serves an ACM-issued certificate (not an rds-ca-* one), so verify-full must

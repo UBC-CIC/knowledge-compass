@@ -1,0 +1,10 @@
+{
+  // ts-jest only: transpile each test file in isolation instead of building a
+  // full type-checked program per suite, which exhausts the heap on the SMALL
+  // CodeBuild UnitTests box. Type checking is done by `tsc --noEmit` (main
+  // tsconfig.json, which includes test/) in the step before jest.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "isolatedModules": true
+  }
+}

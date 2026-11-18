@@ -6,6 +6,8 @@ module.exports = {
   moduleFileExtensions: ['ts', 'tsx', 'js', 'json'],
   transform: {
     // 151002: hybrid Node16 module kind notice from ts-jest; harmless for tests.
-    '^.+\\.tsx?$': ['ts-jest', { diagnostics: { ignoreCodes: [151002] } }]
+    // tsconfig.jest.json enables isolatedModules (transpile-only) so the suite
+    // fits in the CodeBuild heap; `tsc --noEmit` does the type checking.
+    '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.jest.json', diagnostics: { ignoreCodes: [151002] } }]
   }
 };
