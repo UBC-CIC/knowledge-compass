@@ -119,6 +119,107 @@ def select_linked_sources(sources: List[Dict[str, Any]], answer_text: str) -> Li
     return linked
 
 
+# http(s) links in an answer, for strip_unverified_links. Inline links and
+# images, autolinks, and bare URLs are matched in one left-to-right pass so a
+# URL inside a link is never also read as a bare URL.
+_HTTP_LINK = re.compile(
+    r'(?P<inline>!?\[(?P<text>[^\]]*)\]\(\s*<?(?P<inline_url>https?://[^)\s>]*)>?(?:\s+"[^"]*")?\s*\))'
+    r"|<(?P<auto_url>https?://[^>\s]*)>"
+    r"|(?<![a-z0-9])(?P<bare_url>https?://[^\s<>\[\]\"'`|*]+)",
+    re.IGNORECASE,
+)
+# Reference definition, e.g. "[1]: https://x.org/page "Title"".
+_HTTP_REFERENCE_DEF = re.compile(
+    r"^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*<?(https?://[^\s>]*)>?"
+    r"(?:[ \t]+(?:\"[^\"\n]*\"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Use of a reference: [text][label], [label][] or [label].
+_REFERENCE_USE = re.compile(r"\[([^\]\n]+)\](?:\[([^\]\n]*)\])?(?![(:])")
+_BARE_URL_TRAILING = ".,;:!?"
+
+
+def _label_key(label: str) -> str:
+    return " ".join(label.split()).casefold()
+
+
+def _trim_bare_url(url: str) -> Tuple[str, str]:
+    """(url, trailing text) with sentence punctuation and an unbalanced ')' moved out of the URL."""
+    end = len(url)
+    while end:
+        last = url[end - 1]
+        if last in _BARE_URL_TRAILING or (last == ")" and url.count("(", 0, end) < url.count(")", 0, end)):
+            end -= 1
+        else:
+            break
+    return url[:end], url[end:]
+
+
+def _verified_link_values(sources: List[Dict[str, Any]]) -> set:
+    """http(s) url/uri values of the retrieved library sources (guide sections excluded)."""
+    values = set()
+    for source in sources:
+        if source.get("source_type") == _GUIDE_SOURCE_TYPE:
+            continue
+        for value in _source_link_values(source):
+            if value.lower().startswith(("http://", "https://")):
+                values.add(value)
+    return values
+
+
+def strip_unverified_links(text: str, sources: List[Dict[str, Any]]) -> Tuple[str, int]:
+    """
+    (text, removed) where every http(s) link whose URL is not exactly the url
+    or uri of a retrieved library source is made plain: inline links keep
+    their text, reference definitions, autolinks and bare URLs are dropped,
+    and uses of a dropped reference keep their text. Guide-section URLs are
+    never verified, matching select_linked_sources, which never gives a guide
+    a card. Non-http links are left for strip_internal_links.
+    """
+    if not text or "http" not in text.lower():
+        return text, 0
+    allowed = _verified_link_values(sources)
+    removed = 0
+    removed_labels = set()
+
+    def definition(match):
+        nonlocal removed
+        if match.group(2) in allowed:
+            return match.group(0)
+        removed += 1
+        removed_labels.add(_label_key(match.group(1)))
+        return ""
+
+    def reference_use(match):
+        label = match.group(2) or match.group(1)
+        return match.group(1) if _label_key(label) in removed_labels else match.group(0)
+
+    def link(match):
+        nonlocal removed
+        if match.group("inline") is not None:
+            if match.group("inline_url") in allowed:
+                return match.group(0)
+            removed += 1
+            # The kept text may itself be a URL.
+            return _HTTP_LINK.sub(link, match.group("text"))
+        if match.group("auto_url") is not None:
+            if match.group("auto_url") in allowed:
+                return match.group(0)
+            removed += 1
+            return ""
+        url, tail = _trim_bare_url(match.group("bare_url"))
+        if url in allowed:
+            return match.group(0)
+        removed += 1
+        return tail
+
+    text = _HTTP_REFERENCE_DEF.sub(definition, text)
+    if removed_labels:
+        text = _REFERENCE_USE.sub(reference_use, text)
+    text = _HTTP_LINK.sub(link, text)
+    return text, removed
+
+
 def merge_cited_and_linked(
     cited: List[Dict[str, Any]], linked: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:

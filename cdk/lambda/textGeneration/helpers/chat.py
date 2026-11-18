@@ -28,6 +28,7 @@ from helpers.citations import (
     select_linked_sources,
     stream_settled_length,
     strip_internal_links,
+    strip_unverified_links,
 )
 from helpers.intervention import assess_response
 from helpers.bedrock_clients import bedrock_runtime
@@ -799,6 +800,17 @@ def get_response(
             full_response_text = ""
         elif screened['action'] == ACTION_ANONYMIZED:
             answer_text = screened['text']
+
+    # http(s) links to anything other than a library source retrieved this
+    # turn become plain text, so only links that also get a source card stay
+    # clickable. Done on answer_text so grounding, linked sources, the saved
+    # message and 'complete' all see the same text. Text already streamed
+    # may have shown the link; 'complete' replaces it.
+    if answer_text and not (output_blocked or generation_failed):
+        answer_text, removed_links = strip_unverified_links(answer_text, sources)
+        if removed_links:
+            # Counts only: never the message text or URLs.
+            logger.info("Unverified links removed from answer: removed=%d", removed_links)
 
     # Older history turns may contain internal links the model could echo.
     final_answer_text = strip_internal_links(answer_text)

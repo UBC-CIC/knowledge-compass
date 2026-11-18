@@ -546,6 +546,45 @@ class LinkedSourcesTest(ChatModeTestBase):
         self.assertNotIn("example.org", warning[0])
         self.assertNotIn("A page", warning[0])
 
+    def _saved_ai_text(self):
+        ai_inserts = [c for c in self.patches["insert_message"].call_args_list if c.args[2] == "AI"]
+        self.assertEqual(len(ai_inserts), 1)
+        return ai_inserts[0].args[3]
+
+    def test_unverified_links_are_removed_from_saved_and_complete_text(self):
+        self.reply = (
+            f"<answer>See {VIDEO_LINK}, [A page](https://example.org/made-up), "
+            "<https://made.up/a> and https://made.up/b.\n\n[1]: https://made.up/c</answer>"
+            "<cited_indices>[]</cited_indices>"
+        )
+        with self.assertLogs(chat.logger, level="INFO") as logs:
+            result, _ = self.respond("standard")
+        cleaned = f"See {VIDEO_LINK}, A page,  and .\n\n"
+        # main.py sends result["response"] as the 'complete' text.
+        self.assertEqual(result["response"], cleaned)
+        self.assertEqual(self._saved_ai_text(), cleaned)
+        self.assert_resources_shown(result, ["Keeping a school log"])
+        self.assertEqual(self.patches["assess_response"].call_args.kwargs["answer_text"], cleaned)
+        removed = [line for line in logs.output if "Unverified links removed" in line]
+        self.assertEqual(len(removed), 1)
+        self.assertIn("removed=4", removed[0])
+        self.assertNotIn("made.up", "\n".join(logs.output))
+        self.assertNotIn("A page", "\n".join(logs.output))
+
+    def test_link_to_retrieved_source_is_kept(self):
+        self.reply = f"<answer>See {VIDEO_LINK}.</answer><cited_indices>[1]</cited_indices>"
+        result, _ = self.respond("standard")
+        self.assertEqual(result["response"], f"See {VIDEO_LINK}.")
+        self.assertEqual(self._saved_ai_text(), f"See {VIDEO_LINK}.")
+
+    def test_detective_reply_links_are_removed(self):
+        self.patches["decide_phase"].return_value = "DETECTIVE"
+        self.patches["get_current_prompt"].return_value = ("static", 0, "DETECTIVE", "<phase>ask</phase>", "haiku")
+        self.reply = "Have you seen https://made.up/x? <detective_state>journey: J1</detective_state>"
+        result, _ = self.respond("standard")
+        self.assertEqual(result["response"], "Have you seen ?")
+        self.assertEqual(self._saved_ai_text(), "Have you seen ?")
+
     def test_url_prefix_of_a_longer_link_does_not_match(self):
         self.reply = (
             "<answer>See https://example.org/videos/other.</answer>"
@@ -604,6 +643,8 @@ class GuideTurnNumberingTest(ChatModeTestBase):
         self.assertEqual(result["sources_used"], [])
         self.assertEqual(self._saved_ai_sources(), [])
         self.patches["assess_response"].assert_not_called()
+        # Guide URLs never get a card, so the link is removed too.
+        self.assertEqual(result["response"], "See Guide.")
 
     def test_linked_resource_on_guide_turn_with_empty_citations(self):
         self.reply = (
