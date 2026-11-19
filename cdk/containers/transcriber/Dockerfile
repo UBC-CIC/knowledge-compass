@@ -11,6 +11,12 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# Pull current Debian security fixes so the ECR scan gate (blocks on
+# CRITICAL/HIGH) doesn't fail on CVEs patched after the base image was published.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # requirements.txt is the fully pinned, hashed lock generated from requirements.in.
