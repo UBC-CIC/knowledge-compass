@@ -2329,7 +2329,7 @@ export default function DataSourceManagement() {
                     Upload files, video, or documents
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="sm:max-w-2xl">
+                <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
                   <DialogHeader>
                     <DialogTitle>Upload guidance files</DialogTitle>
                     <DialogDescription>
