@@ -139,6 +139,7 @@ The following architecture diagram illustrates the various AWS components utiliz
 ### Deployment and Configuration
 
 - **[Deployment Guide](Docs/DEPLOYMENT_GUIDE.md)**: Step-by-step instructions for deploying to AWS
+- **[CI/CD Pipeline](Docs/CICD_PIPELINE.md)**: What the container pipeline and Amplify build run on each push, the image scan gate, and what still needs a manual `cdk deploy`
 - **[Modification Guide](Docs/MODIFICATION_GUIDE.md)**: Guidelines for customizing and extending the application
 - **[Bedrock Guardrails](Docs/BEDROCK_GUARDRAILS.md)**: Configuration and management of AWS Bedrock guardrails for AI safety
 
@@ -166,9 +167,6 @@ Licenses of third-party libraries and services used by this system:
 
 **[PostgreSQL License](https://www.postgresql.org/about/licence/)**
 For PostgreSQL — a liberal open source license, similar to BSD or MIT.
-
-**[Cohere Terms of Use](https://cohere.com/terms-of-use)**
-For Cohere Embed English v3, accessed via Amazon Bedrock for vector embeddings on deployments that still use it.
 
 **[Anthropic Usage Policy](https://www.anthropic.com/legal/aup)**
 For Claude Haiku 5.5, accessed via Amazon Bedrock for text generation.

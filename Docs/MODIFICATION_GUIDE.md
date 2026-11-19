@@ -275,7 +275,7 @@ npm test        # Vitest unit tests (*.test.ts / *.test.tsx beside the code), si
 
 Run the dev server manually with `npm run dev` (Vite).
 
-**CI/CD:** See `Docs/DEPLOYMENT_GUIDE.md` for pipeline specifics.
+**CI/CD:** See [`CICD_PIPELINE.md`](./CICD_PIPELINE.md) for pipeline specifics.
 
 ---
 

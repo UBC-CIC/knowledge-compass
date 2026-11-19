@@ -281,7 +281,7 @@ This usually means the connection was approved too late, or the image scan block
 3. Wait until the pipeline shows every stage as **Succeeded**. You can confirm in **Amazon ECR → Repositories**: both `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` should have an image tagged `latest`.
 4. Back in the terminal, from `cdk/`, run the same `npx cdk deploy --all ...` command from [Deploy the stacks](#deploy-the-stacks) again, with the same `--context` values and optional flags. Stacks that already finished are skipped, and the Ingestion, Api and Amplify stacks are created.
 
-You only do this on the first deployment. After that, any push that changes `cdk/containers/` rebuilds the images automatically.
+You only do this on the first deployment. After that, every push to the deployed branch runs the pipeline, which tests the code and rebuilds both images (see [CICD_PIPELINE.md](./CICD_PIPELINE.md)).
 
 ## Post-Deployment
 

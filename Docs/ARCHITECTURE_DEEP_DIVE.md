@@ -233,7 +233,7 @@ erDiagram
         text body
         int word_count
         varchar content_hash
-        vector embedding "legacy, Cohere v3"
+        vector embedding
         jsonb metadata
     }
     web_source_owners {
@@ -307,7 +307,7 @@ Guests and everything they own are deleted 90 days after their last activity, un
 | `data_sources` | What an administrator added (`type`: `website`, `csv`, `markdown`, `video`, `document`, or `json` for the metadata file that accompanies a CSV or Markdown upload) | 000, 005, 008 |
 | `ingestion_runs` | One row per ingestion attempt (`status`: `pending`, `queued`, `running`, `failed`, `completed`) with its sync session, counters, errors and metadata (for example how a PDF was read) | 000, 001 |
 | `sources` | One row per retrievable source, keyed by URL (`source_type`: `web` for a crawled page, `video`, `document`, `csv_link` for a page a CSV row links to, `csv_row` for a CSV row) | 001, 015, 017 |
-| `chunks` | Chunk text, word count, content hash and metadata (for example video timestamps and citations) for each source. Vectors live in `chunk_embeddings`; the legacy `chunks.embedding` column (Cohere v3) is kept until the [deferred cleanup](../cdk/lambda/db_setup/deferred/README.md) | 001 |
+| `chunks` | Chunk text, word count, content hash and metadata (for example video timestamps and citations) for each source. Vectors live in `chunk_embeddings` | 001 |
 | `csv_row_links` | One row per CSV row when the CSV has a link column: the link, the row's columns, its fetch status (`pending`, `success`, `failed`, `skipped`) and whether the row and its fetched page are indexed | 016, 017 |
 | `web_source_owners` | Which website data sources crawled each page, so deleting a website removes the pages no other website shares | 038 |
 | `upload_issuances` | Binds each presigned upload to the administrator it was issued to, so staging can claim it once | 045 |
