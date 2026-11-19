@@ -250,9 +250,9 @@ The Search Index tab allows administrators to change the embedding model used to
 
 An administrator may want to change the embedding model to improve how relevant information is identified and retrieved, or to use a different model supported by the application in the event an embedding model is at the end of life.
 
-Changing the embedding model may require the search index to be rebuilt so that existing knowledge base content is processed using the new model. During this process, the assistant's ability to retrieve information may be affected and the admin can display a notification in assistant settings to users that the system will be temporarily down during that time.
+Changing the embedding model will require the search index to be rebuilt so that existing knowledge base content is processed using the new model. During this process, the assistant's ability to retrieve information will be affected and the admin can display a notification in assistant settings to users that the system will be temporarily down during that time.
 
-Changing the embedding model does not necessarily delete the existing knowledge base or uploaded documents. However, existing content may need to be reindexed before it can be retrieved using the new model.
+Changing the embedding model does not necessarily delete the existing knowledge base or uploaded documents. However, existing content will need to be reindexed before it can be retrieved using the new model.
 
 The model can do a dry run to look over how many chunks need to be re indexed or the cost to re index if cost information is provided. From there it can be built to re-index the knowledge base as well as a quality comparison against the existing model.
 
