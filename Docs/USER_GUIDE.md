@@ -190,6 +190,7 @@ Once a document or file has been uploaded, it will appear under “your guides.�
 ![Your guides list](media/user-guide/prompts-your-guides.png)
 
 **Journeys**
+
 A user journey represents a specific situation a user may be experiencing, and it outlines an objective for the assistant to achieve (i.e. provide a clear, structured path that guides parents through the situation from start to finish). Within a user journey there may be different stories. Under each story, a user journey document provides information on what the situation is, what the system needs to do to be helpful, and what the system should say or do.
 
 The administrator can add journeys by clicking “add journey.” From there, they can name the journey and input information under “who it’s for.”  
