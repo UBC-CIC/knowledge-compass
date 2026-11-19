@@ -213,6 +213,7 @@ After clicking “add situation,” the administrator can add a name and outline
 ![New situation form](media/user-guide/prompts-new-situation.png)
 
 **Shown on Screen**
+
 *Welcome and Disclaimer*  
 Under the “Welcome and disclaimer” screen, the administrator can type in the welcome message displayed at the start of every conversation, and add any disclaimers for users to view.  
 ![Welcome and disclaimer](media/user-guide/prompts-welcome-disclaimer.png)
