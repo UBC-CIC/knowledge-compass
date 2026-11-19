@@ -151,7 +151,7 @@ Under the “review later” tab, administrators also have the option to downloa
 ![Review later tab](media/user-guide/analytics-review-later.png)
 
 ### Prompts
-Shared by Every Journey  
+**Shared by Every Journey**  
 Prompts are instructions provided to an artificial intelligence model that guides how it responds, communicates, and provides information to users. Under the “prompts” tab, the administrator can type out prompts that determine who the assistant is, how it asks questions, and how it provides guidance. 
 
 *The Assistant*  
@@ -189,7 +189,7 @@ Word Documents up to 10 MB or Markdown files up to 1 MB can be uploaded under th
 Once a document or file has been uploaded, it will appear under “your guides.” Administrators can replace the guide by uploading a new version, or remove it altogether. If a guide is removed, the assistant will stop using it, and it will delete its search data.  
 ![Your guides list](media/user-guide/prompts-your-guides.png)
 
-Journeys  
+**Journeys**
 A user journey represents a specific situation a user may be experiencing, and it outlines an objective for the assistant to achieve (i.e. provide a clear, structured path that guides parents through the situation from start to finish). Within a user journey there may be different stories. Under each story, a user journey document provides information on what the situation is, what the system needs to do to be helpful, and what the system should say or do.
 
 The administrator can add journeys by clicking “add journey.” From there, they can name the journey and input information under “who it’s for.”  
@@ -211,7 +211,7 @@ Administrators can add a situation by clicking the “add situation” button, a
 After clicking “add situation,” the administrator can add a name and outline when the assistant should follow the specific situation.   
 ![New situation form](media/user-guide/prompts-new-situation.png)
 
-Shown on Screen  
+**Shown on Screen**
 *Welcome and Disclaimer*  
 Under the “Welcome and disclaimer” screen, the administrator can type in the welcome message displayed at the start of every conversation, and add any disclaimers for users to view.  
 ![Welcome and disclaimer](media/user-guide/prompts-welcome-disclaimer.png)
