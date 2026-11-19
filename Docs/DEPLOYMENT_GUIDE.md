@@ -41,7 +41,7 @@ Tools:
 
 ### Request Higher Bedrock LLM Invocation Quotas
 
-Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and your embedding model (Amazon Titan Text Embeddings V2 on a new install). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
+Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and embedding model (Amazon Titan Text Embeddings V2). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
 
 ## Pre-Deployment
 
