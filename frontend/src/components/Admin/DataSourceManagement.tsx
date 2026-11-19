@@ -11,8 +11,6 @@ import {
   AlertTriangle,
   MessageCircleMore,
   Archive,
-  Copy,
-  Download,
   Film,
   Trash2,
 } from "lucide-react";
@@ -478,6 +476,17 @@ function exampleMetadataContents(primaryFileName: string) {
   );
 }
 
+// The backend still expects a "<file>.metadata.json" sidecar next to every
+// CSV/Markdown upload (a Bedrock KB-era convention). Its contents are only
+// stored, so when the admin does not supply one we generate it here.
+function generatedMetadataFile(primaryFileName: string) {
+  return new File(
+    [exampleMetadataContents(primaryFileName)],
+    expectedMetadataFileName(primaryFileName),
+    { type: "application/json" },
+  );
+}
+
 type CsvLinkStatus = "pending" | "success" | "failed" | "skipped";
 
 type CsvLinkRow = {
@@ -871,7 +880,6 @@ export default function DataSourceManagement() {
   const [zipPairs, setZipPairs] = useState<ZipFilePair[]>([]);
   const [zipValidating, setZipValidating] = useState(false);
   const [zipUploading, setZipUploading] = useState(false);
-  const [copiedMetadata, setCopiedMetadata] = useState(false);
   const [zipStatus, setZipStatus] = useState<{
     type: "success" | "error" | "warning" | null;
     message: string;
@@ -1287,7 +1295,6 @@ export default function DataSourceManagement() {
       return;
     }
     setPrimaryFile(selectedFile);
-    setCopiedMetadata(false);
     setCsvColumns([]);
     setSuggestedUrlColumn(null);
     setUrlColumn("");
@@ -1315,34 +1322,6 @@ export default function DataSourceManagement() {
     setMetadataFile(selectedFile);
   };
 
-  const handleCopyExampleMetadata = async () => {
-    if (!primaryFile) return;
-    try {
-      await navigator.clipboard.writeText(
-        exampleMetadataContents(primaryFile.name),
-      );
-      setCopiedMetadata(true);
-      window.setTimeout(() => setCopiedMetadata(false), 2000);
-    } catch {
-      setUploadStatus({
-        type: "error",
-        message: "Could not copy the metadata example.",
-      });
-    }
-  };
-
-  const handleDownloadExampleMetadata = () => {
-    if (!primaryFile) return;
-    const blob = new Blob([exampleMetadataContents(primaryFile.name)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = expectedMetadataFileName(primaryFile.name);
-    link.click();
-    URL.revokeObjectURL(url);
-  };
 
   const getPresignedUpload = async (
     token: string,
@@ -1499,20 +1478,12 @@ export default function DataSourceManagement() {
           type: isCsv ? "text/csv" : "text/markdown",
         });
 
-        if (!metaEntry) {
-          pairs.push({
-            primaryFile: primaryFileObj,
-            metadataFile: null as unknown as File,
-            type: isCsv ? "csv" : "markdown",
-            error: `Missing metadata file: ${expectedMeta}`,
-          });
-          continue;
-        }
-
-        const metaBlob = await metaEntry.async("blob");
-        const metaFileObj = new File([metaBlob], expectedMeta, {
-          type: "application/json",
-        });
+        // A metadata sidecar is optional; generate one when it is absent.
+        const metaFileObj = metaEntry
+          ? new File([await metaEntry.async("blob")], expectedMeta, {
+              type: "application/json",
+            })
+          : generatedMetadataFile(baseName);
 
         const type = isCsv ? "csv" : "markdown";
         const sourceKey = `${type}/${sanitizeUploadFileName(baseName).toLowerCase()}`;
@@ -1712,11 +1683,10 @@ export default function DataSourceManagement() {
   };
 
   const handleUpload = async () => {
-    if (!primaryFile || !metadataFile) {
+    if (!primaryFile) {
       setUploadStatus({
         type: "error",
-        message:
-          "Please select both the primary file and the metadata JSON file.",
+        message: "Please select a CSV or Markdown file.",
       });
       return;
     }
@@ -1730,13 +1700,15 @@ export default function DataSourceManagement() {
     }
 
     const expectedMetadata = expectedMetadataFileName(primaryFile.name);
-    if (metadataFile.name !== expectedMetadata) {
+    if (metadataFile && metadataFile.name !== expectedMetadata) {
       setUploadStatus({
         type: "error",
         message: `Metadata file name must be exactly ${expectedMetadata}`,
       });
       return;
     }
+    const metadataToUpload =
+      metadataFile ?? generatedMetadataFile(primaryFile.name);
 
     try {
       setUploading(true);
@@ -1759,12 +1731,12 @@ export default function DataSourceManagement() {
 
       const metadataUpload = await getPresignedUpload(
         token,
-        metadataFile,
+        metadataToUpload,
         "json",
       );
       await uploadFileToS3(
         metadataUpload.presignedUrl,
-        metadataFile,
+        metadataToUpload,
         "application/json",
       );
 
@@ -1775,7 +1747,7 @@ export default function DataSourceManagement() {
               csv_file_name: primaryFile.name,
               csv_s3_bucket: primaryUpload.bucket,
               csv_s3_key: primaryUpload.key,
-              metadata_file_name: metadataFile.name,
+              metadata_file_name: metadataToUpload.name,
               metadata_s3_bucket: metadataUpload.bucket,
               metadata_s3_key: metadataUpload.key,
               created_by: adminEmail,
@@ -1792,7 +1764,7 @@ export default function DataSourceManagement() {
               markdown_file_name: primaryFile.name,
               markdown_s3_bucket: primaryUpload.bucket,
               markdown_s3_key: primaryUpload.key,
-              metadata_file_name: metadataFile.name,
+              metadata_file_name: metadataToUpload.name,
               metadata_s3_bucket: metadataUpload.bucket,
               metadata_s3_key: metadataUpload.key,
               created_by: adminEmail,
@@ -2453,7 +2425,7 @@ export default function DataSourceManagement() {
 
                         <div className="space-y-2">
                           <div className="text-sm font-medium text-gray-900">
-                            Metadata JSON file
+                            Metadata JSON file (optional)
                           </div>
 
                           {!metadataFile ? (
@@ -2513,7 +2485,10 @@ export default function DataSourceManagement() {
 
                       {primaryFile && (
                         <div className="text-xs text-gray-600">
-                          Expected metadata filename:{" "}
+                          {metadataFile
+                            ? "Using your metadata file. "
+                            : "No metadata file needed; one is generated automatically. "}
+                          If you upload one, it must be named{" "}
                           <code className="bg-gray-100 px-1 py-0.5 rounded">
                             {expectedMetadataFileName(primaryFile.name)}
                           </code>
@@ -2698,77 +2673,6 @@ export default function DataSourceManagement() {
                           {uploadStatus.message}
                         </div>
                       )}
-
-                      <div className="space-y-3 text-xs">
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                          <div className="flex items-start gap-2">
-                            <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5" />
-                            <div className="text-amber-800">
-                              <div className="font-semibold">
-                                Two files are required
-                              </div>
-                              <div className="mt-1 text-amber-700">
-                                1) A <span className="font-medium">CSV</span> or{" "}
-                                <span className="font-medium">Markdown</span>{" "}
-                                guidance file (header row for CSVs; any columns
-                                are fine)
-                                <br />
-                                2) A matching{" "}
-                                <span className="font-medium">
-                                  metadata JSON
-                                </span>{" "}
-                                file named{" "}
-                                <code className="bg-white/70 px-1 py-0.5 rounded border border-amber-200">
-                                  {primaryFile
-                                    ? expectedMetadataFileName(primaryFile.name)
-                                    : "<filename>.metadata.json"}
-                                </code>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="rounded-lg border border-foreground/12 bg-muted/40 p-3 text-foreground/80">
-                          <p className="font-medium mb-1 text-foreground">
-                            Metadata JSON example
-                          </p>
-                          <p className="mb-2">
-                            Create this file yourself — Knowledge Compass does
-                            not generate it from the CSV. Copy or download the
-                            example, then upload it next to your file.
-                          </p>
-                          <pre className="overflow-x-auto rounded-md border border-foreground/10 bg-white p-2 font-mono text-[11px] leading-relaxed text-foreground">
-                            {exampleMetadataContents(
-                              primaryFile?.name || "guidance-resources.csv",
-                            )}
-                          </pre>
-                          {primaryFile ? (
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-8"
-                                onClick={handleCopyExampleMetadata}
-                              >
-                                <Copy className="mr-1.5 h-3.5 w-3.5" />
-                                {copiedMetadata ? "Copied" : "Copy JSON"}
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-8"
-                                onClick={handleDownloadExampleMetadata}
-                              >
-                                <Download className="mr-1.5 h-3.5 w-3.5" />
-                                Download{" "}
-                                {expectedMetadataFileName(primaryFile.name)}
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
                     </div>
                   )}
 
@@ -2776,12 +2680,13 @@ export default function DataSourceManagement() {
                   {uploadTab === "zip" && (
                     <div className="grid gap-4 py-4">
                       <div className="text-sm text-gray-600">
-                        Zip CSV or Markdown guidance files together with a
+                        Zip CSV or Markdown guidance files together. A
                         matching{" "}
                         <code className="bg-gray-100 px-1 rounded">
                           {"<filename>.metadata.json"}
                         </code>{" "}
-                        sidecar for each one. Files with the same name as an
+                        file is optional; one is generated for any file
+                        without it. Files with the same name as an
                         existing source replace it; identical files are skipped.
                       </div>
 
@@ -3168,7 +3073,7 @@ export default function DataSourceManagement() {
                       <Button
                         className="bg-primary hover:bg-primary/90"
                         onClick={handleUpload}
-                        disabled={!primaryFile || !metadataFile || uploading}
+                        disabled={!primaryFile || uploading}
                       >
                         {uploading ? (
                           <>
