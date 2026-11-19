@@ -20,6 +20,9 @@ const USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11";
 const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 const SECRET = "test-jwt-secret";
+// websocket/ipLimit.js reads its HMAC key from WS_IP_HASH_SECRET (field ipHashKey).
+const IP_HASH_SECRET_ID = "test-ip-hash-secret";
+const IP_HASH_KEY = "test-ip-hash-key-0123456789abcdef0123456789abcdef";
 const LAMBDA_DIR = path.resolve(__dirname, "..", "..");
 
 // Tokens are opaque ids; verify only accepts ones signed here with the right
@@ -61,7 +64,10 @@ function load(relativePath, extraFakes = {}, jwt = fakeJwt()) {
     jsonwebtoken: jwt,
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
-        async send() {
+        async send(command) {
+          if (command.input?.SecretId === IP_HASH_SECRET_ID) {
+            return { SecretString: JSON.stringify({ ipHashKey: IP_HASH_KEY }) };
+          }
           return { SecretString: JSON.stringify({ jwtSecret: SECRET }) };
         }
       },
@@ -138,9 +144,14 @@ const ACCESS = { role: "user", typ: "access", iss: ISSUER, aud: "kc-public-api" 
 
 let savedEnv;
 test.beforeEach(() => {
-  savedEnv = { JWT_ISSUER: process.env.JWT_ISSUER, CONNECTIONS_TABLE_NAME: process.env.CONNECTIONS_TABLE_NAME };
+  savedEnv = {
+    JWT_ISSUER: process.env.JWT_ISSUER,
+    CONNECTIONS_TABLE_NAME: process.env.CONNECTIONS_TABLE_NAME,
+    WS_IP_HASH_SECRET: process.env.WS_IP_HASH_SECRET,
+  };
   process.env.JWT_ISSUER = ISSUER;
   process.env.CONNECTIONS_TABLE_NAME = "test-connections";
+  process.env.WS_IP_HASH_SECRET = IP_HASH_SECRET_ID;
 });
 test.afterEach(() => {
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -224,7 +235,10 @@ test("authorizer: extra claims are not forwarded into the context", async () => 
 // ---------- websocket/default.js ----------
 
 const wsEvent = (message) => ({
-  requestContext: { connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$default" },
+  requestContext: {
+    connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$default",
+    identity: { sourceIp: "203.0.113.7" },
+  },
   body: JSON.stringify({ action: "generate_text", query: "hello", chat_session_id: SESSION, ...message }),
 });
 
