@@ -250,7 +250,8 @@ class StartLinkPhaseTests(unittest.TestCase):
         self.m["run_meta"].assert_called_once()
         self.assertEqual(self.m["run_meta"].call_args.kwargs["metadata"]["link_phase"], "running")
         self.m["invoke"].assert_called_once_with(
-            ingestion_run_id="run-1", data_source_id="ds-1", sync_session_id="sess-1", continuation=0
+            ingestion_run_id="run-1", data_source_id="ds-1", sync_session_id="sess-1", continuation=0,
+            actor=None,
         )
 
     def test_rows_without_fetchable_urls_still_hand_off_for_indexing(self):

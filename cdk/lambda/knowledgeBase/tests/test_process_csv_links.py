@@ -507,7 +507,7 @@ class EntryPointTests(unittest.TestCase):
         result, invoke = self.invoke(store, FakeFetcher({A: html_result(A)}), remaining_ms=30_000)
         self.assertTrue(result["continued"])
         invoke.assert_called_once_with(ingestion_run_id="run1", data_source_id="ds1",
-                                       sync_session_id="sess1", continuation=1)
+                                       sync_session_id="sess1", continuation=1, actor=None)
         self.assertIsNone(store.finalized)
 
     def test_gives_up_after_max_continuations(self):
