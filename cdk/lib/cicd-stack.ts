@@ -41,7 +41,16 @@ interface CICDStackProps extends cdk.StackProps {
 // ECR basic scanning reports) with the reason it is accepted and a review date.
 // Add an entry only when no fixed base image or package exists yet, and remove
 // it once one does. Applies to every image the pipeline builds.
-export const ECR_SCAN_ALLOWED_FINDINGS: Record<string, string> = {};
+export const ECR_SCAN_ALLOWED_FINDINGS: Record<string, string> = {
+  "CVE-2026-5435":
+    "glibc 2.41-12+deb13u4 (transcriber, python:3.12-slim / Debian 13): no trixie fix; Debian marks it no-dsa (minor). " +
+    "Out-of-bounds write in the deprecated libresolv ns_printrr/ns_printrrf/fp_nquery debug printers, which no image code calls. " +
+    "Accepted 2026-11-19; review by 2027-01-19 or when trixie ships a fixed glibc.",
+  "CVE-2026-19499":
+    "glibc 2.41-12+deb13u4 (transcriber, python:3.12-slim / Debian 13): no trixie fix; Debian marks it no-dsa (minor). " +
+    "Overflow in strfmon/strfmon_l right-justified padding, which no image code calls. " +
+    "Accepted 2026-11-19; review by 2027-01-19 or when trixie ships a fixed glibc.",
+};
 
 // The space-separated SCAN_ALLOWED_FINDINGS value for the gate. Names are
 // restricted so they can go on the buildspec command line unquoted-safe.
