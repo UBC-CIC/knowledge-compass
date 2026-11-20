@@ -2425,75 +2425,121 @@ export default function DataSourceManagement() {
 
                         <div className="space-y-2">
                           <div className="text-sm font-medium text-gray-900">
-                            Metadata JSON file (optional)
+                            What to include
+                          </div>
+                          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-700 space-y-3">
+                            <div className="space-y-1">
+                              <div className="font-medium text-gray-900">
+                                CSV
+                              </div>
+                              <ul className="list-disc pl-4 space-y-1">
+                                <li>
+                                  The first row must be a header that names
+                                  every column (for example{" "}
+                                  <span className="font-medium">
+                                    Title, Description, Link
+                                  </span>
+                                  ).
+                                </li>
+                                <li>
+                                  Put one resource or topic on each row. Rows
+                                  are read as "Column: value" lines, so clear
+                                  column names give better answers. Empty
+                                  cells are skipped.
+                                </li>
+                                <li>
+                                  Save as UTF-8 (in Excel, choose "CSV UTF-8").
+                                </li>
+                                <li>
+                                  Optional: a column of web page or PDF links.
+                                  After you pick the file you can choose it,
+                                  and those links are fetched on Sync.
+                                </li>
+                              </ul>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="font-medium text-gray-900">
+                                Markdown
+                              </div>
+                              <ul className="list-disc pl-4 space-y-1">
+                                <li>
+                                  Use headings (#, ##, ###) to split the
+                                  content into sections.
+                                </li>
+                              </ul>
+                            </div>
+                            <div className="text-gray-600">
+                              Files must be under 50 MB. Uploading a file with
+                              the same name as an existing source replaces it.
+                            </div>
                           </div>
 
-                          {!metadataFile ? (
-                            <div
-                              className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:bg-gray-50 transition-colors cursor-pointer"
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const droppedFile = e.dataTransfer.files?.[0];
-                                if (droppedFile)
-                                  handleMetadataFileSelect(droppedFile);
-                              }}
-                              onClick={() =>
-                                document
-                                  .getElementById("metadata-upload")
-                                  ?.click()
-                              }
-                            >
-                              <div className="flex flex-col items-center gap-2">
-                                <Upload className="h-8 w-8 text-gray-400" />
-                                <span className="text-sm font-medium text-gray-600">
-                                  Drag and drop metadata JSON
-                                </span>
-                                <span className="text-xs text-gray-400">
-                                  or click to browse
-                                </span>
-                              </div>
-                              <Input
-                                id="metadata-upload"
-                                type="file"
-                                className="hidden"
-                                accept=".json,application/json,text/json"
-                                onChange={(e) => {
-                                  const selectedFile = e.target.files?.[0];
-                                  if (selectedFile)
-                                    handleMetadataFileSelect(selectedFile);
-                                }}
-                              />
+                          <div className="rounded-lg border border-dashed border-gray-300 p-3 text-xs text-gray-600 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium text-gray-900">
+                                Metadata JSON
+                              </span>
+                              <Badge variant="secondary">Optional</Badge>
                             </div>
-                          ) : (
-                            <div className="border rounded-lg p-4 bg-gray-50">
-                              <div className="flex items-center justify-between mb-2">
+                            {!metadataFile ? (
+                              <>
+                                <div>
+                                  Not required. One is created for you
+                                  automatically.
+                                </div>
+                                <button
+                                  type="button"
+                                  className="text-primary underline"
+                                  onClick={() =>
+                                    document
+                                      .getElementById("metadata-upload")
+                                      ?.click()
+                                  }
+                                >
+                                  Attach your own metadata JSON
+                                </button>
+                              </>
+                            ) : (
+                              <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2 overflow-hidden">
-                                  <FileText className="h-5 w-5 text-primary flex-shrink-0" />
-                                  <span className="text-sm font-medium truncate">
-                                    {metadataFile.name}
+                                  <FileText className="h-4 w-4 text-primary flex-shrink-0" />
+                                  <span className="truncate">
+                                    {metadataFile.name} (
+                                    {formatSizeMb(metadataFile)})
                                   </span>
                                 </div>
+                                <button
+                                  type="button"
+                                  className="text-primary underline flex-shrink-0"
+                                  onClick={() => setMetadataFile(null)}
+                                >
+                                  Remove
+                                </button>
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {formatSizeMb(metadataFile)}
+                            )}
+                            {primaryFile && (
+                              <div className="text-gray-500">
+                                If you attach one, it must be named{" "}
+                                <code className="bg-gray-100 px-1 py-0.5 rounded">
+                                  {expectedMetadataFileName(primaryFile.name)}
+                                </code>
                               </div>
-                            </div>
-                          )}
+                            )}
+                            <Input
+                              id="metadata-upload"
+                              type="file"
+                              className="hidden"
+                              accept=".json,application/json,text/json"
+                              onChange={(e) => {
+                                const selectedFile = e.target.files?.[0];
+                                if (selectedFile)
+                                  handleMetadataFileSelect(selectedFile);
+                                e.target.value = "";
+                              }}
+                            />
+                          </div>
                         </div>
                       </div>
-
-                      {primaryFile && (
-                        <div className="text-xs text-gray-600">
-                          {metadataFile
-                            ? "Using your metadata file. "
-                            : "No metadata file needed; one is generated automatically. "}
-                          If you upload one, it must be named{" "}
-                          <code className="bg-gray-100 px-1 py-0.5 rounded">
-                            {expectedMetadataFileName(primaryFile.name)}
-                          </code>
-                        </div>
-                      )}
 
                       {primaryFile &&
                         isCsvFile(primaryFile) &&
@@ -3462,7 +3508,7 @@ export default function DataSourceManagement() {
                                     <div className="space-y-5">
                                       <div className="space-y-2">
                                         <div className="text-sm font-medium text-gray-800">
-                                          Metadata JSON file
+                                          Metadata JSON file (optional)
                                         </div>
 
                                         {json ? (
@@ -3523,8 +3569,8 @@ export default function DataSourceManagement() {
                                           </div>
                                         ) : (
                                           <div className="text-xs text-gray-500">
-                                            No metadata JSON found for this CSV
-                                            or Markdown.
+                                            No metadata JSON attached. This is
+                                            optional.
                                           </div>
                                         )}
                                       </div>
