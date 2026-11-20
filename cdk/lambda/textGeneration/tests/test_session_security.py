@@ -14,6 +14,7 @@ import unittest
 import uuid
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 from helpers.session_security import resolve_caller_user_id, validate_session_ownership  # noqa: E402
 

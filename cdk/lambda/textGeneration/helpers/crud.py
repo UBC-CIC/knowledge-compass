@@ -5,8 +5,17 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from helpers.prompt_data import MAX_GUIDE_LABEL_CHARS, guide_state_key
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Conversation history sent to the model on every turn: at most this many
+# recent messages, and at most this many characters in total (finding A-06).
+# A normal 20-message window fits; a session grown on purpose cannot inflate
+# input tokens on every turn. The new question is not counted.
+HISTORY_MESSAGES = 20
+MAX_HISTORY_CHARS = 30_000
 
 def get_exchange_count(chat_session_id: str, db_connection) -> int:
     """
@@ -31,7 +40,8 @@ def fetch_recent_messages(
     Fetch the most recent messages for a chat session, returned oldest->newest.
 
     The inner query selects the latest N messages (DESC + LIMIT); the outer
-    query restores chronological order for the Bedrock conversation.
+    query restores chronological order for the Bedrock conversation. Older
+    messages are then dropped until the rest fit in MAX_HISTORY_CHARS.
     """
     with db_connection.cursor() as cur:
         cur.execute(
@@ -46,7 +56,7 @@ def fetch_recent_messages(
             ) AS recent
             ORDER BY created_at ASC
             """,
-            (chat_session_id, 20)
+            (chat_session_id, HISTORY_MESSAGES)
         )
         rows = cur.fetchall()
 
@@ -57,6 +67,20 @@ def fetch_recent_messages(
             "content": content,
             "created_at": created_at.isoformat() if created_at else None
         })
+
+    # Keep the newest messages that fit in the character budget; stop at the
+    # first one that does not, so the kept history stays contiguous.
+    kept_chars = 0
+    first_kept = len(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        size = len(messages[i]["content"] or "")
+        if kept_chars + size > MAX_HISTORY_CHARS:
+            break
+        kept_chars += size
+        first_kept = i
+    if first_kept:
+        logger.info("History capped: dropped %d of %d messages", first_kept, len(messages))
+        messages = messages[first_kept:]
 
     # Bedrock Converse requires the conversation to start with a user turn.
     # A sliding window can begin on an AI message, so drop any leading ones.
@@ -162,8 +186,6 @@ def fetch_system_config(db_connection) -> Dict[str, Any]:
                     'max_characters_per_day': s.get('max_characters_per_day'),
                     'max_messages_per_day_global': s.get('max_messages_per_day_global'),
                     'max_characters_per_ai_message': s.get('max_characters_per_ai_message'),
-                    'temperature': _float('temperature'),
-                    'top_p': _float('top_p'),
                     'support_score_threshold': _float('support_score_threshold'),
                     'scope_alignment_score_threshold': _float('scope_alignment_score_threshold'),
                     'grounded_threshold': _float('grounded_threshold'),
@@ -341,7 +363,14 @@ def fetch_active_space(db_connection, space_id: Optional[str] = None) -> Optiona
 
 
 def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, Any]]:
-    """Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata."""
+    """
+    Guideline-mode state ({document_id, section_key, label}) from chat_sessions.metadata.
+
+    The column is client-reachable storage, so the stored value is
+    shape-checked and resolved against guideline_sections of a ready guide;
+    anything that does not resolve gives None. The stored label is ignored:
+    the canonical admin/auto label is returned instead.
+    """
     try:
         with db_connection.cursor() as cur:
             cur.execute(
@@ -349,9 +378,36 @@ def get_guide_state(db_connection, chat_session_id: str) -> Optional[Dict[str, A
                 (chat_session_id,)
             )
             row = cur.fetchone()
-            return row[0] if row and isinstance(row[0], dict) else None
+            key = guide_state_key(row[0]) if row else None
+            if key is None:
+                return None
+            document_id, section_key = key
+            cur.execute(
+                """
+                SELECT COALESCE(NULLIF(gs.label_override, ''), gs.auto_label, '')
+                  FROM guideline_sections gs
+                  JOIN guideline_documents d ON d.id = gs.document_id
+                 WHERE d.status = 'ready'
+                   AND gs.document_id = %s::uuid
+                   AND gs.section_key = %s
+                 LIMIT 1
+                """,
+                (document_id, section_key)
+            )
+            section = cur.fetchone()
+            if not section:
+                return None
+            return {
+                "document_id": document_id,
+                "section_key": section_key,
+                "label": (section[0] or "")[:MAX_GUIDE_LABEL_CHARS],
+            }
     except Exception as e:
         logger.error(f"get_guide_state failed: {type(e).__name__}")
+        try:
+            db_connection.rollback()
+        except Exception:
+            pass
         return None
 
 

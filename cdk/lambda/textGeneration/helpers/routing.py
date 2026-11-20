@@ -9,8 +9,8 @@ message. `decide_phase` then combines those signals with the exchange count,
 the admin settings, and the session's routing state to pick this turn's phase:
 
   DETECTIVE   ask one focused question (Haiku, no guidance yet)
-  PARTIAL     1-2 low-risk steps plus one clarifying question (Sonnet)
-  SUGGESTION  full cluster-based guidance (Sonnet)
+  PARTIAL     1-2 low-risk steps plus one clarifying question
+  SUGGESTION  full cluster-based guidance
 
 PARTIAL is internal only: it is reported to the frontend as SUGGESTION so the
 REST/WebSocket contract ("DETECTIVE" | "SUGGESTION") is unchanged.
@@ -23,8 +23,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import boto3
-
+from helpers.bedrock_clients import bedrock_runtime
 from helpers.journeys import (
     DEFAULT_CATALOG,
     JOURNEY_BOTH,
@@ -67,7 +66,7 @@ MAX_INFO_NEEDED_CHARS = 200
 HISTORY_MESSAGES_FOR_ROUTER = 10
 MAX_PREVIOUS_STATE_CHARS = 1500
 
-DEFAULT_ROUTER_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_ROUTER_MODEL_ID = "us.anthropic.claude-haiku-5-5"
 ROUTER_TOOL_NAME = "route_turn"
 
 
@@ -391,12 +390,20 @@ situation). The journey each situation belongs to is shown in brackets.
 {_situation_lines(catalog)}
 
 mode: ANSWER if there is already enough information to give useful, specific guidance
-now. ASK if a key fact is missing that would change the guidance.
+now. ASK if a key fact is missing that would change the guidance. When unsure, ASK.
 
 confidence: how clearly the family's situation AND what they need are identified.
-  HIGH   situation and need are both clear; full guidance is appropriate.
-  MEDIUM situation is clear, but one important detail is missing.
+Judge only facts the family has actually stated, never what is typical or likely.
+  HIGH   the family has stated what is happening, enough detail to tell the
+         situations apart (for example how long or how often, or what they have
+         already tried), and what they want help with. Full guidance is appropriate.
+  MEDIUM what is happening is stated and points to one situation, but one important
+         detail is missing.
   LOW    the situation or need is still unclear.
+A message that only names a topic or a broad concern, or asks a general question
+(for example "my child keeps getting sent home, what can I do?" or "what are my
+rights?"), is LOW, even when the topic clearly matches a journey. A first message
+is rarely HIGH: use HIGH there only when it already states all three things above.
 
 urgent: true only if something is happening right now that needs guidance immediately
 (for example, the school is calling to have the child picked up at this moment).
@@ -504,7 +511,7 @@ def route_turn(
     """
     try:
         catalog = catalog if catalog is not None and not catalog.is_empty else DEFAULT_CATALOG
-        client = bedrock_client or boto3.client("bedrock-runtime", region_name=llm_region)
+        client = bedrock_client or bedrock_runtime(llm_region)
         response = client.converse(
             modelId=model_id or DEFAULT_ROUTER_MODEL_ID,
             messages=[{
@@ -516,7 +523,8 @@ def route_turn(
                 "tools": [build_router_tool_spec(catalog)],
                 "toolChoice": {"tool": {"name": ROUTER_TOOL_NAME}},
             },
-            inferenceConfig={"maxTokens": 400, "temperature": 0.0},
+            inferenceConfig={"maxTokens": 400},
+            additionalModelRequestFields={"thinking": {"type": "disabled"}},
         )
         content = response.get("output", {}).get("message", {}).get("content", []) or []
         tool_input = None

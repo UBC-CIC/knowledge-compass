@@ -24,8 +24,11 @@
  * the deployment) and aud: ACCESS_AUDIENCE for access tokens, CREDENTIAL_AUDIENCE
  * for credentials. Every verifier (user authorizer, WebSocket $connect and
  * $default, credential exchange) checks typ, iss and aud, so a credential
- * cannot be used as an access token. There is no jti: revocation is
- * users.credential_version, and access tokens expire after 15 minutes.
+ * cannot be used as an access token. Access tokens carry a random jti
+ * (crypto.randomUUID, not derived from personal data) for audit correlation:
+ * the user authorizer exposes it as context.tokenId and in principalId, and
+ * GET /user/publicToken logs it at issuance (finding f-0d57a9d0). Revocation
+ * is still users.credential_version, and access tokens expire after 15 minutes.
  */
 
 const {
@@ -33,6 +36,7 @@ const {
   GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const jwt = require("jsonwebtoken");
+const { randomUUID } = require("crypto");
 
 const CREDENTIAL_LIFETIME = "30d";
 const ACCESS_TOKEN_LIFETIME = "15m";
@@ -43,20 +47,59 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const ACCESS_AUDIENCE = "kc-public-api";
 const CREDENTIAL_AUDIENCE = "kc-token-exchange";
 
-const secretsManager = new SecretsManagerClient();
-let cachedSecret;
-let cacheExpiry = 0;
+// A signature that matches no cached key refetches the secret (it may have
+// just rotated), at most this often per container.
+const SECRET_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
 
-async function jwtSecret() {
-  if (!cachedSecret || Date.now() > cacheExpiry) {
+const secretsManager = new SecretsManagerClient();
+let cachedKeys;
+let cachedAt = 0;
+
+// [current, previous] signing keys. appSecretRotation keeps the outgoing key as
+// previousJwtSecret; tokens are signed with the current key only and verified
+// against both, so a rotation does not invalidate live credentials.
+async function jwtKeys(refresh = false) {
+  const age = Date.now() - cachedAt;
+  if (!cachedKeys || age > SECRET_CACHE_TTL_MS || (refresh && age > SECRET_REFRESH_MIN_INTERVAL_MS)) {
     const response = await secretsManager.send(
       new GetSecretValueCommand({ SecretId: process.env.JWT_SECRET })
     );
-    cachedSecret = JSON.parse(response.SecretString).jwtSecret;
-    cacheExpiry = Date.now() + SECRET_CACHE_TTL_MS;
+    const secret = JSON.parse(response.SecretString);
+    cachedKeys = [secret.jwtSecret, secret.previousJwtSecret].filter((k) => typeof k === "string" && k);
+    cachedAt = Date.now();
   }
-  if (!cachedSecret) throw new Error("JWT secret is not configured");
-  return cachedSecret;
+  if (!cachedKeys[0]) throw new Error("JWT secret is not configured");
+  return cachedKeys;
+}
+
+/** The current signing key. */
+async function jwtSecret() {
+  return (await jwtKeys())[0];
+}
+
+const SIGNATURE_MISMATCH = Symbol("signature mismatch");
+
+/**
+ * Claims verified against the first key that signed `token`; null when the
+ * token is invalid for another reason (expired, malformed), which holds for
+ * every key; SIGNATURE_MISMATCH when no key signed it.
+ */
+function verifyWithKeys(token, keys) {
+  for (const key of keys) {
+    try {
+      return jwt.verify(token, key, { algorithms: ["HS256"] });
+    } catch (err) {
+      if (err?.message !== "invalid signature") return null;
+    }
+  }
+  return SIGNATURE_MISMATCH;
+}
+
+/** verifyWithKeys, refetching the keys once on a mismatch (they may have just rotated). */
+async function verifyJwt(token) {
+  let decoded = verifyWithKeys(token, await jwtKeys());
+  if (decoded === SIGNATURE_MISMATCH) decoded = verifyWithKeys(token, await jwtKeys(true));
+  return decoded === SIGNATURE_MISMATCH ? null : decoded;
 }
 
 /** The deployment's token issuer. Fails closed (500) when unset. */
@@ -78,14 +121,30 @@ async function issueUserCredential(userId, version) {
   });
 }
 
-/** Sign a 15-minute access token, bound to `userId` when given. */
-async function issueAccessToken(userId) {
-  const claims = { role: "user", typ: "access", iss: issuer(), aud: ACCESS_AUDIENCE };
+/**
+ * Sign a 15-minute access token, bound to `userId` when given.
+ * Returns { token, tokenId } where tokenId is the token's random jti.
+ */
+async function issueAccessTokenWithId(userId) {
+  const tokenId = randomUUID();
+  const claims = { role: "user", typ: "access", iss: issuer(), aud: ACCESS_AUDIENCE, jti: tokenId };
   if (userId) claims.sub = userId;
-  return jwt.sign(claims, await jwtSecret(), {
+  const token = jwt.sign(claims, await jwtSecret(), {
     algorithm: "HS256",
     expiresIn: ACCESS_TOKEN_LIFETIME,
   });
+  return { token, tokenId };
+}
+
+/** Sign a 15-minute access token, bound to `userId` when given. */
+async function issueAccessToken(userId) {
+  return (await issueAccessTokenWithId(userId)).token;
+}
+
+/** { token, tokenId, userId } for an exchange result. */
+async function boundAccessToken(userId) {
+  const { token, tokenId } = await issueAccessTokenWithId(userId);
+  return { token, tokenId, userId };
 }
 
 /** Verified credential claims, or null when the token is not a usable credential. */
@@ -96,13 +155,7 @@ async function verifyCredential(credential) {
   // credential for in-session callers; at page load UserContext.validateUser
   // still treats any failure as invalid (pre-existing, tracked as a follow-up).
   const iss = issuer();
-  const secret = await jwtSecret();
-  let decoded;
-  try {
-    decoded = jwt.verify(credential, secret, { algorithms: ["HS256"] });
-  } catch {
-    return null;
-  }
+  const decoded = await verifyJwt(credential);
   if (
     !decoded ||
     decoded.typ !== "credential" ||
@@ -126,18 +179,21 @@ const secondsSince = (date, now) => (now - new Date(date).getTime()) / 1000;
 
 /**
  * Exchange a credential for an access token.
- * Returns { token, credential? } (credential only when it was rotated or
- * refreshed) or null when the caller must start a new anonymous user.
+ * Returns { token, tokenId, userId, credential? } (credential only when it was
+ * rotated or refreshed; tokenId and userId are for the issuance log and are
+ * not part of the response body) or null when the caller must start a new
+ * anonymous user.
  */
 async function exchangeCredential(sql, credential, now = Date.now()) {
   const claims = await verifyCredential(credential);
   if (!claims) return null;
   const userId = claims.sub;
 
+  // Guest rows only: a staff (Cognito) row never gets a user-tier token.
   const rows = await sql`
     SELECT credential_version, credential_rotated_at
     FROM users
-    WHERE id = ${userId}
+    WHERE id = ${userId} AND identity_source = 'guest'
   `;
   if (rows.length === 0) return null; // user deleted
   let current = rows[0].credential_version;
@@ -148,7 +204,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     // TODO(after <deploy>+30d): drop the legacy branch; by then no credential
     // without iss/aud can still be valid (CREDENTIAL_LIFETIME).
     if (ageSeconds < ROTATE_AFTER_SECONDS && !claims.legacy) {
-      return { token: await issueAccessToken(userId) };
+      return boundAccessToken(userId);
     }
     // Rotate. The version guard makes concurrent exchanges rotate only once.
     const rotated = await sql`
@@ -160,7 +216,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     `;
     if (rotated.length === 1) {
       return {
-        token: await issueAccessToken(userId),
+        ...(await boundAccessToken(userId)),
         credential: await issueUserCredential(userId, rotated[0].credential_version),
       };
     }
@@ -168,7 +224,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     const latest = await sql`
       SELECT credential_version, credential_rotated_at
       FROM users
-      WHERE id = ${userId}
+      WHERE id = ${userId} AND identity_source = 'guest'
     `;
     if (latest.length === 0) return null;
     current = latest[0].credential_version;
@@ -183,7 +239,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
     // Concurrent exchange right after a rotation (another tab). Only a
     // short-lived access token: a superseded credential is never upgraded to
     // the current one, and the other tab already stored the replacement.
-    return { token: await issueAccessToken(userId) };
+    return boundAccessToken(userId);
   }
 
   // Superseded (or unknown) version: refuse it. Nothing is revoked here,
@@ -198,6 +254,7 @@ async function exchangeCredential(sql, credential, now = Date.now()) {
 module.exports = {
   issueUserCredential,
   issueAccessToken,
+  issueAccessTokenWithId,
   exchangeCredential,
   ROTATE_AFTER_SECONDS,
   ROTATION_GRACE_SECONDS,

@@ -37,7 +37,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from helpers import crud, embeddings
+from helpers import crud
+from kc_shared import embeddings
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

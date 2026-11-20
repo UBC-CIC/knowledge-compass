@@ -24,7 +24,6 @@ JOURNEY_CATALOG: JourneyCatalog = DEFAULT_CATALOG
 # ------------------------------------------------------------------
 
 HAIKU_ARN = None
-SONNET_ARN = None
 
 REGION = os.getenv("REGION", "ca-central-1")
 LLM_REGION = os.getenv("LLM_REGION", "us-west-2")
@@ -42,15 +41,46 @@ ROUTING_MODE = "fixed"                    # "fixed" (exchange count only) | "dyn
 # "guideline" = answer only from uploaded guideline documents.
 PROMPT_MODE = "standard"
 GUIDELINE_OUTLINE = []                    # [{document_id, file_name, section_key, label}]
+# Missed-load default for the per-message cap. A container that has not read
+# system_settings yet must not allow more than this. Keep in sync with the
+# public GET fallback (systemMessagesHandler.js), the admin GET fallback
+# (adminHandler.js), websocket/messageLimit.js, and the chat UI default.
 MAX_CHARACTERS_PER_USER_MESSAGE = 2000
 MAX_CHARACTERS_PER_DAY = 10000            # characters one user can send per UTC day (migration 034)
 MAX_MESSAGES_PER_DAY_GLOBAL = 5000        # messages all public users together can send per UTC day (migration 036)
 MAX_CHARACTERS_PER_AI_MESSAGE = 5000
 
+# Code-level ceilings on the admin-configurable limits above. load_config caps
+# the system_settings values at these, so a value written straight to the
+# database (or saved before these ceilings existed) cannot raise a limit past
+# them. Keep in sync with the save validation in handlers/adminHandler.js, the
+# public read in handlers/systemMessagesHandler.js, websocket/messageLimit.js,
+# and frontend/src/lib/assistantSettings.ts.
+LIMIT_CEILINGS = {
+    'max_messages_per_day': 100,
+    'max_characters_per_user_message': 4000,
+    'max_characters_per_day': 20000,
+    'max_messages_per_day_global': 20000,
+    'max_characters_per_ai_message': 10000,
+}
+
+
+def _bounded_limit(settings, key, current):
+    """
+    The setting `key` from `settings`, capped at LIMIT_CEILINGS[key]. A missing
+    or non-positive-integer value keeps `current`.
+    """
+    value = settings.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return current
+    ceiling = LIMIT_CEILINGS[key]
+    if value > ceiling:
+        logger.warning("system_settings.%s is above its ceiling; using %d", key, ceiling)
+        return ceiling
+    return value
+
 # Bedrock Configuration
 MAX_TOKENS = 4000
-TEMPERATURE = 0.15
-TOP_P = 0.5
 
 # Intervention Thresholds
 SUPPORT_SCORE_THRESHOLD = 0.25
@@ -109,8 +139,9 @@ Follow Inclusion Canada's preferred language: use person-first disability langua
 """.strip()
 
 # Detective and suggestion bases are the plain, admin-editable text published
-# by migration 027: no placeholders and no references to prompt blocks. The
-# app adds those itself (code-owned constants below; helpers/logic.py).
+# by migration 043 (027 published the previous plain text). No placeholders
+# and no references to prompt blocks. The app adds those itself
+# (code-owned constants below; helpers/logic.py).
 DETECTIVE_PHASE_PROMPT = """
 Ask exactly ONE warm, focused question. Acknowledge what the parent said first.
 
@@ -121,9 +152,11 @@ Rights/concept signals (can appear in any journey):
   "personal care," "medication," "appeal," "lawyer," "legal,"
   "inclusive education," "what is PDA"
 
-STEP 2 — UNDERSTAND WHERE THEY ARE by asking the questions listed for the
-family's journey (in order, if unknown). If the journey is not clear yet, ask
-the question that best tells the journeys apart.
+STEP 2 — UNDERSTAND WHERE THEY ARE. Ask until the situation is clear. When a
+journey lists situations from its uploaded guides, ask the one question that
+best tells those situations apart. When a journey still lists its own questions,
+ask those in order. If the journey is not clear yet, ask the question that best
+tells the journeys apart.
 
 STRICT RULES:
 - ONE question only per turn. Never list multiple questions.
@@ -134,6 +167,11 @@ STRICT RULES:
 """.strip()
 
 SUGGESTION_PHASE_PROMPT = """
+When this turn includes an uploaded guide section, follow that one section.
+Use its steps, order and wording. Do not add steps that are not in that section
+or in a supporting library source you cite. If the section says to ask something
+first, ask that. Cite the section and every library source you used.
+
 If the conversation spans multiple situations, address the most pressing need
 first and note the other briefly as a follow-up.
 
@@ -183,19 +221,55 @@ CROSS-CUTTING RESPONSE PRINCIPLES
 
 DETECTIVE_STATUS = "CURRENT STATUS: Exchange {exchange_count}.\n{readiness_note}"
 
+# Topic scope (F13 option A). Added after the admin Boundaries text by
+# guardrails_block_text(), so an admin prompt edit cannot remove it.
+SCOPE_RULE = """
+SCOPE:
+- Help only with a child's education and schooling in Canada: school exclusion, reduced schedules, transitions, planning, disability supports and accommodations, and working with schools and school systems.
+- These are always in scope, even when they are hard to talk about: harm to the child, restraint or seclusion, abuse or assault, a child's thoughts of suicide or self-harm, behaviour incidents, the family's city or province, and worries about legal options. Respond with care, keep the details the family shared (such as their city, province and the child's age), give general information and suggest where to find the right help, and keep following the other boundaries (never give legal advice).
+- If a request is clearly unrelated, such as writing code, recipes, essays or stories, or acting as a general assistant, kindly say in a sentence or two that you can only help with a child's schooling and invite the family to share what is happening at school.
+- If the family wants to contact or meet with the school, help them prepare with tips only: what to include, a calm and collaborative tone, questions to ask and how to organise their points. Do not write the email, letter or message for them, even as a sample or outline to copy; the family writes it in their own words.
+- A request that mentions the child but asks you to do the child's schoolwork or another unrelated task, such as "write my son a homework program", is still unrelated. Gently suggest the supports the child's school can offer, such as asking the teacher or school team about homework help or accommodations.
+""".strip()
+
+
+def guardrails_block_text() -> str:
+    """Admin Boundaries text, then the code-owned SCOPE_RULE (F13 option A)."""
+    parts = (GUARDRAILS, SCOPE_RULE)
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
+
+# Plain wording for acronyms. Added after the admin language guidelines by
+# language_guidelines_block_text(), so an admin prompt edit cannot remove it.
+ACRONYM_RULE = """
+ACRONYMS:
+- Many families don't know education acronyms, so write the full words instead. For example, write "individual education plan", not "IEP"; "educational assistant", not "EA"; "individual program plan", not "IPP"; "United Nations Convention on the Rights of Persons with Disabilities", not "CRPD".
+- This applies to every acronym and short form, including ones that appear in the sources, the guides or the family's own message.
+- If the family used the acronym themselves, you may add it once in brackets after the full words, for example "individual education plan (IEP)". Never use the acronym on its own.
+""".strip()
+
+
+def language_guidelines_block_text() -> str:
+    """Admin language guidelines, then the code-owned ACRONYM_RULE."""
+    parts = (LANGUAGE_GUIDELINES, ACRONYM_RULE)
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
 DETECTIVE_JOURNEY_GUIDE = (
-    "Use the journeys listed in the <journeys> block below to identify the family's journey, "
-    "and ask that journey's questions in order. If the journey is not clear yet, ask the "
-    "question that best tells the journeys apart."
+    "Use the journeys listed in the <journeys> block below to identify the family's journey. "
+    "When a journey lists situations from its uploaded guides, ask one question that tells "
+    "those situations apart. Otherwise ask that journey's questions in order. If the journey "
+    "is not clear yet, ask the question that best tells the journeys apart."
 )
 
 DETECTIVE_FOCUS_RULE = "If a <focus> block is provided, aim your question at that missing information."
 
 SUGGESTION_JOURNEYS_PREFACE = (
     "The <journeys> block below lists only the journeys and situations that apply to this "
-    "conversation. Review the full conversation history, identify the situation that best "
-    "fits, and follow its steps. A <routing_hint> block may suggest a primary and secondary "
-    "situation; treat it as a hint, the conversation is authoritative."
+    "conversation. When a <guide_sections> block is present, follow the one section that "
+    "best fits and do not add steps that are not in it. Cite that section and any library "
+    "source you used. Otherwise follow the steps in the <journeys> block. A <routing_hint> "
+    "block may suggest a primary and secondary situation; treat it as a hint, the "
+    "conversation is authoritative."
 )
 
 OUTPUT_FORMAT_DETECTIVE = """
@@ -327,7 +401,7 @@ next_need: understand the school's reason and expected duration
 """.strip()
 
 WELCOME_MESSAGE = """
-Hello, I'm here to help you navigate support that is available to you from Inclusion Canada. Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone. Type in information about what's happening. Is there something happening with your child's schooling right now?
+Hello, I'm here to help you navigate support that is available to you. Type in information about what's happening.
 """.strip()
 
 
@@ -342,10 +416,10 @@ def load_config(db_connection):
     """
     global _CONFIG_LOADED_AT, JOURNEY_CATALOG
     global MIN_EXCHANGES_BEFORE_ANSWER, ROUTING_MODE, OUTPUT_FORMAT_PARTIAL
-    global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_DAY, MAX_MESSAGES_PER_DAY_GLOBAL, MAX_CHARACTERS_PER_AI_MESSAGE, TEMPERATURE, TOP_P, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
+    global MAX_MESSAGES_PER_DAY, MIN_EXCHANGES_BEFORE_SUGGEST, MAX_CHARACTERS_PER_USER_MESSAGE, MAX_CHARACTERS_PER_DAY, MAX_MESSAGES_PER_DAY_GLOBAL, MAX_CHARACTERS_PER_AI_MESSAGE, SUPPORT_SCORE_THRESHOLD, SCOPE_ALIGNMENT_SCORE_THRESHOLD, GROUNDED_THRESHOLD, PARTIALLY_GROUNDED_THRESHOLD
     global GUARDRAILS, ROLE, LANGUAGE_GUIDELINES, DETECTIVE_PHASE_PROMPT, SUGGESTION_PHASE_PROMPT
     global OUTPUT_FORMAT_DETECTIVE, OUTPUT_FORMAT_SUGGESTION, WELCOME_MESSAGE
-    global HAIKU_ARN, SONNET_ARN
+    global HAIKU_ARN
     global GUARDRAIL_ID, GUARDRAIL_VERSION
     global PROMPT_MODE, GUIDELINE_OUTLINE
 
@@ -364,16 +438,6 @@ def load_config(db_connection):
         except Exception as e:
             raise RuntimeError(f"Failed to fetch SSM parameter {ssm_param}: {e}")
 
-    if not SONNET_ARN:
-        ssm_param = os.environ.get("SONNET_ARN")
-        if not ssm_param:
-            raise RuntimeError("Missing environment variable for SONNET_ARN")
-        ssm = boto3.client("ssm")
-        try:
-            SONNET_ARN = ssm.get_parameter(Name=ssm_param)["Parameter"]["Value"]
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch SSM parameter {ssm_param}: {e}")
-
     if not GUARDRAIL_ID: 
         raise RuntimeError(
             "Missing required environment variables: GUARDRAIL_ID"
@@ -389,16 +453,14 @@ def load_config(db_connection):
     # 1. Update System Settings
     settings = data.get('settings', {})
     if settings:
-        MAX_MESSAGES_PER_DAY = settings.get('max_messages_per_day', MAX_MESSAGES_PER_DAY)
+        MAX_MESSAGES_PER_DAY = _bounded_limit(settings, 'max_messages_per_day', MAX_MESSAGES_PER_DAY)
         MIN_EXCHANGES_BEFORE_SUGGEST = settings.get('min_messages_before_suggest', MIN_EXCHANGES_BEFORE_SUGGEST)
         MIN_EXCHANGES_BEFORE_ANSWER = settings.get('min_exchanges_before_answer', MIN_EXCHANGES_BEFORE_ANSWER)
         ROUTING_MODE = settings.get('routing_mode', ROUTING_MODE)
-        MAX_CHARACTERS_PER_USER_MESSAGE = settings.get('max_characters_per_user_message', MAX_CHARACTERS_PER_USER_MESSAGE)
-        MAX_CHARACTERS_PER_DAY = settings.get('max_characters_per_day', MAX_CHARACTERS_PER_DAY)
-        MAX_MESSAGES_PER_DAY_GLOBAL = settings.get('max_messages_per_day_global', MAX_MESSAGES_PER_DAY_GLOBAL)
-        MAX_CHARACTERS_PER_AI_MESSAGE = settings.get('max_characters_per_ai_message', MAX_CHARACTERS_PER_AI_MESSAGE)
-        TEMPERATURE = settings.get('temperature', TEMPERATURE)
-        TOP_P = settings.get('top_p', TOP_P)
+        MAX_CHARACTERS_PER_USER_MESSAGE = _bounded_limit(settings, 'max_characters_per_user_message', MAX_CHARACTERS_PER_USER_MESSAGE)
+        MAX_CHARACTERS_PER_DAY = _bounded_limit(settings, 'max_characters_per_day', MAX_CHARACTERS_PER_DAY)
+        MAX_MESSAGES_PER_DAY_GLOBAL = _bounded_limit(settings, 'max_messages_per_day_global', MAX_MESSAGES_PER_DAY_GLOBAL)
+        MAX_CHARACTERS_PER_AI_MESSAGE = _bounded_limit(settings, 'max_characters_per_ai_message', MAX_CHARACTERS_PER_AI_MESSAGE)
         SUPPORT_SCORE_THRESHOLD = settings.get('support_score_threshold', SUPPORT_SCORE_THRESHOLD)
         SCOPE_ALIGNMENT_SCORE_THRESHOLD = settings.get('scope_alignment_score_threshold', SCOPE_ALIGNMENT_SCORE_THRESHOLD)
         GROUNDED_THRESHOLD = settings.get('grounded_threshold', GROUNDED_THRESHOLD)
@@ -443,20 +505,14 @@ PROMPT_MODES = ("standard", "guideline")
 
 def resolve_prompt_mode(global_mode: str, override: Optional[str] = None) -> str:
     """
-    The prompt mode for one chat turn. This is the single resolution point:
-    chat.py asks here instead of reading PROMPT_MODE directly.
+    One chat path. Journey documents supply covered situations and typed
+    journey text covers the rest. The old standard/guideline switch, including
+    chat_sessions.prompt_mode_override, no longer selects a pipeline.
 
-    override is chat_sessions.prompt_mode_override (migration 035), which only
-    a verified evaluation-harness tag can set; None means "use the global
-    guideline_config.prompt_mode". The globals are never changed per request,
-    so a warm container cannot carry one session's mode into the next.
-
-    When standard and guideline modes are merged into a dual mode, replace the
-    body of this function (and the override column) rather than the callers.
+    The arguments are kept so older callers still import this function.
     """
-    if override in PROMPT_MODES:
-        return override
-    return global_mode if global_mode in PROMPT_MODES else "standard"
+    del global_mode, override
+    return "standard"
 
 
 def apply_guideline_config(guideline: dict) -> None:

@@ -4,7 +4,15 @@ Cutover lock for the ingestion entry points.
 While an embedding-space cutover runs (helpers/cutover.py) the pointer row
 `embedding_active_space` carries `cutover_locked = true`. Every admin route that can
 start ingestion calls `reject_if_locked` first and answers 409 CUTOVER_LOCKED, so no
-writer targets the old space after the activation job has decided it is idle.
+writer targets the old space after the activation job has decided it is idle. That
+includes the guideline routes (helpers/guideline_admin.py). The Transcribe-completion
+event has no route: it defers its run instead of launching it
+(helpers/video_transcription.py).
+
+`hold=True` reads the pointer row FOR SHARE. A caller that records its work in the same
+transaction (a guideline document set to 'processing', an ingestion run set to
+'running') makes the cutover's lock UPDATE wait for that commit, so wait_idle is sure
+to see the work. Such a caller must commit or roll back before it returns.
 
 The lock can never stay set forever: a lock older than LOCK_TTL_SECONDS counts as
 released (and is logged), so a crashed activation job is not a permanent outage. The
@@ -22,7 +30,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -50,10 +58,11 @@ def _rollback_quietly(connection) -> None:
         pass
 
 
-def lock_state(connection) -> Dict[str, Any]:
+def lock_state(connection, hold: bool = False) -> Dict[str, Any]:
     """
     {"locked": bool, "expired": bool, "locked_at": datetime|None, "job_id": str|None}.
     `locked` is True only for a lock inside its TTL. A missing table reads as unlocked.
+    `hold` keeps a share lock on the pointer row until the caller's transaction ends.
     """
     try:
         with connection.cursor() as cursor:
@@ -66,7 +75,7 @@ def lock_state(connection) -> Dict[str, Any]:
                         AND cutover_locked_at < now() - make_interval(secs => %s)) AS expired
                 FROM embedding_active_space
                 WHERE id = 1
-                """,
+                """ + (" FOR SHARE" if hold else ""),
                 (LOCK_TTL_SECONDS,),
             )
             row = cursor.fetchone()
@@ -86,13 +95,13 @@ def lock_state(connection) -> Dict[str, Any]:
     return {"locked": not expired, "expired": expired, "locked_at": row[1], "job_id": row[2]}
 
 
-def is_locked(connection) -> bool:
-    return lock_state(connection)["locked"]
+def is_locked(connection, hold: bool = False) -> bool:
+    return lock_state(connection, hold)["locked"]
 
 
-def reject_if_locked(event, connection) -> Optional[dict]:
+def reject_if_locked(event, connection, hold: bool = False) -> Optional[dict]:
     """A 409 CUTOVER_LOCKED API response while a cutover holds the lock, else None."""
-    if not is_locked(connection):
+    if not is_locked(connection, hold):
         return None
     return {
         "statusCode": 409,

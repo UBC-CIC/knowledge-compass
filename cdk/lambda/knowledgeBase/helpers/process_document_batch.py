@@ -66,15 +66,18 @@ import logging
 import os
 import re
 import time
+import zipfile
 
 import boto3
 from docx import Document as DocxDocument
 
-from helpers import embeddings
+from kc_shared import embeddings
+from helpers.admin_audit import actor_from_event, with_actor
 from helpers.csv_links import start_link_phase
 from helpers.embedding_space import resolve_active_space
 from helpers.pdf_text import TextractPending, extract_pdf
 from helpers.upload_identity import source_url_for
+from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -99,6 +102,14 @@ _MAX_WORDS_PER_CHUNK = 300
 _CSV_MIN_GROUP_WORDS = 100
 _CSV_AVG_EXTRA_WORDS = 100
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+# Size ceilings, checked before anything is parsed (finding f-5f6320bb). The
+# admin UI refuses files over 50 MB, but the presigned PUT cannot, so the
+# worker enforces it. A DOCX is a zip that python-docx inflates in memory, so
+# its expanded size is bounded too (the Lambda has 1 GB).
+MAX_SOURCE_FILE_BYTES = 50 * 1024 * 1024
+MAX_DOCX_EXPANDED_BYTES = 200 * 1024 * 1024
+MAX_DOCX_XML_PART_BYTES = 50 * 1024 * 1024
 
 # A run isn't started with less time than this left in the invocation (enough
 # for a short OCR wait plus pdf_text.RESERVE_SECONDS of chunking/embedding);
@@ -261,7 +272,32 @@ def _is_pdf(file_name: str) -> bool:
     return (file_name or "").lower().endswith(".pdf")
 
 
+def _read_source_object(bucket: str, key: str) -> bytes:
+    """The uploaded file's bytes, refusing anything over MAX_SOURCE_FILE_BYTES."""
+    too_large = RuntimeError("File is larger than 50 MB. Upload a smaller file.")
+    obj = s3_client.get_object(Bucket=bucket, Key=key)
+    if (obj.get("ContentLength") or 0) > MAX_SOURCE_FILE_BYTES:
+        raise too_large
+    raw_bytes = obj["Body"].read(MAX_SOURCE_FILE_BYTES + 1)
+    if len(raw_bytes) > MAX_SOURCE_FILE_BYTES:
+        raise too_large
+    return raw_bytes
+
+
+def _check_docx_expansion(raw_bytes: bytes) -> None:
+    """Refuse a DOCX whose parts inflate past the memory budget (zip bomb)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            parts = archive.infolist()
+    except zipfile.BadZipFile as e:
+        raise RuntimeError("Could not read this DOCX file.") from e
+    if (sum(p.file_size for p in parts) > MAX_DOCX_EXPANDED_BYTES
+            or any(p.filename.endswith(".xml") and p.file_size > MAX_DOCX_XML_PART_BYTES for p in parts)):
+        raise RuntimeError("This DOCX file expands to too much data to index. Upload a smaller file.")
+
+
 def _extract_docx_text(raw_bytes: bytes) -> str:
+    _check_docx_expansion(raw_bytes)
     doc = DocxDocument(io.BytesIO(raw_bytes))
     return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
@@ -429,21 +465,34 @@ def _fail_runs(connection, run_ids: list, error_message: str):
 
 
 def _upsert_source(connection, *, url: str, name: str, metadata: dict | None = None) -> str:
+    """
+    Insert or refresh an uploaded document/csv/markdown source.
+
+    On url conflict, only an existing document row is updated. A crawled page
+    or other type that already holds the url is left unchanged and this raises,
+    so its chunks are not replaced.
+    """
     with connection.cursor() as cursor:
         cursor.execute(
             """
             INSERT INTO sources (name, url, source_type, metadata)
             VALUES (%s, %s, 'document', %s::jsonb)
             ON CONFLICT (url) DO UPDATE SET
-              name        = EXCLUDED.name,
-              source_type = EXCLUDED.source_type,
-              metadata    = EXCLUDED.metadata,
-              updated_at  = now()
+              name       = EXCLUDED.name,
+              metadata   = EXCLUDED.metadata,
+              updated_at = now()
+            WHERE sources.source_type = 'document'::source_type
             RETURNING id
             """,
             (name, url, json.dumps(metadata or {})),
         )
-        return str(cursor.fetchone()[0])
+        row = cursor.fetchone()
+        if not row:
+            raise RuntimeError(
+                "source URL is already stored as a non-document source; "
+                "refusing to replace its chunks"
+            )
+        return str(row[0])
 
 
 def _chunk_metadata(chunk: dict) -> dict:
@@ -665,7 +714,7 @@ def write_chunks(connection, source_id: str, chunks: list, space=None) -> dict:
     return write_chunk_sets(connection, [(source_id, chunks)], space=space)
 
 
-def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> dict:
+def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict, actor=None) -> dict:
     """Links never fail the CSV run: a link-phase error is recorded on the run instead."""
     try:
         return start_link_phase(
@@ -674,6 +723,7 @@ def _start_link_phase(connection, run: dict, raw_bytes: bytes, counts: dict) -> 
             raw_bytes=raw_bytes,
             chunks_upserted=counts["written"],
             chunks_deleted=counts["deleted"],
+            actor=actor,
         )
     except Exception as e:  # noqa: BLE001
         connection.rollback()
@@ -688,7 +738,7 @@ def _load_companion_metadata(meta: dict) -> dict:
     if not bucket or not key:
         return {}
     try:
-        raw = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        raw = _read_source_object(bucket, key)
         return json.loads(raw.decode("utf-8", errors="replace"))
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not read companion metadata s3://%s/%s: %s", bucket, key, e)
@@ -719,7 +769,9 @@ def trigger_document_batch(event, connection, sync_session_id: str) -> dict:
         lambda_client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
             InvocationType="Event",
-            Payload=json.dumps({"task": "process_document_batch", "sync_session_id": sync_session_id}).encode("utf-8"),
+            Payload=worker_payload(
+                with_actor({"task": "process_document_batch", "sync_session_id": sync_session_id}, event)
+            ),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to invoke document batch worker: %s", e, exc_info=True)
@@ -730,13 +782,17 @@ def trigger_document_batch(event, connection, sync_session_id: str) -> dict:
     return {"started": True, "queued_count": len(queued), "run_ids": run_ids, "sync_session_id": sync_session_id}
 
 
-def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
+def trigger_uploaded_document(connection, ingestion_run_id: str, actor=None) -> dict:
     """
     Immediately mark a single freshly-staged document ingestion_runs row
     'running' and fire the async chunk+embed worker, so a single-document
     upload starts embedding right away instead of waiting for an admin to
     click Sync (mirrors how video auto-starts transcription).
+    `actor` (helpers/admin_audit.py) is the originating admin, logged by main.py.
     """
+    payload = {"task": "process_document_batch"}
+    if actor is not None:
+        payload["actor"] = actor
     if not LAMBDA_FUNCTION_NAME:
         logger.error("LAMBDA_FUNCTION_NAME not set; cannot start document ingestion")
         return {"started": False, "reason": "document ingestion is not configured (missing LAMBDA_FUNCTION_NAME)"}
@@ -748,7 +804,7 @@ def trigger_uploaded_document(connection, ingestion_run_id: str) -> dict:
         lambda_client.invoke(
             FunctionName=LAMBDA_FUNCTION_NAME,
             InvocationType="Event",
-            Payload=json.dumps({"task": "process_document_batch"}).encode("utf-8"),
+            Payload=worker_payload(payload),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to invoke document batch worker: %s", e, exc_info=True)
@@ -791,18 +847,22 @@ def _no_text_error(pdf) -> str:
     return message
 
 
-def _continue_later(connection, runs: list, continuation: int) -> list:
+def _continue_later(connection, runs: list, continuation: int, actor=None) -> list:
     """
     Hand runs this invocation had no time for to a fresh one. Returns the ids
     of runs failed instead (continuation limit reached, or the invoke failed).
+    `actor` (the originating admin, if known) is forwarded to the next invocation.
     """
     run_ids = [run["ingestion_run_id"] for run in runs]
     if continuation < _MAX_CONTINUATIONS and LAMBDA_FUNCTION_NAME:
+        payload = {"task": "process_document_batch", "continuation": continuation + 1}
+        if actor is not None:
+            payload["actor"] = actor
         try:
             lambda_client.invoke(
                 FunctionName=LAMBDA_FUNCTION_NAME,
                 InvocationType="Event",
-                Payload=json.dumps({"task": "process_document_batch", "continuation": continuation + 1}).encode("utf-8"),
+                Payload=worker_payload(payload),
             )
             logger.info("Document worker continues in a new invocation: %d run(s) left", len(run_ids))
             return []
@@ -825,6 +885,7 @@ def process_document_batch(event, connection, context=None) -> dict:
         return {"processed": 0, "reason": "no running document runs found"}
 
     continuation = int((event or {}).get("continuation") or 0)
+    actor = actor_from_event(event)
     can_continue = continuation < _MAX_CONTINUATIONS
     time_left = _time_left(context)
     completed, failed, deferred = [], [], []
@@ -857,7 +918,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             if not bucket or not key:
                 raise RuntimeError("Missing s3_bucket/s3_key on data source metadata")
 
-            raw_bytes = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            raw_bytes = _read_source_object(bucket, key)
 
             if ds_type == "markdown":
                 chunks = _chunk_markdown(raw_bytes.decode("utf-8", errors="replace"))
@@ -907,7 +968,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             if ds_type == "csv":
                 # The CSV's own rows stay indexed whatever happens to its links.
                 connection.commit()
-                link = _start_link_phase(connection, run, raw_bytes, counts)
+                link = _start_link_phase(connection, run, raw_bytes, counts, actor=actor)
                 if link["deferred"]:
                     completed.append(run_id)
                     logger.info("Document run %s: link crawl started; it will finalize the run", run_id)
@@ -940,7 +1001,7 @@ def process_document_batch(event, connection, context=None) -> dict:
             failed.append(run_id)
 
     if deferred:
-        failed.extend(_continue_later(connection, deferred, continuation))
+        failed.extend(_continue_later(connection, deferred, continuation, actor=actor))
     return {
         "processed": len(runs) - len(deferred),
         "completed": completed,

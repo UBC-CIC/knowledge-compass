@@ -1,9 +1,10 @@
 import os
 import json
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 import boto3
 import logging
 import psycopg2
+from botocore.httpsession import get_cert_path
 
 from helpers.stage_data_sources import stage_data_sources
 from helpers.stage_data_sources_batch import stage_data_sources_batch
@@ -23,6 +24,8 @@ from helpers.embedding_admin import handle_embedding_request, is_embedding_route
 from helpers.reembed_space import reembed_space
 from helpers.validate_space import validate_space
 from helpers.cutover import activate_space, rollback_space
+from helpers.admin_audit import log_worker_task
+from helpers.worker_envelope import INVOKE_TOKEN_FIELD, verify_worker_event
 
 # Set up logging
 logger = logging.getLogger()
@@ -63,6 +66,9 @@ _EMBEDDING_TASKS = {
     "rollback_space": rollback_space,
 }
 
+# Event sources forwarded by transcribeRelay (cdk/lib/ingestion-stack.ts).
+_EVENTBRIDGE_SOURCES = ("aws.transcribe", "aws.ecs")
+
 def _connect_to_db():
     global connection
     if connection is None or connection.closed:
@@ -73,8 +79,11 @@ def _connect_to_db():
                 'user': db_secret["username"],
                 'password': db_secret["password"],
                 'host': RDS_PROXY_ENDPOINT,
-                'port': db_secret["port"], 
-                'sslmode': 'require'
+                'port': db_secret["port"],
+                # verify-full against botocore's public CA bundle: RDS Proxy
+                # serves an ACM (Amazon Trust Services) certificate.
+                'sslmode': 'verify-full',
+                'sslrootcert': get_cert_path(True),
             }
             connection = psycopg2.connect(**connection_params)
             logger.info("Connected to the database!")
@@ -116,11 +125,42 @@ def _parse_body(event):
 
     return body
 
+def _event_summary(event):
+    """Allow-listed routing fields only. Never the whole event: headers carry
+    the admin's Authorization ID token, task payloads carry the worker invoke
+    token, and bodies carry uploaded content."""
+    request_context = event.get("requestContext") or {}
+    return {
+        "resource": event.get("resource"),
+        "httpMethod": event.get("httpMethod"),
+        "requestId": request_context.get("requestId"),
+        "source": event.get("source"),
+        "detailType": event.get("detail-type"),
+        "task": str(event["task"])[:64] if event.get("task") else None,
+    }
+
+
 def handler(event, context=None):
-    safe_event = {k: v for k, v in event.items() if k != 'body'}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event))
+    logger.info("Event: %s", json.dumps(_event_summary(event), default=str))
     
     try:
+        # Self-invoked {task} payloads rewrite the corpus and move the live
+        # embedding pointer. The IAM self-invoke grant alone is not trusted:
+        # every task must carry the invoke token (helpers/worker_envelope.py),
+        # a generated Secrets Manager value only this function's role can read.
+        # Checked before any dispatch or logging of the payload's actor.
+        # EventBridge events (aws.transcribe / aws.ecs) need the same token
+        # (finding f-9d5748bc): transcribeRelay, the only target of those
+        # rules, adds it, so a direct invoke cannot forge one. Their handlers
+        # still take only the job name / task ARN and read state back from AWS.
+        if ("task" in event or event.get("source") in _EVENTBRIDGE_SOURCES) and not verify_worker_event(event):
+            logger.warning(
+                "Rejected worker invocation without a valid invoke token: task=%s source=%s",
+                str(event.get("task"))[:64],
+                str(event.get("source"))[:64],
+            )
+            return {"error": "Unauthorized worker invocation"}
+
         if event.get("source") == "aws.transcribe":
             try:
                 connection = _connect_to_db()
@@ -136,6 +176,12 @@ def handler(event, context=None):
                 logger.error(f"Error connecting to database: {e}")
                 return _response(event, 500, {"error": "Error connecting to database"})
             return handle_ecs_task_stopped(event, connection)
+
+        # Every self-invoked {task} branch below is logged once with the
+        # originating admin from the payload's "actor" (helpers/admin_audit.py;
+        # null when the task was not started by an admin request).
+        if event.get("task"):
+            log_worker_task(event)
 
         # Async self-invocation path (pgvector document ingestion; see
         # helpers/process_document_batch.py). Fired via lambda_client.invoke(...,
@@ -183,27 +229,18 @@ def handler(event, context=None):
             return _EMBEDDING_TASKS[event["task"]](event=event, connection=connection, context=context)
 
         # API Gateway path
+        # Every route on this function is /admin/* behind adminAuthorizer
+        # (OpenAPI_Swagger_Definition.yaml). Defence in depth, mirroring
+        # adminHandler.js: a route left without the authorizer, or any other
+        # event shape, is still denied here.
+        role = ((event.get("requestContext") or {}).get("authorizer") or {}).get("role")
+        if role != "admin":
+            logger.warning("Rejected non-admin request: resource=%s", event.get("resource"))
+            return _response(event, 403, {"error": "Admin access required"})
+
         method = event.get("httpMethod", "")
         resource = event.get("resource", "")
         path = event.get("path", "")
-
-        # Route: GET /admin/generate-presigned-url
-        if method == "GET" and (
-            resource == "/admin/generate-presigned-url"
-            or path.endswith("/admin/generate-presigned-url")
-        ):
-            return generate_presigned_url(event=event)
-
-        # Route: POST /admin/generate-presigned-urls/batch
-        if method == "POST" and (
-            resource == "/admin/generate-presigned-urls/batch"
-            or path.endswith("/admin/generate-presigned-urls/batch")
-        ):
-            try:
-                body = _parse_body(event)
-            except ValueError as e:
-                return _response(event, 400, {"error": str(e)})
-            return generate_presigned_urls_batch(event=event, body=body)
 
         try:
             body = _parse_body(event)
@@ -216,6 +253,22 @@ def handler(event, context=None):
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
             return _response(event, 500, {"error": "Error connecting to database"})
+
+        # Route: GET /admin/generate-presigned-url
+        # Issued keys are recorded per admin (helpers/upload_issuance.py), so
+        # the presign routes need the database too.
+        if method == "GET" and (
+            resource == "/admin/generate-presigned-url"
+            or path.endswith("/admin/generate-presigned-url")
+        ):
+            return generate_presigned_url(event=event, connection=connection)
+
+        # Route: POST /admin/generate-presigned-urls/batch
+        if method == "POST" and (
+            resource == "/admin/generate-presigned-urls/batch"
+            or path.endswith("/admin/generate-presigned-urls/batch")
+        ):
+            return generate_presigned_urls_batch(event=event, body=body, connection=connection)
 
         # Routes: /admin/guideline* (guideline mode; helpers/guideline_admin.py)
         if is_guideline_route(event):

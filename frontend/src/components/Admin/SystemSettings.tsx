@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { RotateCcw, Save } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +12,7 @@ import { changedBy } from "@/lib/promptVersions";
 import {
   DEVELOPER_KEYS,
   FLOW_PRESETS,
+  LIMIT_CEILINGS,
   RECOMMENDED,
   URGENT_NOTE,
   changedSettings,
@@ -24,7 +24,9 @@ import {
   type SettingKey,
 } from "@/lib/assistantSettings";
 import { API_ENDPOINT } from "@/lib/api";
+import { isPublicChatPausedBySwitch } from "@/lib/publicChatSwitch";
 import ServiceStatusCard from "@/components/Admin/ServiceStatusCard";
+import SettingsSection from "@/components/Admin/SettingsSection";
 import {
   NORMAL_SERVICE_STATE,
   serviceStateFromSettings,
@@ -105,28 +107,34 @@ function NumberField({
   );
 }
 
-function SettingsCard({ title, description, children }: { title: string; description: ReactNode; children: ReactNode }) {
-  return (
-    <Card className="rounded-[13px] border-foreground/12 shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-[18.5px] font-bold tracking-[-0.01em]">{title}</CardTitle>
-        <CardDescription className="text-[13.5px] leading-relaxed">{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">{children}</CardContent>
-    </Card>
-  );
-}
+const DAILY_KEYS: SettingKey[] = [
+  "max_messages_per_day",
+  "max_characters_per_user_message",
+  "max_characters_per_day",
+  "max_messages_per_day_global",
+];
+
+const DEVELOPER_FIELD_KEYS: SettingKey[] = [
+  ...DEVELOPER_KEYS,
+  "min_messages_before_suggest",
+  "min_exchanges_before_answer",
+];
 
 export default function SystemSettings() {
   const [saved, setSaved] = useState<AssistantSettings>(RECOMMENDED);
   const [draft, setDraft] = useState<AssistantSettings>(RECOMMENDED);
   const [meta, setMeta] = useState<Meta>({});
   const [service, setService] = useState<ServiceState>(NORMAL_SERVICE_STATE);
+  // The AWS break-glass switch, read through the public chat route (lib/publicChatSwitch).
+  const [breakGlassPaused, setBreakGlassPaused] = useState(false);
   const [loading, setLoading] = useState(!isDemoMode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showDeveloper, setShowDeveloper] = useDeveloperSettings();
+  const [openDaily, setOpenDaily] = useState(true);
+  const [openFlow, setOpenFlow] = useState(false);
+  const [openDeveloper, setOpenDeveloper] = useState(false);
   const flowGroupId = useId();
 
   const load = useCallback(async () => {
@@ -137,6 +145,8 @@ export default function SystemSettings() {
       setService(demoService);
       return;
     }
+    // Runs alongside the settings read; it never fails (false when unknown).
+    isPublicChatPausedBySwitch().then(setBreakGlassPaused);
     try {
       setLoading(true);
       const data = await settingsFetch<Partial<Record<SettingKey, unknown>> & ServiceFields & Meta>();
@@ -169,6 +179,16 @@ export default function SystemSettings() {
   const hasErrors = Object.keys(errors).length > 0;
   const preset = flowPresetFor(draft);
   const resetNeeded = DEVELOPER_KEYS.some((k) => draft[k] !== RECOMMENDED[k]);
+  const dailyHasError = DAILY_KEYS.some((key) => errors[key]);
+  const developerHasError = DEVELOPER_FIELD_KEYS.some((key) => errors[key]);
+
+  useEffect(() => {
+    if (dailyHasError) setOpenDaily(true);
+  }, [dailyHasError]);
+
+  useEffect(() => {
+    if (developerHasError) setOpenDeveloper(true);
+  }, [developerHasError]);
 
   const save = async () => {
     if (!changes || hasErrors) return;
@@ -268,39 +288,18 @@ export default function SystemSettings() {
         </div>
       ) : (
         <>
-          <ServiceStatusCard saved={service} onSave={saveService} />
-
-          <SettingsCard
-            title="How the conversation flows"
-            description="When the assistant stops asking questions and starts giving guidance."
+          <SettingsSection
+            title="Daily limits"
+            description="Keeps the assistant available and costs predictable."
+            open={openDaily}
+            onOpenChange={setOpenDaily}
           >
-            <fieldset className="space-y-2.5">
-              <legend className="sr-only">How the conversation flows</legend>
-              {FLOW_PRESETS.map((p) =>
-                presetOption(p.id, p.title, p.body, preset === p.id, () => {
-                  setNotice(null);
-                  setDraft((d) => ({ ...d, ...p.values }));
-                })
-              )}
-              {preset === null
-                ? presetOption(
-                    "custom",
-                    "Custom (set by a developer)",
-                    "These numbers don't match a preset. Pick one above to replace them, or adjust them under developer settings.",
-                    true
-                  )
-                : null}
-            </fieldset>
-            <p className="text-[13px] leading-normal text-foreground/70">{URGENT_NOTE}</p>
-          </SettingsCard>
-
-          <SettingsCard title="Daily limits" description="Keeps the assistant available and costs predictable.">
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               <NumberField
                 label="Messages a person can send per day"
                 help="Counted over 24 hours for each person."
                 min={1}
-                max={1000}
+                max={LIMIT_CEILINGS.max_messages_per_day}
                 value={draft.max_messages_per_day}
                 onChange={set("max_messages_per_day")}
                 error={errors.max_messages_per_day}
@@ -309,6 +308,7 @@ export default function SystemSettings() {
                 label="Longest message a person can send"
                 help="In characters. About 2,000 characters is a long paragraph or two."
                 min={1}
+                max={LIMIT_CEILINGS.max_characters_per_user_message}
                 value={draft.max_characters_per_user_message}
                 onChange={set("max_characters_per_user_message")}
                 error={errors.max_characters_per_user_message}
@@ -317,7 +317,7 @@ export default function SystemSettings() {
                 label="Characters a person can send per day"
                 help="Counted for each person from midnight UTC. 10,000 characters is about five long messages."
                 min={1}
-                max={1000000}
+                max={LIMIT_CEILINGS.max_characters_per_day}
                 value={draft.max_characters_per_day}
                 onChange={set("max_characters_per_day")}
                 error={errors.max_characters_per_day}
@@ -326,31 +326,20 @@ export default function SystemSettings() {
                 label="Messages everyone can send per day, in total"
                 help="Counted across all families from midnight UTC. When it's reached, the assistant pauses for everyone until the next day."
                 min={1}
-                max={1000000}
+                max={LIMIT_CEILINGS.max_messages_per_day_global}
                 value={draft.max_messages_per_day_global}
                 onChange={set("max_messages_per_day_global")}
                 error={errors.max_messages_per_day_global}
               />
             </div>
-          </SettingsCard>
-
-          <SettingsCard
-            title="Answer checks"
-            description="After each answer, the app checks it against the sources it used. If the support looks weak, families see a short warning under the answer. These checks never change what the assistant says."
-          >
-            {showDeveloper ? (
-              <p className="text-[13px] text-foreground/70">The check thresholds are under developer settings below.</p>
-            ) : (
-              <p className="text-[13px] text-foreground/70">
-                Thresholds are managed by a developer. Turn on developer settings to see them.
-              </p>
-            )}
-          </SettingsCard>
+          </SettingsSection>
 
           {showDeveloper ? (
-            <SettingsCard
+            <SettingsSection
               title="Developer settings"
               description="Model and check values. Changes here affect every conversation, so test in a dev environment first."
+              open={openDeveloper}
+              onOpenChange={setOpenDeveloper}
             >
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                 <div className="space-y-2">
@@ -367,7 +356,7 @@ export default function SystemSettings() {
                       <SelectItem value="dynamic">Dynamic: as soon as the situation is clear</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-normal text-foreground/70">The flow presets above set this for you.</p>
+                  <p className="text-xs leading-normal text-foreground/70">The conversation flow presets set this for you.</p>
                 </div>
                 <NumberField
                   label={draft.routing_mode === "dynamic" ? "Give guidance by message" : "Give guidance after message"}
@@ -397,70 +386,62 @@ export default function SystemSettings() {
                   label="Longest reply (characters)"
                   help="Caps reply length to avoid runaway outputs."
                   min={1}
+                  max={LIMIT_CEILINGS.max_characters_per_ai_message}
                   value={draft.max_characters_per_ai_message}
                   onChange={set("max_characters_per_ai_message")}
                   error={errors.max_characters_per_ai_message}
                 />
-                <NumberField
-                  label="Temperature"
-                  help={`Lower is more consistent. Recommended ${RECOMMENDED.temperature}.`}
-                  step="0.01"
-                  min={0}
-                  max={2}
-                  value={draft.temperature}
-                  onChange={set("temperature")}
-                  error={errors.temperature}
-                />
-                <NumberField
-                  label="Top P"
-                  help={`How strictly the model sticks to likely words. Recommended ${RECOMMENDED.top_p}.`}
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.top_p}
-                  onChange={set("top_p")}
-                  error={errors.top_p}
-                />
-                <NumberField
-                  label="Evidence match threshold"
-                  help="Minimum score for an answer to count as supported by its sources."
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.support_score_threshold}
-                  onChange={set("support_score_threshold")}
-                  error={errors.support_score_threshold}
-                />
-                <NumberField
-                  label="Topic match threshold"
-                  help="Minimum score for the sources to be about what the family asked."
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.scope_alignment_score_threshold}
-                  onChange={set("scope_alignment_score_threshold")}
-                  error={errors.scope_alignment_score_threshold}
-                />
-                <NumberField
-                  label="Reliable answer threshold"
-                  help="Final score for an answer to show no warning."
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.grounded_threshold}
-                  onChange={set("grounded_threshold")}
-                  error={errors.grounded_threshold}
-                />
-                <NumberField
-                  label="Partial warning threshold"
-                  help="Final score for a 'partly supported' warning instead of a stronger one."
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={draft.partially_grounded_threshold}
-                  onChange={set("partially_grounded_threshold")}
-                  error={errors.partially_grounded_threshold}
-                />
+              </div>
+              <div className="space-y-5 border-t border-foreground/10 pt-5">
+                <div>
+                  <h3 className="text-[16px] font-bold tracking-[-0.01em]">Answer checks</h3>
+                  <p className="mt-1 text-[13.5px] leading-relaxed text-muted-foreground">
+                    After each answer, the app checks it against the sources it used. If the support looks weak, families
+                    see a short warning under the answer. These checks never change what the assistant says.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <NumberField
+                    label="Evidence match threshold"
+                    help="Minimum score for an answer to count as supported by its sources."
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={draft.support_score_threshold}
+                    onChange={set("support_score_threshold")}
+                    error={errors.support_score_threshold}
+                  />
+                  <NumberField
+                    label="Topic match threshold"
+                    help="Minimum score for the sources to be about what the family asked."
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={draft.scope_alignment_score_threshold}
+                    onChange={set("scope_alignment_score_threshold")}
+                    error={errors.scope_alignment_score_threshold}
+                  />
+                  <NumberField
+                    label="Reliable answer threshold"
+                    help="Final score for an answer to show no warning."
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={draft.grounded_threshold}
+                    onChange={set("grounded_threshold")}
+                    error={errors.grounded_threshold}
+                  />
+                  <NumberField
+                    label="Partial warning threshold"
+                    help="Final score for a 'partly supported' warning instead of a stronger one."
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={draft.partially_grounded_threshold}
+                    onChange={set("partially_grounded_threshold")}
+                    error={errors.partially_grounded_threshold}
+                  />
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-3 border-t border-foreground/10 pt-4">
                 <Button type="button" variant="outline" onClick={resetDeveloper} disabled={!resetNeeded}>
@@ -471,8 +452,34 @@ export default function SystemSettings() {
                   Resets the values in this card only. Save to apply.
                 </span>
               </div>
-            </SettingsCard>
+            </SettingsSection>
           ) : null}
+
+          <SettingsSection
+            title="How the conversation flows"
+            description="When the assistant stops asking questions and starts giving guidance."
+            open={openFlow}
+            onOpenChange={setOpenFlow}
+          >
+            <fieldset className="space-y-2.5">
+              <legend className="sr-only">How the conversation flows</legend>
+              {FLOW_PRESETS.map((p) =>
+                presetOption(p.id, p.title, p.body, preset === p.id, () => {
+                  setNotice(null);
+                  setDraft((d) => ({ ...d, ...p.values }));
+                })
+              )}
+              {preset === null
+                ? presetOption(
+                    "custom",
+                    "Custom (set by a developer)",
+                    "These numbers don't match a preset. Pick one above to replace them, or adjust them in developer settings.",
+                    true
+                  )
+                : null}
+            </fieldset>
+            <p className="text-[13px] leading-normal text-foreground/70">{URGENT_NOTE}</p>
+          </SettingsSection>
 
           <div className="flex flex-wrap items-center justify-between gap-4 rounded-[13px] border border-foreground/12 bg-white px-5 py-3.5 shadow-sm">
             <div className="text-[13px] text-foreground/75" aria-live="polite">
@@ -494,6 +501,8 @@ export default function SystemSettings() {
               </Button>
             </div>
           </div>
+
+          <ServiceStatusCard saved={service} onSave={saveService} breakGlassPaused={breakGlassPaused} />
 
           <div>
             <DeveloperSwitch checked={showDeveloper} onChange={setShowDeveloper} />

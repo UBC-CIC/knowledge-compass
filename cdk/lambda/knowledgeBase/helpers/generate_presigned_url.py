@@ -1,7 +1,10 @@
 import os
 import json
-from helpers.cors import get_cors_headers
+import secrets
+from helpers.admin_user import admin_sub_from_request
+from kc_shared.cors import get_cors_headers
 from helpers.upload_identity import sanitize_file_name
+from helpers.upload_issuance import record_issued_uploads
 import time
 import boto3
 import logging
@@ -149,7 +152,13 @@ def _infer_upload_prefix(file_name: str, content_type: str) -> str:
 
     return "uploads/files"
 
-def generate_presigned_url(event):
+def generate_presigned_url(event, connection):
+    # The key is recorded against this sub; staging only accepts it from the
+    # same admin (helpers/upload_issuance.py).
+    admin_sub = admin_sub_from_request(event)
+    if not admin_sub:
+        return _response(event, 401, {"error": "Unauthorized"})
+
     query_params = event.get("queryStringParameters") or {}
 
     file_name = query_params.get("file_name")
@@ -187,7 +196,9 @@ def generate_presigned_url(event):
 
     prefix = _infer_upload_prefix(file_name, content_type)
     timestamp = int(time.time())
-    key = f"{prefix}/{timestamp}_{file_name}"
+    # The random part keeps two uploads of the same name in the same second
+    # from sharing a key (each key is issued to one admin).
+    key = f"{prefix}/{timestamp}_{secrets.token_hex(8)}_{file_name}"
     expires_in = 3600 if prefix in ("uploads/video", "uploads/document") else 300
 
     try:
@@ -201,6 +212,8 @@ def generate_presigned_url(event):
             ExpiresIn=expires_in,
             HttpMethod="PUT",
         )
+        record_issued_uploads(connection, issued_to=admin_sub, bucket=BUCKET, keys=[key])
+        connection.commit()
 
         return _response(
             event,
@@ -213,5 +226,6 @@ def generate_presigned_url(event):
         )
 
     except Exception as e:
+        connection.rollback()
         logger.error("Error generating presigned URL: %s", e, exc_info=True)
         return _response(event, 500, {"error": "Failed to generate presigned URL"})

@@ -12,8 +12,8 @@ const { validateUUID } = require("./validation.js");
 
 /** The verified caller's user id, or null for anonymous tokens. */
 function callerUserId(event) {
-  const userId = event?.requestContext?.authorizer?.userId;
-  return typeof userId === "string" && validateUUID(userId).valid ? userId : null;
+  const check = validateUUID(event?.requestContext?.authorizer?.userId);
+  return check.valid ? check.value : null;
 }
 
 /**

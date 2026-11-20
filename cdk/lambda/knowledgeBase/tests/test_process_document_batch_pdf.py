@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 import _setup  # noqa: F401,E402  (path + env; see _setup.py)
+from _setup import TEST_INVOKE_TOKEN  # noqa: E402
 
 from helpers import process_document_batch as batch  # noqa: E402
 from helpers.pdf_text import PdfText, TextractPending  # noqa: E402
@@ -115,7 +116,8 @@ class DocumentPdfTests(unittest.TestCase):
         calls["finish"].assert_not_called()
         invoke = calls["invoke"].call_args.kwargs
         self.assertEqual(invoke["InvocationType"], "Event")
-        self.assertEqual(json.loads(invoke["Payload"]), {"task": "process_document_batch", "continuation": 1})
+        self.assertEqual(json.loads(invoke["Payload"]),
+                         {"task": "process_document_batch", "continuation": 1, "invoke_token": TEST_INVOKE_TOKEN})
 
     def test_no_run_starts_without_enough_time(self):
         result, calls = self.process([document_run()], seconds=batch._MIN_SECONDS_TO_START_RUN - 1)

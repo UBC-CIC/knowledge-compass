@@ -8,10 +8,21 @@ discard every citation, so integers are extracted individually.
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _CITED_BLOCK = re.compile(r"<cited_indices>(.*?)</cited_indices>", re.DOTALL | re.IGNORECASE)
 _INTEGER = re.compile(r"\d+")
+# On turns with journey guides, guide sections are labeled G1, G2, ... and
+# library sources keep plain numbers. A letter right before the token (for
+# example "XG2") does not count as a label.
+_CITED_REF = re.compile(r"(?<![a-z0-9])(g?)(\d+)", re.IGNORECASE)
+
+# Source type of journey guide sections (guideline_retrieval.GUIDELINE_SOURCE_TYPE).
+_GUIDE_SOURCE_TYPE = "guideline"
+# A linked URL ends at whitespace, closing markdown or quote characters, or
+# sentence punctuation followed by whitespace or the end of the text. This
+# keeps "https://x.org/a" from matching inside "https://x.org/ab".
+_URL_END = re.compile(r"$|[\s)\]>\"'`*|<]|[.,;:!?](?:$|[\s)\]*])")
 
 
 def parse_cited_indices(response_text: str) -> Optional[List[int]]:
@@ -35,6 +46,197 @@ def select_cited_sources(sources: List[Dict[str, Any]], cited_indices: List[int]
     """Sources referenced by 1-based `cited_indices`, in retrieval order; out-of-range indices are ignored."""
     cited = set(cited_indices)
     return [source for position, source in enumerate(sources, 1) if position in cited]
+
+
+def parse_cited_refs(response_text: str) -> Optional[Tuple[List[int], List[int]]]:
+    """
+    (guide_numbers, library_numbers) from the first <cited_indices> block on a
+    turn with journey guides: "G2" is guide section 2, a plain "2" is library
+    source 2. Each list keeps order without duplicates. Returns None when no
+    block is present, like parse_cited_indices.
+    """
+    match = _CITED_BLOCK.search(response_text or "")
+    if not match:
+        return None
+    guides: List[int] = []
+    library: List[int] = []
+    for prefix, token in _CITED_REF.findall(match.group(1)):
+        target = guides if prefix else library
+        value = int(token)
+        if value not in target:
+            target.append(value)
+    return guides, library
+
+
+def _source_link_values(source: Dict[str, Any]) -> List[str]:
+    values = []
+    for key in ("url", "uri"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in values:
+            values.append(value.strip())
+    return values
+
+
+def _first_link_position(text: str, value: str) -> int:
+    """Index of the first occurrence of `value` in `text` that ends at a URL boundary, or -1."""
+    start = text.find(value)
+    while start != -1:
+        if _URL_END.match(text, start + len(value)):
+            return start
+        start = text.find(value, start + 1)
+    return -1
+
+
+def select_linked_sources(sources: List[Dict[str, Any]], answer_text: str) -> List[Dict[str, Any]]:
+    """
+    Retrieved library sources whose url or uri appears in `answer_text`, in the
+    order they are first linked. Guide sections are never returned. Pass the
+    answer before strip_internal_links: the prompt shows internal values
+    (s3://, upload://, csvlink://) that are removed from the visible text.
+    Only one source is returned per linked value.
+    """
+    if not answer_text:
+        return []
+    found = []
+    for position, source in enumerate(sources):
+        if source.get("source_type") == _GUIDE_SOURCE_TYPE:
+            continue
+        hits = [
+            index for index in (_first_link_position(answer_text, value) for value in _source_link_values(source))
+            if index != -1
+        ]
+        if hits:
+            found.append((min(hits), position, source))
+    found.sort(key=lambda item: (item[0], item[1]))
+    linked: List[Dict[str, Any]] = []
+    seen_values = set()
+    for _, _, source in found:
+        values = set(_source_link_values(source))
+        if values & seen_values:
+            continue
+        seen_values |= values
+        linked.append(source)
+    return linked
+
+
+# http(s) links in an answer, for strip_unverified_links. Inline links and
+# images, autolinks, and bare URLs are matched in one left-to-right pass so a
+# URL inside a link is never also read as a bare URL.
+_HTTP_LINK = re.compile(
+    r'(?P<inline>!?\[(?P<text>[^\]]*)\]\(\s*<?(?P<inline_url>https?://[^)\s>]*)>?(?:\s+"[^"]*")?\s*\))'
+    r"|<(?P<auto_url>https?://[^>\s]*)>"
+    r"|(?<![a-z0-9])(?P<bare_url>https?://[^\s<>\[\]\"'`|*]+)",
+    re.IGNORECASE,
+)
+# Reference definition, e.g. "[1]: https://x.org/page "Title"".
+_HTTP_REFERENCE_DEF = re.compile(
+    r"^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*<?(https?://[^\s>]*)>?"
+    r"(?:[ \t]+(?:\"[^\"\n]*\"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Use of a reference: [text][label], [label][] or [label].
+_REFERENCE_USE = re.compile(r"\[([^\]\n]+)\](?:\[([^\]\n]*)\])?(?![(:])")
+_BARE_URL_TRAILING = ".,;:!?"
+
+
+def _label_key(label: str) -> str:
+    return " ".join(label.split()).casefold()
+
+
+def _trim_bare_url(url: str) -> Tuple[str, str]:
+    """(url, trailing text) with sentence punctuation and an unbalanced ')' moved out of the URL."""
+    end = len(url)
+    while end:
+        last = url[end - 1]
+        if last in _BARE_URL_TRAILING or (last == ")" and url.count("(", 0, end) < url.count(")", 0, end)):
+            end -= 1
+        else:
+            break
+    return url[:end], url[end:]
+
+
+def _verified_link_values(sources: List[Dict[str, Any]]) -> set:
+    """http(s) url/uri values of the retrieved library sources (guide sections excluded)."""
+    values = set()
+    for source in sources:
+        if source.get("source_type") == _GUIDE_SOURCE_TYPE:
+            continue
+        for value in _source_link_values(source):
+            if value.lower().startswith(("http://", "https://")):
+                values.add(value)
+    return values
+
+
+def strip_unverified_links(text: str, sources: List[Dict[str, Any]]) -> Tuple[str, int]:
+    """
+    (text, removed) where every http(s) link whose URL is not exactly the url
+    or uri of a retrieved library source is made plain: inline links keep
+    their text, reference definitions, autolinks and bare URLs are dropped,
+    and uses of a dropped reference keep their text. Guide-section URLs are
+    never verified, matching select_linked_sources, which never gives a guide
+    a card. Non-http links are left for strip_internal_links.
+    """
+    if not text or "http" not in text.lower():
+        return text, 0
+    allowed = _verified_link_values(sources)
+    removed = 0
+    removed_labels = set()
+
+    def definition(match):
+        nonlocal removed
+        if match.group(2) in allowed:
+            return match.group(0)
+        removed += 1
+        removed_labels.add(_label_key(match.group(1)))
+        return ""
+
+    def reference_use(match):
+        label = match.group(2) or match.group(1)
+        return match.group(1) if _label_key(label) in removed_labels else match.group(0)
+
+    def link(match):
+        nonlocal removed
+        if match.group("inline") is not None:
+            if match.group("inline_url") in allowed:
+                return match.group(0)
+            removed += 1
+            # The kept text may itself be a URL.
+            return _HTTP_LINK.sub(link, match.group("text"))
+        if match.group("auto_url") is not None:
+            if match.group("auto_url") in allowed:
+                return match.group(0)
+            removed += 1
+            return ""
+        url, tail = _trim_bare_url(match.group("bare_url"))
+        if url in allowed:
+            return match.group(0)
+        removed += 1
+        return tail
+
+    text = _HTTP_REFERENCE_DEF.sub(definition, text)
+    if removed_labels:
+        text = _REFERENCE_USE.sub(reference_use, text)
+    text = _HTTP_LINK.sub(link, text)
+    return text, removed
+
+
+def merge_cited_and_linked(
+    cited: List[Dict[str, Any]], linked: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Cited sources first, then linked ones not already cited (same object or same url/uri)."""
+    merged = list(cited)
+    seen_values = set()
+    for source in cited:
+        seen_values |= set(_source_link_values(source))
+    for source in linked:
+        if any(source is chosen for chosen in merged):
+            continue
+        values = set(_source_link_values(source))
+        if values & seen_values:
+            continue
+        seen_values |= values
+        merged.append(source)
+    return merged
 
 
 # Internal storage identities (s3://, upload://, csvlink://, ...) must never

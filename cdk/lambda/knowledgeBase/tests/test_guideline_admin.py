@@ -6,6 +6,7 @@ S3, Lambda and the DB are mocked. Run from knowledgeBase:
 """
 
 import _setup  # noqa: F401  (must be first)
+from _setup import TEST_INVOKE_TOKEN
 
 import json
 import os
@@ -153,7 +154,8 @@ class RegisterDocumentTest(AdminTestBase):
         insert = conn.sql_with("INSERT INTO guideline_documents")[0]
         self.assertEqual(insert[1][2], "admin@example.org")
         payload = json.loads(self.lam.invoke.call_args.kwargs["Payload"])
-        self.assertEqual(payload, {"task": "process_guideline_document", "document_id": DOC_ID})
+        self.assertEqual(payload, {"task": "process_guideline_document", "document_id": DOC_ID,
+                                   "invoke_token": TEST_INVOKE_TOKEN})
         self.assertEqual(self.lam.invoke.call_args.kwargs["InvocationType"], "Event")
 
     def test_rejects_keys_outside_prefix(self):
@@ -242,15 +244,35 @@ class WordAndPdfTest(AdminTestBase):
             self.assertEqual(response["statusCode"], 400, name)
 
 
+def _audited(event, sub="admin-sub"):
+    """`event` with the admin's Cognito sub, as the admin authorizer sends it."""
+    event["requestContext"]["authorizer"]["userId"] = sub
+    return event
+
+
 class DeleteDocumentTest(AdminTestBase):
-    def test_deletes_source_and_document(self):
+    def _delete(self, sub="admin-sub"):
         conn = FakeConnection({"SELECT s3_key FROM guideline_documents": [(KEY,)]})
-        response, conn = self.call(_event("DELETE", f"/admin/guideline/documents/{DOC_ID}",
-                                          resource="/admin/guideline/documents/{id}", path_id=DOC_ID), conn=conn)
+        event = _event("DELETE", f"/admin/guideline/documents/{DOC_ID}",
+                       resource="/admin/guideline/documents/{id}", path_id=DOC_ID)
+        return self.call(_audited(event) if sub else event, conn=conn)
+
+    def test_deletes_source_and_document(self):
+        response, conn = self._delete()
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("DELETE FROM sources")[0][1], (f"guideline://doc/{DOC_ID}",))
         self.assertTrue(conn.sql_with("DELETE FROM guideline_documents"))
         self.s3.delete_object.assert_called_once_with(Bucket="bucket", Key=KEY)
+
+    def test_delete_is_audited_and_refused_without_an_admin_identity(self):
+        response, conn = self._delete()
+        audit = conn.sql_with("INSERT INTO admin_audit")
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0][1][:3], ("admin-sub", "admin@example.org", "guideline_document.delete"))
+
+        response, conn = self._delete(sub=None)
+        self.assertEqual(response["statusCode"], 401)
+        self.assertFalse(conn.sql_with("DELETE FROM"))
 
     def test_invalid_id(self):
         response, _ = self.call(_event("DELETE", "/admin/guideline/documents/abc",
@@ -269,7 +291,8 @@ class RenameSectionTest(AdminTestBase):
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("UPDATE guideline_sections")[0][1][0], "Sent home early")
         payload = json.loads(self.lam.invoke.call_args.kwargs["Payload"])
-        self.assertEqual(payload, {"task": "reembed_guideline_sections", "section_ids": [SECTION_ID]})
+        self.assertEqual(payload, {"task": "reembed_guideline_sections", "section_ids": [SECTION_ID],
+                                   "invoke_token": TEST_INVOKE_TOKEN})
 
     def test_empty_label_resets(self):
         conn = FakeConnection({"UPDATE guideline_sections": [(SECTION_ID, "Auto")]})
@@ -283,12 +306,69 @@ class RenameSectionTest(AdminTestBase):
         self.lam.invoke.assert_not_called()
 
 
+# cutover_locked, cutover_locked_at, cutover_job_id, expired
+LOCKED_ROW = [(True, None, "job-1", False)]
+
+
+class CutoverLockTest(AdminTestBase):
+    """Uploads and renames embed, so they wait out a search-index cutover (409)."""
+
+    def assert_locked(self, response, conn, write_fragment):
+        self.assertEqual(response["statusCode"], 409)
+        self.assertEqual(_body(response)["code"], "CUTOVER_LOCKED")
+        self.assertFalse(conn.sql_with(write_fragment))
+        self.assertEqual(conn.commits, 0)
+        self.lam.invoke.assert_not_called()
+
+    def test_register_document_is_rejected_and_releases_the_row(self):
+        conn = FakeConnection({"FROM embedding_active_space": LOCKED_ROW,
+                               "INSERT INTO guideline_documents": [(DOC_ID,)]})
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md"}, conn)
+        self.assert_locked(response, conn, "INSERT INTO guideline_documents")
+        self.assertGreaterEqual(conn.rollbacks, 1)
+
+    def test_register_document_holds_the_pointer_row_until_its_commit(self):
+        conn = FakeConnection({"INSERT INTO guideline_documents": [(DOC_ID,)]})
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md"}, conn)
+        self.assertEqual(response["statusCode"], 202)
+        check = conn.sql_with("FROM embedding_active_space")
+        self.assertEqual(len(check), 1)
+        self.assertIn("FOR SHARE", check[0][0])
+        first_write = next(i for i, (sql, _) in enumerate(conn.executed) if "INSERT INTO guideline_documents" in sql)
+        self.assertLess(conn.executed.index(check[0]), first_write)
+
+    def test_unknown_journey_releases_the_row(self):
+        conn = FakeConnection()
+        response, conn = self.call(_event("POST", "/admin/guideline/documents"),
+                                   {"s3_key": KEY, "file_name": "guide.md",
+                                    "journey_id": "66666666-6666-4666-8666-666666666666"}, conn)
+        self.assertEqual(response["statusCode"], 404)
+        self.assertEqual(conn.rollbacks, 1)
+
+    def test_rename_section_is_rejected(self):
+        conn = FakeConnection({"FROM embedding_active_space": LOCKED_ROW,
+                               "UPDATE guideline_sections": [(SECTION_ID, "Auto")]})
+        event = _event("PATCH", f"/admin/guideline/sections/{SECTION_ID}",
+                       resource="/admin/guideline/sections/{id}", path_id=SECTION_ID)
+        response, conn = self.call(event, {"label": "New"}, conn)
+        self.assert_locked(response, conn, "UPDATE guideline_sections")
+
+
 class ModeTest(AdminTestBase):
     def test_valid_mode(self):
-        response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "guideline"})
+        response, conn = self.call(_audited(_event("PUT", "/admin/guideline/mode")), {"mode": "guideline"})
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(conn.sql_with("INSERT INTO guideline_config")[0][1], ("guideline", "admin@example.org"))
         self.assertEqual(conn.commits, 1)
+        # Audited in the same commit (finding f-c47d6990).
+        self.assertEqual(conn.sql_with("INSERT INTO admin_audit")[0][1][2], "guideline.mode_set")
+
+    def test_mode_change_without_an_admin_identity_is_refused(self):
+        response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "guideline"})
+        self.assertEqual(response["statusCode"], 401)
+        self.assertFalse(conn.sql_with("INSERT INTO guideline_config"))
 
     def test_invalid_mode(self):
         response, conn = self.call(_event("PUT", "/admin/guideline/mode"), {"mode": "other"})
@@ -300,13 +380,37 @@ class StateTest(AdminTestBase):
     def test_groups_sections_under_documents(self):
         conn = FakeConnection({
             "FROM guideline_config": [("guideline", "a@x.org", "2026-01-01")],
-            "FROM guideline_documents": [(DOC_ID, "guide.md", "ready", None, 1, "a@x.org", "t", "t")],
+            "FROM guideline_documents": [(DOC_ID, "guide.md", "ready", None, 1, "a@x.org", "t", "t", None)],
             "FROM guideline_sections": [(SECTION_ID, DOC_ID, "A > B", "A > B", "Auto", "Override", "Sum")],
         })
         response, _ = self.call(_event("GET", "/admin/guideline"), conn=conn)
         body = _body(response)
         self.assertEqual(body["mode"], "guideline")
         self.assertEqual(body["documents"][0]["sections"][0]["label"], "Override")
+        self.assertIsNone(body["documents"][0]["journey_id"])
+
+    def test_register_attaches_a_journey(self):
+        journey = "99999999-9999-9999-9999-999999999999"
+        conn = FakeConnection({
+            "FROM journeys WHERE id": [(1,)],
+            "INSERT INTO guideline_documents": [(DOC_ID,)],
+        })
+        response, conn = self.call(
+            _event("POST", "/admin/guideline/documents"),
+            {"s3_key": KEY, "file_name": "guide.md", "journey_id": journey},
+            conn,
+        )
+        self.assertEqual(response["statusCode"], 202)
+        self.assertEqual(conn.sql_with("INSERT INTO guideline_documents")[0][1][3], journey)
+
+    def test_unknown_journey_is_rejected(self):
+        response, conn = self.call(
+            _event("POST", "/admin/guideline/documents"),
+            {"s3_key": KEY, "file_name": "guide.md", "journey_id": DOC_ID},
+        )
+        self.assertEqual(response["statusCode"], 404)
+        self.lam.invoke.assert_not_called()
+        self.assertFalse(conn.sql_with("INSERT INTO guideline_documents"))
 
 
 if __name__ == "__main__":

@@ -8,12 +8,14 @@ No AWS access or database needed. Run from the knowledgeBase dir:
 
 import socket
 import unittest
+from unittest import mock
 
 import _setup  # noqa: F401,E402  (path + env; see _setup.py)
 
 from helpers.url_safety import (  # noqa: E402
     BlockedURL,
     InvalidURL,
+    check_public_url,
     is_public_ip,
     normalize_citation_url,
     normalize_url,
@@ -129,6 +131,42 @@ class ResolveTests(unittest.TestCase):
     def test_unresolvable(self):
         with self.assertRaises(OSError):
             resolve_public_addresses("nope.invalid", 443, fake_resolver({}))
+
+
+class CheckPublicUrlTests(unittest.TestCase):
+    resolver = staticmethod(fake_resolver({
+        "example.org": ["93.184.216.34"],
+        "internal.example": ["10.0.0.5"],
+    }))
+
+    def test_accepts_public_and_returns_normalized(self):
+        self.assertEqual(
+            check_public_url("  HTTPS://Example.org  ", resolver=self.resolver),
+            "https://example.org/",
+        )
+
+    def test_invalid_urls(self):
+        for url in ("file:///etc/passwd", "ftp://x", "javascript:alert(1)",
+                    "http://user:pass@example.com/", "http://example.com:22/", 123, None):
+            with self.subTest(url=url), self.assertRaises(InvalidURL):
+                check_public_url(url, resolver=self.resolver)
+
+    def test_blocked_urls(self):
+        for url in ("http://169.254.170.2/v2/credentials", "http://169.254.169.254/",
+                    "http://127.0.0.1/", "http://10.1.2.3/", "http://[::1]/",
+                    "https://internal.example/"):
+            with self.subTest(url=url), self.assertRaises(BlockedURL):
+                check_public_url(url, resolver=self.resolver)
+
+    def test_unknown_host(self):
+        with self.assertRaises(OSError):
+            check_public_url("https://nope.invalid/", resolver=self.resolver)
+
+    def test_default_resolver_looked_up_at_call_time(self):
+        with mock.patch("socket.getaddrinfo", self.resolver):
+            self.assertEqual(check_public_url("https://example.org/a"), "https://example.org/a")
+            with self.assertRaises(BlockedURL):
+                check_public_url("https://internal.example/")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,14 @@
  * must be valid and name the bound user, so freshness and revocation still
  * apply per frame. Text generation receives only the bound user id; a
  * frame-supplied user_id is checked against it and never forwarded.
+ * generate_text queries are truncated to system_settings.max_characters_per_user_message
+ * (messageLimit.js), which falls back to 2000 when that read misses.
+ *
+ * generate_text frames are rate limited per connection and per bound guest
+ * (fixed window, WS_GENERATE_RATE_LIMIT per WS_GENERATE_RATE_WINDOW_SECONDS)
+ * and per client IP (ipLimit.js, WS_IP_GENERATE_RATE_LIMIT) before any other
+ * work; over a limit the frame gets a RATE_LIMITED error event and nothing is
+ * invoked. A limiter fault fails closed. Pings are not counted.
  */
 
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
@@ -17,7 +25,11 @@ const {
   DeleteConnectionCommand,
 } = require("@aws-sdk/client-apigatewaymanagementapi");
 const { verifyAccessToken } = require("./accessToken.js");
-const { getConnectionUserId } = require("./connections.js");
+const {
+  getConnectionUserId, consumeGenerateAllowance, consumeUserGenerateAllowance, rateLimitConfig,
+} = require("./connections.js");
+const messageLimit = require("./messageLimit.js");
+const { consumeIpAllowance, ipRateLimitConfig } = require("./ipLimit.js");
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,7 +39,7 @@ const validateUUID = (value, fieldName = "id") => {
   return { valid: true };
 };
 
-const sanitizeString = (value, maxLength = 10000) => {
+const sanitizeString = (value, maxLength = messageLimit.DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE) => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed.slice(0, maxLength);
@@ -67,6 +79,7 @@ async function closeConnection(event) {
 const SESSION_EXPIRED_MESSAGE = "Your session has expired. Please refresh the page and try again.";
 const GENERIC_MESSAGE = "Sorry, something went wrong. Please try again.";
 const RECONNECT_MESSAGE = "Your connection was refreshed. Please send your message again.";
+const RATE_LIMITED_MESSAGE = "You're sending messages a little quickly. Please wait a moment, then try again.";
 
 exports.handler = async (event) => {
   const connectionId = event.requestContext.connectionId;
@@ -111,9 +124,30 @@ exports.handler = async (event) => {
     const { action, query, chat_session_id, user_id, token } = body;
 
     if (action === "generate_text") {
-      // Validate inputs before invoking text generation Lambda
-      const sanitizedQuery = sanitizeString(query, 10000);
-      if (!sanitizedQuery) {
+      // Count every generate_text frame (valid or not) before doing any work.
+      // All three windows must allow it: this socket's, the bound guest's across
+      // all of their sockets (so opening more connections buys no allowance),
+      // and the client IP's across every guest it holds (ipLimit.js), so
+      // minting more guests from one address buys none either.
+      let allowed;
+      try {
+        const limits = rateLimitConfig();
+        allowed =
+          (await consumeGenerateAllowance(connectionId, limits)) &&
+          (await consumeUserGenerateAllowance(boundUserId, limits)) &&
+          (await consumeIpAllowance(event, "generate", ipRateLimitConfig().generate));
+      } catch (err) {
+        console.error("WebSocket rate limit check failed", { connectionId, error: err?.name });
+        await sendErrorEvent(event, "Internal server error", GENERIC_MESSAGE);
+        return { statusCode: 500, body: JSON.stringify({ error: "Internal server error" }) };
+      }
+      if (!allowed) {
+        console.warn("WebSocket frame rejected: rate limited", { connectionId });
+        await sendErrorEvent(event, "RATE_LIMITED", RATE_LIMITED_MESSAGE);
+        return { statusCode: 429, body: JSON.stringify({ error: "RATE_LIMITED" }) };
+      }
+
+      if (typeof query !== "string" || query.trim().length === 0) {
         return { statusCode: 400, body: JSON.stringify({ error: "query is required and must be a non-empty string" }) };
       }
 
@@ -138,6 +172,15 @@ exports.handler = async (event) => {
         console.warn("WebSocket frame rejected: user_id differs from connection", { connectionId });
         await sendErrorEvent(event, "user_id does not match the session token", SESSION_EXPIRED_MESSAGE);
         return { statusCode: 403, body: JSON.stringify({ error: "user_id does not match the session token" }) };
+      }
+
+      // Truncate to the administrator's per-message cap (system_settings), not a
+      // hard-coded length. Read it only after the frame is authenticated. A
+      // missed read uses the conservative default.
+      const maxCharacters = await messageLimit.getMaxCharactersPerUserMessage();
+      const sanitizedQuery = sanitizeString(query, maxCharacters);
+      if (!sanitizedQuery) {
+        return { statusCode: 400, body: JSON.stringify({ error: "query is required and must be a non-empty string" }) };
       }
 
       // Invoke the text generation Lambda function. The bound user goes in

@@ -39,6 +39,16 @@ test("verifyAccessToken returns sub only for this deployment's user-bound access
   }
 });
 
+test("verifyAccessToken accepts the current and previous JWT keys, not a retired one", async (t) => {
+  t.after(withEnv());
+  const { mod } = loadModule("accessToken", {
+    jwtSecret: { jwtSecret: "rotated-secret", previousJwtSecret: "test-jwt-secret" },
+  });
+  assert.equal(await mod.verifyAccessToken(accessToken({}, "rotated-secret")), USER);
+  assert.equal(await mod.verifyAccessToken(accessToken()), USER); // signed with the previous key
+  assert.equal(await mod.verifyAccessToken(accessToken({}, "retired-secret")), null);
+});
+
 test("verifyAccessToken throws (server fault) when JWT_ISSUER is unset or the secret fetch fails", async (t) => {
   t.after(withEnv({ JWT_ISSUER: undefined }));
   const { mod } = loadModule("accessToken");
@@ -97,6 +107,7 @@ test("every connection-store call fails closed without CONNECTIONS_TABLE_NAME", 
     () => mod.putConnection("conn-1", USER),
     () => mod.getConnectionUserId("conn-1"),
     () => mod.deleteConnection("conn-1"),
+    () => mod.consumeGenerateAllowance("conn-1", mod.RATE_LIMIT_DEFAULTS),
   ]) {
     await assert.rejects(call(), /CONNECTIONS_TABLE_NAME is not configured/);
   }

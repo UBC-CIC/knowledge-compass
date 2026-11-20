@@ -7,6 +7,7 @@ import AdminDashboard from "./pages/Admin/AdminDashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { Amplify } from "aws-amplify";
 import { API_ENDPOINT } from "@/lib/api";
+import { restoreAdminTokenStorage } from "@/lib/adminTokenStorage";
 
 try {
   Amplify.configure({
@@ -25,6 +26,8 @@ try {
       },
     },
   });
+  // After configure, which resets the token store to localStorage.
+  restoreAdminTokenStorage();
 } catch (error) {
   console.warn("[App] Amplify configure skipped:", error);
 }

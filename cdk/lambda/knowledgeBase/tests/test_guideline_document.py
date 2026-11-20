@@ -88,7 +88,7 @@ class FakeConnection:
 
     def respond(self, sql, params):
         if "FROM guideline_documents WHERE id" in sql:
-            return [("doc-1", "guide.md", "uploads/guideline/abc.md")]
+            return [("doc-1", "guide.md", "uploads/guideline/abc.md", None)]
         if "FROM guideline_sections" in sql and "SELECT id::text, section_key" in sql:
             return self.existing
         if "INSERT INTO sources" in sql:
@@ -234,6 +234,37 @@ class ProcessDocumentTest(unittest.TestCase):
 
     def test_missing_document_id(self):
         self.assertIn("error", gd.process_guideline_document({}, FakeConnection()))
+
+    def test_repeated_situation_fails_and_names_the_other_file(self):
+        class ConflictConnection(FakeConnection):
+            def respond(self, sql, params):
+                if "d.status = 'ready'" in sql and "d.id <>" in sql:
+                    return [("Already uploaded.md", "Journey 1: School exclusion > Sent home early", "k")]
+                return super().respond(sql, params)
+
+        conn = ConflictConnection()
+        # Journey is set, so the check runs. The document's own rows are excluded by the query.
+        conn_respond = conn.respond
+
+        def respond(sql, params):
+            if "FROM guideline_documents WHERE id" in sql:
+                return [("doc-1", "guide.md", "uploads/guideline/abc.md", "journey-1")]
+            return conn_respond(sql, params)
+
+        conn.respond = respond
+        result, wc = self._run(conn, STRUCTURED)
+        self.assertEqual(result["status"], "failed")
+        error_params = [p for sql, p in conn.executed if "UPDATE guideline_documents" in sql][-1]
+        self.assertIn("Already uploaded.md", error_params[1])
+        self.assertIn("Sent home early", error_params[1])
+        wc.assert_not_called()
+
+    def test_replacing_a_file_may_keep_its_own_situations(self):
+        self.assertEqual(
+            gd.situation_identity({"heading_path": "Journey > Sent home early", "section_key": "x"}),
+            "sent home early",
+        )
+        self.assertIsNone(gd.find_situation_conflict(FakeConnection(), "doc-1", None, [{"heading_path": "A", "section_key": "A"}]))
 
 
 if __name__ == "__main__":

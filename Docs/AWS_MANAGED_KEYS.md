@@ -1,6 +1,6 @@
 # AWS Managed Keys Usage
 
-This document lists every place in the CDK infrastructure where an AWS managed key (rather than a customer-managed KMS key) is used for encryption, and describes exactly what code changes are required if you want to bring your own key (CMK).
+This document lists every place in the CDK infrastructure where an AWS managed key or an S3-managed key (SSE-S3), rather than a customer-managed KMS key, is used for encryption, and the code changes required to bring your own key (CMK).
 
 ---
 
@@ -46,66 +46,21 @@ this.dbInstance = new rds.DatabaseInstance(this, `${id}-database`, {
 
 ---
 
-## 2. OpenSearch Serverless Collection — `cdk/lib/knowledge-base-stack.ts`
+## 2. S3 Ingest Buckets — `cdk/lib/ingestion-stack.ts`
 
 **Current behaviour**
 
-The encryption security policy for the OpenSearch Serverless collection sets `AWSOwnedKey: true`, which means AWS encrypts the collection with an AWS-owned key that you cannot view, rotate, or audit independently.
+The ingest bucket (`${id}-IngestBucket`: uploaded files, Amazon Transcribe outputs, Textract staging copies) and its access-log bucket (`${id}-IngestAccessLogs`) are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`, S3-managed keys; no KMS key is involved).
 
 ```ts
-// cdk/lib/knowledge-base-stack.ts
-const encryptionPolicy = new opensearchserverless.CfnSecurityPolicy(this, "EncryptionPolicy", {
-  name: `${collectionName}-enc`,
-  type: "encryption",
-  policy: JSON.stringify({
-    Rules: [{ ResourceType: "collection", Resource: [`collection/${collectionName}`] }],
-    AWSOwnedKey: true, // uses AWS-owned key
-  }),
-});
-```
-
-**To use a CMK**
-
-1. Create a KMS key:
-   ```ts
-   import * as kms from "aws-cdk-lib/aws-kms";
-
-   const aossKey = new kms.Key(this, "AossEncryptionKey", {
-     enableKeyRotation: true,
-     description: "CMK for OpenSearch Serverless collection",
-   });
-   ```
-2. Replace `AWSOwnedKey: true` with `KmsARN` pointing to your key:
-   ```ts
-   policy: JSON.stringify({
-     Rules: [{ ResourceType: "collection", Resource: [`collection/${collectionName}`] }],
-     AWSOwnedKey: false,
-     KmsARN: aossKey.keyArn, // add this line, remove AWSOwnedKey: true
-   }),
-   ```
-3. Grant the Bedrock Knowledge Base role and the vector index manager role permission to use the key:
-   ```ts
-   aossKey.grantEncryptDecrypt(knowledgeBaseRole);
-   aossKey.grantEncryptDecrypt(vectorIndexManagerRole);
-   ```
-
----
-
-## 3. S3 Buckets — `cdk/lib/knowledge-base-stack.ts`
-
-**Current behaviour**
-
-Both `KnowledgeBaseBucket` and `KnowledgeBaseAccessLogsBucket` are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`), which uses the AWS managed key for S3 (`aws/s3`).
-
-```ts
-// cdk/lib/knowledge-base-stack.ts
-const accessLogsBucket = new s3.Bucket(this, "KnowledgeBaseAccessLogsBucket", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+// cdk/lib/ingestion-stack.ts
+const accessLogsBucket = new s3.Bucket(this, `${id}-IngestAccessLogs`, {
+  // no encryption property — defaults to SSE-S3
   ...
 });
 
-this.knowledgeBaseBucket = new s3.Bucket(this, "KnowledgeBaseBucket", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+this.ingestBucket = new s3.Bucket(this, `${id}-IngestBucket`, {
+  // no encryption property — defaults to SSE-S3
   ...
 });
 ```
@@ -116,47 +71,38 @@ this.knowledgeBaseBucket = new s3.Bucket(this, "KnowledgeBaseBucket", {
    ```ts
    import * as kms from "aws-cdk-lib/aws-kms";
 
-   const s3Key = new kms.Key(this, "KnowledgeBaseS3Key", {
+   const ingestKey = new kms.Key(this, "IngestS3Key", {
      enableKeyRotation: true,
-     description: "CMK for Knowledge Base S3 buckets",
+     description: "CMK for the ingest S3 buckets",
    });
    ```
-2. Add `encryption` and `encryptionKey` to both bucket definitions:
+2. Add `encryption` and `encryptionKey` to both bucket definitions. The access-log bucket receives logs from the S3 logging service, which cannot write to a bucket encrypted with a CMK, so keep it on SSE-S3 unless your policy requires otherwise:
    ```ts
-   const accessLogsBucket = new s3.Bucket(this, "KnowledgeBaseAccessLogsBucket", {
+   this.ingestBucket = new s3.Bucket(this, `${id}-IngestBucket`, {
      ...
      encryption: s3.BucketEncryption.KMS,
-     encryptionKey: s3Key,
-   });
-
-   this.knowledgeBaseBucket = new s3.Bucket(this, "KnowledgeBaseBucket", {
-     ...
-     encryption: s3.BucketEncryption.KMS,
-     encryptionKey: s3Key,
+     encryptionKey: ingestKey,
    });
    ```
-3. Grant the Bedrock Knowledge Base role permission to use the key (in addition to the existing `grantRead`):
-   ```ts
-   s3Key.grantEncryptDecrypt(knowledgeBaseRole);
-   ```
+3. The bucket's `grantRead`/`grantReadWrite` calls add the KMS permissions automatically for the roles they name: the crawler and transcriber task roles and the Amazon Transcribe data access role (`ingestion-stack.ts`), and `lambdaKnowledgeBase` through `grantBucketAccess` (`api-stack.ts`). Admin uploads use presigned URLs signed by `lambdaKnowledgeBase`, so they are covered by its grant. Amazon Textract reads PDFs with the caller's credentials, so it needs no separate grant.
 
 ---
 
-## 4. S3 Buckets — `cdk/lib/cicd-stack.ts`
+## 3. S3 Buckets — `cdk/lib/cicd-stack.ts`
 
 **Current behaviour**
 
-Both `PipelineArtifactBucket` and `ArtifactAccessLogs` are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`), which uses the AWS managed key for S3 (`aws/s3`).
+Both `PipelineArtifactBucket` and `ArtifactAccessLogs` are created without an `encryption` or `encryptionKey` property. CDK defaults to SSE-S3 (`AES256`, S3-managed keys; no KMS key is involved).
 
 ```ts
 // cdk/lib/cicd-stack.ts
 const artifactAccessLogsBucket = new s3.Bucket(this, "ArtifactAccessLogs", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 
 const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
-  // no encryption property — defaults to SSE-S3 (aws/s3)
+  // no encryption property — defaults to SSE-S3
   ...
 });
 ```
@@ -172,14 +118,8 @@ const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
      description: "CMK for CodePipeline artifact buckets",
    });
    ```
-2. Add `encryption` and `encryptionKey` to both bucket definitions:
+2. Add `encryption` and `encryptionKey` to the artifact bucket. `ArtifactAccessLogs` is the artifact bucket's server access-log target, which the S3 logging service cannot write to under a CMK, so keep it on SSE-S3 (as in section 2):
    ```ts
-   const artifactAccessLogsBucket = new s3.Bucket(this, "ArtifactAccessLogs", {
-     ...
-     encryption: s3.BucketEncryption.KMS,
-     encryptionKey: pipelineKey,
-   });
-
    const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
      ...
      encryption: s3.BucketEncryption.KMS,
@@ -194,7 +134,7 @@ const artifactBucket = new s3.Bucket(this, "PipelineArtifactBucket", {
 
 ---
 
-## 5. Secrets Manager Secrets — `cdk/lib/api-stack.ts` and `cdk/lib/database-stack.ts`
+## 4. Secrets Manager Secrets — `cdk/lib/api-stack.ts`, `cdk/lib/database-stack.ts` and `cdk/lib/eval-stack.ts`
 
 **Current behaviour**
 
@@ -206,11 +146,14 @@ The affected secrets are:
 |---|---|---|
 | Cognito credentials | `api-stack.ts` | `this.secret` (`${id}-KC_Cognito_Secrets`) |
 | JWT secret | `api-stack.ts` | `jwtSecret` (`${id}-KC-JWTSecret`) |
+| Knowledge base worker invoke token | `api-stack.ts` | `workerInvokeSecret` (`${id}-KC-WorkerInvokeSecret`) |
+| RDS admin credentials | `database-stack.ts` | generated by the `DatabaseInstance` (`this.dbInstance.secret`) |
 | RDS application user credentials | `database-stack.ts` | `this.secretPathUser` |
 | RDS table creator credentials | `database-stack.ts` | `this.secretPathTableCreator` |
+| Evaluation signing key (only with `enableEval`) | `eval-stack.ts` | `this.signingSecret` |
 
 ```ts
-// Example from api-stack.ts — same pattern applies to all four secrets
+// Example from api-stack.ts — same pattern applies to the other secrets
 this.secret = new secretsmanager.Secret(this, secretsName, {
   secretName: secretsName,
   // no encryptionKey — uses aws/secretsmanager managed key
@@ -237,21 +180,35 @@ this.secret = new secretsmanager.Secret(this, secretsName, {
      ...
    });
    ```
-   Repeat for `jwtSecret`, `this.secretPathUser`, and `this.secretPathTableCreator`.
+   For the RDS admin secret, pass `credentials: rds.Credentials.fromGeneratedSecret("<username>", { encryptionKey: secretsKey })` on the `DatabaseInstance`.
 3. Any IAM role that calls `secretsmanager:GetSecretValue` on these secrets will also need `kms:Decrypt` on the key. The CDK `grantRead` helper on a secret automatically adds the required KMS permissions when an `encryptionKey` is set, so existing `grantRead` calls do not need to change. For roles that use inline `PolicyStatement` instead of `grantRead`, add:
    ```ts
-   secretsKey.grantDecrypt(lambdaRole);
-   secretsKey.grantDecrypt(coglambdaRole);
+   // once per role that reads a secret through an inline statement
+   secretsKey.grantDecrypt(role);
    ```
+4. The database secrets rotate through `HostedRotation` (`database-stack.ts`). CDK passes the secret's `encryptionKey` to the hosted rotation function automatically, so no extra grant is needed there.
+
+---
+
+## 5. Other Resources on AWS Managed or Default Keys
+
+| Resource | File | Current encryption | To use a CMK |
+|---|---|---|---|
+| WebSocket connections table (DynamoDB) | `api-stack.ts` | `TableEncryption.AWS_MANAGED` (`aws/dynamodb`) | `encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED` + `encryptionKey` |
+| Evaluation results and access-log buckets (only with `enableEval`) | `eval-stack.ts` | `BucketEncryption.S3_MANAGED` | `encryption: BucketEncryption.KMS` + `encryptionKey` on the results bucket |
+| Crawler and transcriber ECR repositories | `cicd-stack.ts` | AES-256 (ECR default) | `encryption: ecr.RepositoryEncryption.KMS` + `encryptionKey` (repositories must be recreated) |
+| Ops alarm and model lifecycle SNS topics | `api-stack.ts` | No server-side encryption | `masterKey` on the `sns.Topic`; the key policy must allow CloudWatch, Budgets and Cost Anomaly Detection to use it |
+
+Already on a customer-managed key: the API Gateway access-log, WebSocket access-log and WAF log groups use `apiLogsKey` (`api-stack.ts`).
 
 ---
 
 ## Summary
 
-| Resource | Stack file | AWS managed key used | Property to add for CMK |
+| Resource | Stack file | Key used today | Property to add for CMK |
 |---|---|---|---|
 | RDS instance storage | `database-stack.ts` | `aws/rds` | `storageEncryptionKey` on `DatabaseInstance` |
-| OpenSearch Serverless collection | `knowledge-base-stack.ts` | AWS-owned key | Replace `AWSOwnedKey: true` with `KmsARN` in the encryption policy |
-| S3 knowledge base buckets (×2) | `knowledge-base-stack.ts` | `aws/s3` (SSE-S3) | `encryption: BucketEncryption.KMS` + `encryptionKey` on each `Bucket` |
-| S3 pipeline artifact buckets (×2) | `cicd-stack.ts` | `aws/s3` (SSE-S3) | `encryption: BucketEncryption.KMS` + `encryptionKey` on each `Bucket` |
-| Secrets Manager secrets (×4) | `api-stack.ts`, `database-stack.ts` | `aws/secretsmanager` | `encryptionKey` on each `Secret` |
+| S3 ingest buckets (×2) | `ingestion-stack.ts` | SSE-S3 (S3-managed) | `encryption: BucketEncryption.KMS` + `encryptionKey` on the ingest bucket |
+| S3 pipeline artifact buckets (×2) | `cicd-stack.ts` | SSE-S3 (S3-managed) | `encryption: BucketEncryption.KMS` + `encryptionKey` on the artifact bucket |
+| Secrets Manager secrets (×6, ×7 with evals) | `api-stack.ts`, `database-stack.ts`, `eval-stack.ts` | `aws/secretsmanager` | `encryptionKey` on each `Secret` |
+| DynamoDB, eval buckets, ECR, SNS | see [section 5](#5-other-resources-on-aws-managed-or-default-keys) | AWS managed or service default | see section 5 |

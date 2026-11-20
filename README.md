@@ -1,14 +1,15 @@
-﻿# Specialization Explorer
-This prototype explores how Large Language Models (LLMs) and Retrieval-Augmented Generation can support undergraduate students in navigating Bachelor of Science specialization choices through an AI-powered conversational experience. By leveraging conversational AI, institutional academic information, and publicly available alumni data, the Specialization Explorer enables students to reflect on their interests, compare specialization options, and discover academic pathways that align with their goals through personalized, open-ended dialogue.
+﻿# Knowledge Compass
+Knowledge Compass is a conversational assistant that uses Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to answer questions from a curated knowledge base. The current deployment helps families find their way through Inclusion Canada's inclusive-education guidance: it asks about their situation, then suggests next steps grounded in the documents, websites and videos an administrator has added. Administrators manage the knowledge base, prompts, settings and analytics from an admin dashboard.
+
+## Table of Contents
 
 | Index | Description |
-| :---------------------------------------------------- | :------------------------------------------------------ |
-| [High Level Architecture](#high-level-architecture) | High level overview illustrating component interactions |
-| [Deployment](#deployment-guide) | How to deploy the project |
-| [User Guide](#user-guide) | The working solution |
-| [Knowledge Base](#knowledge-base) | How the project uses Bedrock Knowledge Bases |
+|---|---|
+| [High-Level Architecture](#high-level-architecture) | High-level overview illustrating component interactions |
+| [Deployment](Docs/DEPLOYMENT_GUIDE.md) | How to deploy the project |
+| [User Guide](Docs/USER_GUIDE.md) | The working solution |
 | [Directories](#directories) | General project directory structure |
-| [Additional Documentation](#additional-documentation) | Comprehensive guides and references |
+| [Additional Documentation](#documentation) | Comprehensive guides and references |
 | [Credits](#credits) | Meet the team behind the solution |
 | [License](#license) | License details |
 
@@ -18,82 +19,32 @@ The following architecture diagram illustrates the various AWS components utiliz
 
 ![Architecture Diagram](Docs/media/architecture-diagram.png)
 
-## Deployment Guide
-
-To deploy this solution, please follow the steps laid out in the [Deployment Guide](Docs/DEPLOYMENT_GUIDE.md).
-
-## User Guide
-
-Please refer to the [Web App User Guide](Docs/USER_GUIDE.md) for instructions on navigating the web app interface.
-
-## Knowledge Base
-
-Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION.md) as it explains how the project uses Bedrock Knowledges Bases. This includes the data source state machine, S3 and website ingestion phases, scheduler polling, retry behavior, and admin dashboard integration.
-
 ## Directories
 
 ```
 ├── cdk/
 │   ├── bin/
-│   │   └── cdk.ts
-│   ├── containers/
-│   │   ├── common/
-│   │   │   └── db_config.py
-│   │   ├── crawler/
-│   │   │   ├── Dockerfile
-│   │   │   └── crawler.py
-│   │   ├── transcriber/
-│   │   │   ├── Dockerfile
-│   │   │   └── transcrbe.py
-│   │   └── tools/
-│   │       └── compare_retrieval.py
+│   │   └── cdk.ts                    # CDK app: stack wiring and context flags
+│   ├── containers/                   # ECS Fargate images built by CodePipeline
+│   │   ├── common/                   # db_config, embeddings, url_safety
+│   │   ├── crawler/                  # website crawler (Playwright)
+│   │   ├── transcriber/              # video transcriber (Amazon Transcribe)
+│   │   └── tests/
 │   ├── lambda/
-│   │   ├── adminAuthorizerFunction/
-│   │   │   └── adminAuthorizerFunction.js
-│   │   ├── authorization/
-│   │   │   ├── addAdminOnSignUp.js
-│   │   │   ├── initializeConnection.js
-│   │   │   ├── preSignUp.js
-│   │   │   └── userAuthorizerFunction.js
-│   │   ├── db_setup/
-│   │   │   ├── migrations/
-│   │   │   │   └── 000_initial_schema.js
-│   │   │   └── index.js
-│   │   ├── ecrImageWaiter/
-│   │   │   ├── index.js
-│   │   │   └── package.json
-│   │   ├── handlers/
-│   │   │   ├── utils/
-│   │   │   │   ├── cors.js
-│   │   │   │   ├── handlerUtils.js
-│   │   │   │   └── validation.js
-│   │   │   ├── adminHandler.js
-│   │   │   ├── chatSessionHandler.js
-│   │   │   ├── initializeConnection.js
-│   │   │   ├── systemMessagesHandler.js
-│   │   │   └── userHandler.js
-│   │   ├── knowledgeBase/
-│   │   │   ├── helpers/
-│   │   │   └── main.py
-│   │   ├── knowledgeBaseProvisioner/
-│   │   │   └── main.py
-│   │   ├── publicTokenFunction/
-│   │   │   ├── cors.js
-│   │   │   └── publicTokenFunction.js
-│   │   ├── textGeneration/
-│   │   │   ├── helpers/
-│   │   │   ├── main.py
-│   │   │   └── requirements.txt
-│   │   ├── vectorIndexManagerSigV4/
-│   │   │   ├── Dockerfile
-│   │   │   ├── main.py
-│   │   │   ├── requirements.in
-│   │   │   └── requirements.txt
-│   │   └── websocket/
-│   │       ├── connect.js
-│   │       ├── default.js
-│   │       └── disconnect.js
+│   │   ├── adminAuthorizerFunction/  # Cognito admin authorizer
+│   │   ├── appSecretRotation/        # rotates JWT signing and worker tokens
+│   │   ├── authorization/            # user authorizer, Cognito triggers
+│   │   ├── db_setup/                 # node-pg-migrate runner and migrations/
+│   │   ├── ecrImageWaiter/           # waits for container images on first deploy
+│   │   ├── gatewayCorsOrigin/        # copies the SPA origin into API Gateway
+│   │   ├── handlers/                 # REST handlers (admin, users, sessions, ...)
+│   │   ├── knowledgeBase/            # ingestion and embedding admin (Python)
+│   │   ├── lifecycleCheck/           # Bedrock model lifecycle alerts
+│   │   ├── textGeneration/           # chat, routing, retrieval (Python)
+│   │   ├── transcribeRelay/          # forwards Transcribe and ECS task events
+│   │   └── websocket/                # $connect, $default, $disconnect
 │   ├── layers/
+│   │   ├── shared_python/            # kc_shared: code shared by the Python Lambdas
 │   │   ├── aws-jwt-verify.zip
 │   │   ├── node-pg-migrate.zip
 │   │   ├── postgres.zip
@@ -102,27 +53,32 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 │   │   ├── amplify-stack.ts
 │   │   ├── api-stack.ts
 │   │   ├── cicd-stack.ts
+│   │   ├── cost-stack.ts
 │   │   ├── database-stack.ts
 │   │   ├── dbFlow-stack.ts
-│   │   ├── knowledge-base-stack.ts
+│   │   ├── eval-stack.ts
+│   │   ├── ingestion-stack.ts
+│   │   ├── log-retention.ts
 │   │   └── vpc-stack.ts
+│   ├── test/                         # CDK contract tests (Jest)
 │   └── OpenAPI_Swagger_Definition.yaml
 │
 ├── Docs/
 │   ├── media/
-│   ├── user-stories/
 │   ├── API_DOCUMENTATION.md
 │   ├── ARCHITECTURE_DEEP_DIVE.md
 │   ├── AWS_MANAGED_KEYS.md
 │   ├── BEDROCK_GUARDRAILS.md
 │   ├── DATABASE_MIGRATIONS.md
 │   ├── DEPENDENCY_MANAGEMENT.MD
-│   ├── PGVECTOR_MIGRATION_PLAN.md
-│   ├── RETIREMENT_RUNBOOK.md
 │   ├── DEPLOYMENT_GUIDE.md
+│   ├── EVALS.md
+│   ├── KNOWLEDGE_BASE_DOCUMENTATION.md
 │   ├── MODIFICATION_GUIDE.md
 │   ├── SECURITY_OVERVIEW.md
 │   └── USER_GUIDE.md
+│
+├── evals/                            # conversation evaluation harness
 │
 └── frontend/
     └── src/
@@ -148,55 +104,56 @@ Please refer to [Knowledge Base Documentation](docs/KNOWLEDGE_BASE_DOCUMENTATION
 
 ### Frontend
 
-- **React 19** with TypeScript
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
-- **shadcn/ui** (Radix UI) for UI components
+- **React 19**, TypeScript, **Vite 7**, **React Router 7**
+- **Tailwind CSS 4** and shadcn/ui (Radix UI) components
 - **AWS Amplify** for hosting and Cognito authentication
 - **Recharts** for analytics charts
-- **React Router** for client-side routing
 
 ### Backend
 
-- **AWS Lambda** (Python 3.12 and Node.js 22) for serverless compute
-- **Amazon Bedrock** for LLM inference — Claude Haiku 4.5 and Claude Sonnet 4.6 (Anthropic)
-- **Amazon Bedrock Knowledge Base** with **Cohere Embed English v3** for vector embeddings
-- **Amazon OpenSearch Serverless** for vector storage and similarity search
-- **PostgreSQL** (RDS) for relational data storage
-- **Amazon S3** for knowledge base document storage
+- **AWS Lambda** (Python 3.12 and Node.js 22)
+- **Amazon Bedrock**: Claude Haiku 5.5 for generation; Amazon Titan Text Embeddings V2 for embeddings
+- **PostgreSQL 16** on RDS with **pgvector** for relational data, vector storage and similarity search
+- **Amazon S3** for uploaded documents and transcription outputs
+- **Amazon ECS on Fargate** for the website crawler and video transcriber
+- **Amazon Transcribe** and **Amazon Textract** for video transcripts and scanned PDFs
+- **Amazon Bedrock Guardrails** on user input and model output
 - **API Gateway** (REST and WebSocket) for APIs
 - **AWS Cognito** for authentication and authorization
 
 ### Infrastructure
 
-- **AWS CDK** (TypeScript) for infrastructure as code
-- **AWS CodePipeline** for CI/CD (Docker image builds)
+- **AWS CDK v2** (TypeScript) for infrastructure as code
+- **AWS CodePipeline** for CI/CD (unit tests, container image builds and scans)
 - **Amazon RDS** with RDS Proxy for managed PostgreSQL
 - **Amazon VPC** for network isolation
 
-## Additional Documentation
+## Documentation
 
 ### Architecture and Design
 
-- **[Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md)**: Comprehensive overview of system architecture and component interactions
+- **[Architecture Deep Dive](Docs/ARCHITECTURE_DEEP_DIVE.md)**: System architecture and component interactions
 - **[Security Overview](Docs/SECURITY_OVERVIEW.md)**: Security architecture, controls, and compliance summary
+- **[AWS Managed Keys](Docs/AWS_MANAGED_KEYS.md)**: Where AWS managed or S3-managed keys are used for encryption, and how to switch to customer-managed KMS keys
 
 ### Deployment and Configuration
 
 - **[Deployment Guide](Docs/DEPLOYMENT_GUIDE.md)**: Step-by-step instructions for deploying to AWS
+- **[CI/CD Pipeline](Docs/CICD_PIPELINE.md)**: What the container and frontend pipelines run on each push, the image scan gate, and what still needs a manual `cdk deploy`
 - **[Modification Guide](Docs/MODIFICATION_GUIDE.md)**: Guidelines for customizing and extending the application
 - **[Bedrock Guardrails](Docs/BEDROCK_GUARDRAILS.md)**: Configuration and management of AWS Bedrock guardrails for AI safety
 
 ### Development and Maintenance
 
 - **[Database Migrations](Docs/DATABASE_MIGRATIONS.md)**: Guide to the database migration system and best practices
-- **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Managing Python dependencies in Lambda functions using pip-tools
-- **[Changelog](Docs/CHANGELOG.md)**: Version history and release notes
+- **[Dependency Management](Docs/DEPENDENCY_MANAGEMENT.MD)**: Where each component's Python dependencies come from and how to change them
+- **[Knowledge Base](Docs/KNOWLEDGE_BASE_DOCUMENTATION.md)**: How uploaded files, websites and videos are chunked, embedded and stored in pgvector, and how ingestion runs and retries work
+- **[Evaluations](Docs/EVALS.md)**: The conversation evaluation harness
 
 ### API and Usage
 
-- **[API Documentation](Docs/API_DOCUMENTATION.md)**: Comprehensive API reference for all REST and WebSocket endpoints
-- **[User Guide](Docs/USER_GUIDE.md)**: Complete guide for end-users on how to interact with Specialization Explorer
+- **[API Documentation](Docs/API_DOCUMENTATION.md)**: REST endpoints and the WebSocket message contract
+- **[User Guide](Docs/USER_GUIDE.md)**: How to use the web app
 
 ## Credits
 
@@ -211,11 +168,8 @@ Licenses of third-party libraries and services used by this system:
 **[PostgreSQL License](https://www.postgresql.org/about/licence/)**
 For PostgreSQL — a liberal open source license, similar to BSD or MIT.
 
-**[Cohere Terms of Use](https://cohere.com/terms-of-use)**
-For Cohere Embed English v3, accessed via Amazon Bedrock for vector embeddings.
-
 **[Anthropic Usage Policy](https://www.anthropic.com/legal/aup)**
-For Claude Haiku 4.5 and Claude Sonnet 4.6, accessed via Amazon Bedrock for text generation.
+For Claude Haiku 5.5, accessed via Amazon Bedrock for text generation.
 
 **[MIT License](https://opensource.org/licenses/MIT)**
 For open-source libraries and components used in this project.

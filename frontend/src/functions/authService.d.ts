@@ -29,7 +29,7 @@ export class AuthService {
     email: string,
     confirmationCode: string
   ): Promise<AuthResult>;
-  static signIn(email: string, password: string): Promise<SignInResult>;
+  static signIn(email: string, password: string, remember?: boolean): Promise<SignInResult>;
   static signOut(): Promise<AuthResult>;
   static getCurrentUser(): Promise<UserResult>;
   static getAuthToken(useCache?: boolean): Promise<TokenResult>;

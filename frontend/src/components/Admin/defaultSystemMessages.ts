@@ -126,11 +126,11 @@ export const DEFAULT_SYSTEM_MESSAGES: Record<SystemMessageType, SystemMessageVer
   ],
   welcome_message: [
     {
-      id: "seed-welcome_message-v3",
+      id: "seed-welcome_message-v4",
       type: "welcome_message",
-      content: "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.\n\nWhether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone.\n\nType in information about what's happening. Is there something happening with your child's schooling right now?",
+      content: "Hello, I'm here to help you navigate support that is available to you.\n\nType in information about what's happening.",
       character_limit: 2000,
-      version: 3,
+      version: 4,
       is_active: true,
       affects_text_generation: false,
       created_by_email: null,
@@ -169,3 +169,27 @@ const shippedSuggestion = DEFAULT_SYSTEM_MESSAGES.suggestion_phase_prompt[0].con
 addPlainVersion("detective_phase_prompt", PLAIN_DETECTIVE);
 // Same as 027: drop the opening paragraph that described the prompt blocks.
 addPlainVersion("suggestion_phase_prompt", shippedSuggestion.slice(shippedSuggestion.indexOf("\n\n") + 2));
+
+// Migration 043: ask from uploaded situations when a journey has documents,
+// and follow one retrieved section when giving guidance.
+const DOCUMENT_DETECTIVE = PLAIN_DETECTIVE.replace(
+  "STEP 2 — UNDERSTAND WHERE THEY ARE by asking the questions listed for the\nfamily's journey (in order, if unknown). If the journey is not clear yet, ask\nthe question that best tells the journeys apart.",
+  "STEP 2 — UNDERSTAND WHERE THEY ARE. Ask until the situation is clear. When a\njourney lists situations from its uploaded guides, ask the one question that\nbest tells those situations apart. When a journey still lists its own questions,\nask those in order. If the journey is not clear yet, ask the question that best\ntells the journeys apart."
+);
+const DOCUMENT_SUGGESTION_LEAD =
+  "When this turn includes an uploaded guide section, follow that one section.\nUse its steps, order and wording. Do not add steps that are not in that section\nor in a supporting library source you cite. If the section says to ask something\nfirst, ask that. Cite the section and every library source you used.\n\n";
+
+function addDocumentVersion(type: "detective_phase_prompt" | "suggestion_phase_prompt", content: string) {
+  const list = DEFAULT_SYSTEM_MESSAGES[type];
+  const active = list.find((m) => m.is_active) ?? list[0];
+  DEFAULT_SYSTEM_MESSAGES[type] = [
+    { ...active, id: `seed-${type}-v4`, content, version: active.version + 1, is_active: true },
+    ...list.map((m) => ({ ...m, is_active: false })),
+  ];
+}
+
+addDocumentVersion("detective_phase_prompt", DOCUMENT_DETECTIVE);
+addDocumentVersion(
+  "suggestion_phase_prompt",
+  DOCUMENT_SUGGESTION_LEAD + (DEFAULT_SYSTEM_MESSAGES.suggestion_phase_prompt.find((m) => m.is_active)?.content ?? "")
+);

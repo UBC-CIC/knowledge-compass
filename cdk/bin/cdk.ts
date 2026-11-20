@@ -9,8 +9,11 @@ import { CICDStack } from "../lib/cicd-stack";
 import { IngestionStack } from "../lib/ingestion-stack";
 import { EvalJobsStack, EvalStack, evalSigningSecretName } from "../lib/eval-stack";
 import { CostStack } from "../lib/cost-stack";
+import { ServiceLogRetention } from "../lib/log-retention";
 
 const app = new cdk.App();
+// 90-day retention on every Lambda and CodeBuild log group (lib/log-retention.ts).
+cdk.Aspects.of(app).add(new ServiceLogRetention());
 
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -25,6 +28,10 @@ const githubBranch = app.node.tryGetContext("githubBranch") || "main";
 // Optional `-c alarmEmail=<address>`: subscribes the address to the operational
 // alarm topic. Without it the topic and alarm actions exist with no subscriber.
 const alarmEmail: string | undefined = app.node.tryGetContext("alarmEmail") || undefined;
+// Optional `-c cognitoSesFromEmail=<address>`: a verified SES identity in this
+// region. Cognito then sends through SES and admins can use email MFA codes.
+const cognitoSesFromEmail: string | undefined =
+  app.node.tryGetContext("cognitoSesFromEmail") || undefined;
 // Optional `-c monthlyBudgetUsd=<amount>`: monthly AWS Budget (50/80/100% alerts to
 // the alarm topic). Without it the budget is skipped; cost anomaly alerts still deploy.
 const monthlyBudgetUsdContext = app.node.tryGetContext("monthlyBudgetUsd");
@@ -140,6 +147,7 @@ const apiStack = new ApiGatewayStack(
     evalSigningSecretName: enableEval ? evalSigningSecretName(StackPrefix || "KC") : undefined,
     alarmEmail: alarmEmail ? String(alarmEmail) : undefined,
     enableReservedConcurrency,
+    cognitoSesFromEmail: cognitoSesFromEmail ? String(cognitoSesFromEmail) : undefined,
   },
 );
 apiStack.addDependency(cicdStack);

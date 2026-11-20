@@ -3,13 +3,16 @@ import logging
 
 from helpers.admin_user import (
     admin_email_from_request,
+    admin_sub_from_request,
     get_or_create_admin_user_id,
-    get_user_id_by_email,
 )
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
-from helpers.video_transcription import is_http_url, start_transcription_job
+from helpers.video_transcription import start_transcription_job
+from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
+from helpers.crawl_scope import CrawlScope, InvalidPatterns
 from helpers.process_document_batch import trigger_uploaded_document
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit
 from helpers.csv_links import inspect_uploaded_csv, resolve_column
 from helpers.data_source_cleanup import supersede_duplicates
 from helpers.upload_identity import (
@@ -18,6 +21,7 @@ from helpers.upload_identity import (
     find_existing_upload,
     head_etag,
     is_ingestion_in_flight,
+    is_issued_upload,
     parse_s3_uri,
     rename_source,
     rename_source_url,
@@ -27,6 +31,7 @@ from helpers.upload_identity import (
     update_data_source,
     upload_source_key,
 )
+from helpers.upload_issuance import claim_issued_uploads, has_unclaimed_uploads
 
 DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt")
 
@@ -43,6 +48,49 @@ class StageRejected(Exception):
         self.body = body
 
 
+# The client names where its upload landed; only a location the presigned-URL
+# endpoint issues is accepted, so staging cannot read, transcribe, or later
+# delete any other object in the bucket.
+UPLOAD_LOCATION_ERROR = "Uploaded file location must be one issued by the upload URL endpoint"
+# The location must also have been issued to this admin, recently, and not yet
+# staged (helpers/upload_issuance.py), so one admin cannot stage, and through
+# a later replace delete, another admin's upload.
+UPLOAD_NOT_ISSUED_ERROR = (
+    "This upload was not issued to you, has expired, or was already staged. Upload the file again."
+)
+UPLOAD_ALREADY_CLAIMED_ERROR = "This upload is already being staged by another request. Upload the file again."
+
+# admin_audit actions for staging (finding f-531c9569).
+STAGE_AUDIT_ACTION = "data_source.stage"
+BATCH_STAGE_AUDIT_ACTION = "data_source.stage_batch"
+
+
+def stage_audit_target(
+    source_type: str, outcome: str, data_source_ids: list[str], ingestion_run_ids: list[str]
+) -> dict:
+    """admin_audit target for one staged source: ids only, never file names, URLs or content."""
+    return {
+        "type": source_type,
+        "outcome": outcome,
+        "data_source_ids": list(data_source_ids),
+        "ingestion_run_ids": list(ingestion_run_ids),
+    }
+
+
+def insert_stage_audit(connection, event, action: str, target: dict) -> dict:
+    """
+    Insert the admin_audit row for a staging request in the caller's
+    transaction, so it commits with the staged rows; the caller logs it with
+    log_admin_audit after the commit. The actor is the authorizer identity
+    (helpers/admin_audit.py), never the body; without one this raises and the
+    staging is rolled back. Returns the actor.
+    """
+    actor = actor_from_event(event)
+    with connection.cursor() as cursor:
+        insert_admin_audit(cursor, actor, action, target)
+    return actor
+
+
 def _response(event, status_code: int, body: dict):
     """Build a standard API Gateway JSON response with CORS headers"""
     return {
@@ -53,11 +101,6 @@ def _response(event, status_code: int, body: dict):
         },
         "body": json.dumps(body),
     }
-
-
-def _get_user_id_by_email(connection, email: str) -> str | None:
-    """Look up the internal user ID for the admin email provided by the request"""
-    return get_user_id_by_email(connection, email)
 
 
 def _is_markdown_file(file_name: str) -> bool:
@@ -88,18 +131,61 @@ def _validate_file_pair(source_type: str, file_name: str, metadata_file_name: st
     return None
 
 
-def _existing_website_row_id(connection, *, name: str) -> str | None:
-    """Check whether a website data source with the same URL already exists"""
+def _validated_public_url(value: str, field: str) -> tuple[str | None, str | None]:
+    """
+    SSRF guard for admin-entered URLs (see helpers/url_safety.py).
+
+    Returns (normalized_url, None) when the URL is a public http(s) URL, or
+    (None, reason). Reasons are fixed texts that never include resolved
+    addresses; nothing about the URL is logged.
+    """
+    try:
+        return check_public_url(value), None
+    except InvalidURL as e:
+        # InvalidURL texts describe the URL's shape only (scheme, port, ...).
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, f"{field} must be a public http(s) URL ({e})"
+    except BlockedURL as e:
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, (
+            f"{field} must be a public http(s) URL; it points to a private, "
+            "loopback, link-local or reserved address"
+        )
+    except OSError as e:
+        logger.warning("Rejected %s (%s)", field, type(e).__name__)
+        return None, f"{field} could not be resolved; check the address and try again"
+
+
+def _source_type_at_url(connection, url: str) -> str | None:
+    """source_type of the sources row stored at this exact URL, if any."""
+    if not url:
+        return None
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT source_type::text
+            FROM sources
+            WHERE url = %s
+            LIMIT 1
+            """,
+            (url,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def _existing_website_row_id(connection, *, names: list[str]) -> str | None:
+    """Check whether a website data source with any of these URLs already exists"""
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT id
             FROM data_sources
             WHERE type = %s::data_source_type
-              AND name = %s
+              AND name = ANY(%s)
             LIMIT 1
             """,
-            ("website", name),
+            ("website", names),
         )
         row = cursor.fetchone()
         return str(row[0]) if row else None
@@ -294,6 +380,7 @@ def stage_file_pair(
     connection,
     *,
     created_by_user_id: str,
+    issued_to: str,
     source_type: str,
     primary_file_name: str,
     primary_s3_bucket: str,
@@ -326,6 +413,15 @@ def stage_file_pair(
     if pair_error:
         raise StageRejected(400, {"error": pair_error})
 
+    if not (
+        is_issued_upload(primary_s3_bucket, primary_s3_key)
+        and is_issued_upload(metadata_s3_bucket, metadata_s3_key)
+    ):
+        raise StageRejected(400, {"error": UPLOAD_LOCATION_ERROR})
+    new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
+    if not has_unclaimed_uploads(connection, issued_to=issued_to, objects=new_uploads):
+        raise StageRejected(400, {"error": UPLOAD_NOT_ISSUED_ERROR})
+
     try:
         primary_etag = head_etag(primary_s3_bucket, primary_s3_key)
         metadata_etag = head_etag(metadata_s3_bucket, metadata_s3_key)
@@ -353,12 +449,15 @@ def stage_file_pair(
     link_metadata = {key: links[key] for key in role_fields if links[key]}
 
     source_key = upload_source_key(source_type, primary_file_name)
-    new_uploads = [(primary_s3_bucket, primary_s3_key), (metadata_s3_bucket, metadata_s3_key)]
 
     existing = find_existing_upload(
         connection, data_source_type=source_type, source_key=source_key, file_name=primary_file_name
     )
     _reject_if_not_replaceable(existing, s3_key=primary_s3_key, file_name=primary_file_name)
+    # The first write: a batch keeps going after a rejected item, so nothing
+    # may be written for an item before this succeeds.
+    if not claim_issued_uploads(connection, issued_to=issued_to, objects=new_uploads):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     same_link_config = existing and all(
         existing["metadata"].get(key) == link_metadata.get(key) for key in role_fields
@@ -502,16 +601,31 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
     include_patterns = body.get("include_patterns", [])
     exclude_patterns = body.get("exclude_patterns", [])
 
-    if not name:
+    if not isinstance(name, str) or not name.strip():
         return _response(event, 400, {"error": "Missing name of the website"})
 
-    if not isinstance(include_patterns, list):
-        return _response(event, 400, {"error": "include_patterns must be an array"})
+    # The name is the crawl seed the in-VPC crawler will open: it must be a
+    # public http(s) URL. The normalized form is stored.
+    raw_name = name.strip()
+    name, url_error = _validated_public_url(raw_name, "name")
+    if url_error:
+        return _response(event, 400, {"error": url_error})
 
-    if not isinstance(exclude_patterns, list):
-        return _response(event, 400, {"error": "exclude_patterns must be an array"})
+    # The crawler enforces these patterns (helpers/crawl_scope.py); reject any
+    # it could not compile, and a seed they exclude, which would crawl nothing.
+    try:
+        scope = CrawlScope.from_patterns(include_patterns, exclude_patterns)
+    except InvalidPatterns as e:
+        return _response(event, 400, {"error": str(e)})
+    if not scope.allows(name):
+        return _response(
+            event,
+            400,
+            {"error": "The website URL must match an include pattern and no exclude pattern"},
+        )
 
-    existing_id = _existing_website_row_id(connection, name=name)
+    # Also match the raw spelling: rows staged before normalization store it.
+    existing_id = _existing_website_row_id(connection, names=list(dict.fromkeys([name, raw_name])))
     if existing_id:
         return _response(
             event,
@@ -548,7 +662,10 @@ def _stage_website(event, body, connection, *, created_by: str, created_by_user_
         },
     )
 
+    audit_target = stage_audit_target("website", "staged", [data_source_id], [ingestion_run_id])
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
 
     return _response(
         event,
@@ -581,7 +698,7 @@ def _apply_details_without_reprocessing(
     return superseded
 
 
-def _stage_video(event, body, connection, *, created_by: str, created_by_user_id: str):
+def _stage_video(event, body, connection, *, created_by: str, created_by_user_id: str, admin_sub: str):
     file_name = body.get("video_file_name")
     s3_bucket = body.get("video_s3_bucket")
     s3_key = body.get("video_s3_key")
@@ -590,12 +707,33 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
 
     if not file_name or not s3_bucket or not s3_key:
         return _response(event, 400, {"error": "Missing video file details"})
-    if not video_url or not is_http_url(video_url):
+    # Validated only; the trimmed original is stored so deep links are kept.
+    if not video_url or _validated_public_url(video_url, "video_url")[1]:
         return _response(
             event,
             400,
             {"error": "video_url must be a public http(s) URL used for citations and deep-links"},
         )
+    # sources.url is shared with crawled pages. The transcriber stores this
+    # exact string there, so a URL already held by a non-video row is rejected
+    # before transcription starts and before any chunk rewrite.
+    occupant = _source_type_at_url(connection, video_url)
+    if occupant and occupant != "video":
+        error = (
+            "video_url is already a crawled web page and cannot be used as a video source"
+            if occupant == "web"
+            else "video_url is already used by another source and cannot be overwritten"
+        )
+        return _response(
+            event,
+            409,
+            {"error": error, "existing_source_type": occupant, "video_url": video_url},
+        )
+
+    if not is_issued_upload(s3_bucket, s3_key):
+        return _response(event, 400, {"error": UPLOAD_LOCATION_ERROR})
+    if not has_unclaimed_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        return _response(event, 400, {"error": UPLOAD_NOT_ISSUED_ERROR})
 
     try:
         etag = head_etag(s3_bucket, s3_key)
@@ -608,6 +746,8 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
         connection, data_source_type="video", source_key=source_key, file_name=file_name
     )
     _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+    if not claim_issued_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     if existing and _content_unchanged(existing, etag):
         superseded = _apply_details_without_reprocessing(
@@ -617,7 +757,10 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             details={"video_url": video_url, "source_key": source_key, "content_etag": etag},
             source_url=video_url,
         )
+        audit_target = stage_audit_target("video", "unchanged", [existing["id"]], [])
+        actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
         connection.commit()
+        log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
         delete_s3_objects([(s3_bucket, s3_key), *superseded])
         return _response(
             event,
@@ -640,6 +783,8 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
             file_name=file_name,
         )
     except Exception as e:
+        # Releases the claim so the same upload can be staged again.
+        connection.rollback()
         logger.error("Failed to start Transcribe job: %s", e, exc_info=True)
         detail = str(e).strip().replace("\n", " ")[:400]
         return _response(
@@ -710,7 +855,12 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
         action = "staged_video_transcription"
         message = "Video uploaded. Transcription has started; embedding will run automatically when it finishes."
 
+    audit_target = stage_audit_target(
+        "video", "replaced" if existing else "staged", [data_source_id], [ingestion_run_id]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
 
     return _response(
@@ -728,7 +878,7 @@ def _stage_video(event, body, connection, *, created_by: str, created_by_user_id
     )
 
 
-def _stage_document(event, body, connection, *, created_by: str, created_by_user_id: str):
+def _stage_document(event, body, connection, *, created_by: str, created_by_user_id: str, admin_sub: str):
     file_name = body.get("document_file_name")
     s3_bucket = body.get("document_s3_bucket")
     s3_key = body.get("document_s3_key")
@@ -745,12 +895,29 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         )
     # Public users can only open a cited document through this link (uploads
     # are never served from S3), so it is required.
-    if not document_url or not is_http_url(document_url):
+    if not document_url or _validated_public_url(document_url, "document_url")[1]:
         return _response(
             event,
             400,
             {"error": "document_url is required and must be a public http(s) URL used for citations"},
         )
+    # The link is display-only, but it is the public citation. A crawled page's
+    # URL is not reused as that citation.
+    if _source_type_at_url(connection, document_url) == "web":
+        return _response(
+            event,
+            409,
+            {
+                "error": "document_url is already a crawled web page and cannot be used as a citation",
+                "existing_source_type": "web",
+                "document_url": document_url,
+            },
+        )
+
+    if not is_issued_upload(s3_bucket, s3_key):
+        return _response(event, 400, {"error": UPLOAD_LOCATION_ERROR})
+    if not has_unclaimed_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        return _response(event, 400, {"error": UPLOAD_NOT_ISSUED_ERROR})
 
     try:
         etag = head_etag(s3_bucket, s3_key)
@@ -768,6 +935,8 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         connection, data_source_type="document", source_key=source_key, file_name=file_name
     )
     _reject_if_not_replaceable(existing, s3_key=s3_key, file_name=file_name)
+    if not claim_issued_uploads(connection, issued_to=admin_sub, objects=[(s3_bucket, s3_key)]):
+        raise StageRejected(409, {"error": UPLOAD_ALREADY_CLAIMED_ERROR})
 
     if existing and _content_unchanged(existing, etag):
         superseded = _apply_details_without_reprocessing(
@@ -778,7 +947,10 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
             source_url=source_url,
         )
         set_citation_url(connection, url=source_url, citation_url=citation_url)
+        audit_target = stage_audit_target("document", "unchanged", [existing["id"]], [])
+        actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
         connection.commit()
+        log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
         delete_s3_objects([(s3_bucket, s3_key), *superseded])
         return _response(
             event,
@@ -842,10 +1014,16 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
         )
         replaced = False
 
+    # Committed before ingestion starts, so the embedding it triggers is attributable.
+    audit_target = stage_audit_target(
+        "document", "replaced" if replaced else "staged", [data_source_id], [ingestion_run_id]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects([obj for obj in superseded if obj != (s3_bucket, s3_key)])
 
-    trigger_result = trigger_uploaded_document(connection, ingestion_run_id)
+    trigger_result = trigger_uploaded_document(connection, ingestion_run_id, actor=actor_from_event(event))
 
     if not trigger_result.get("started"):
         message = "Document staged, but embedding could not be started automatically. Use Sync to retry."
@@ -868,7 +1046,9 @@ def _stage_document(event, body, connection, *, created_by: str, created_by_user
     )
 
 
-def _stage_pair(event, body, connection, *, source_type: str, created_by: str, created_by_user_id: str):
+def _stage_pair(
+    event, body, connection, *, source_type: str, created_by: str, created_by_user_id: str, admin_sub: str
+):
     if source_type == "csv":
         primary_file_name = body.get("csv_file_name")
         primary_s3_bucket = body.get("csv_s3_bucket")
@@ -893,6 +1073,7 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
         result = stage_file_pair(
             connection,
             created_by_user_id=created_by_user_id,
+            issued_to=admin_sub,
             source_type=source_type,
             primary_file_name=primary_file_name,
             primary_s3_bucket=primary_s3_bucket,
@@ -909,7 +1090,12 @@ def _stage_pair(event, body, connection, *, source_type: str, created_by: str, c
     except StageRejected as rejected:
         return _response(event, rejected.status_code, rejected.body)
 
+    audit_target = stage_audit_target(
+        source_type, result["action"], result["data_source_ids"], result["ingestion_run_ids"]
+    )
+    actor = insert_stage_audit(connection, event, STAGE_AUDIT_ACTION, audit_target)
     connection.commit()
+    log_admin_audit(actor, STAGE_AUDIT_ACTION, audit_target)
     delete_s3_objects(result["s3_cleanup"])
 
     label = primary_source_label.capitalize()
@@ -945,6 +1131,8 @@ def stage_data_sources(event, body, connection):
       under the same name, replaces the existing row(s) in place (see
       upload_identity.py) so its chunks are re-embedded only where changed
     - creates matching ingestion_runs row(s) with status 'pending'
+    - writes an admin_audit row ("data_source.stage": the authorizer identity,
+      type, outcome, data source and ingestion run ids) that commits with them
     - does NOT start ingestion or create schedulers
 
     Supported request types:
@@ -960,16 +1148,18 @@ def stage_data_sources(event, body, connection):
     if locked:
         return locked
 
-    source_type = body.get("type")
-    created_by = admin_email_from_request(event, body)
+    # Audit identity is the authorizer only. A missing email is 401, and the
+    # body is never consulted (finding f-c4d6f814).
+    created_by = admin_email_from_request(event)
+    admin_sub = admin_sub_from_request(event)
+    if not admin_sub or not created_by:
+        return _response(event, 401, {"error": "Unauthorized"})
 
+    source_type = body.get("type")
     if source_type not in {"website", "csv", "markdown", "video", "document"}:
         return _response(event, 400, {"error": "type must be one of: website, csv, markdown, video, document"})
 
-    if not created_by:
-        return _response(event, 400, {"error": "Missing created_by"})
-
-    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, admin_sub, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
     connection.commit()
@@ -979,10 +1169,10 @@ def stage_data_sources(event, body, connection):
         if source_type == "website":
             return _stage_website(event, body, connection, **kwargs)
         if source_type == "video":
-            return _stage_video(event, body, connection, **kwargs)
+            return _stage_video(event, body, connection, admin_sub=admin_sub, **kwargs)
         if source_type == "document":
-            return _stage_document(event, body, connection, **kwargs)
-        return _stage_pair(event, body, connection, source_type=source_type, **kwargs)
+            return _stage_document(event, body, connection, admin_sub=admin_sub, **kwargs)
+        return _stage_pair(event, body, connection, source_type=source_type, admin_sub=admin_sub, **kwargs)
 
     except StageRejected as rejected:
         connection.rollback()

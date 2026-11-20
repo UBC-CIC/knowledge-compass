@@ -23,7 +23,7 @@ export class DatabaseStack extends Stack {
     scope: Construct,
     id: string,
     vpcStack: VpcStack,
-    props?: StackProps
+    props?: StackProps,
   ) {
     super(scope, id, props);
 
@@ -31,19 +31,19 @@ export class DatabaseStack extends Stack {
       this,
       `${id}-RDSServiceLinkedRoleResource`,
       {
-      onCreate: {
-        service: "IAM",
-        action: "createServiceLinkedRole",
-        parameters: {
-          AWSServiceName: "rds.amazonaws.com",
+        onCreate: {
+          service: "IAM",
+          action: "createServiceLinkedRole",
+          parameters: {
+            AWSServiceName: "rds.amazonaws.com",
+          },
+          ignoreErrorCodesMatching: "InvalidInput",
+          physicalResourceId: cr.PhysicalResourceId.of("RDSServiceLinkedRole"),
         },
-        ignoreErrorCodesMatching: "InvalidInput",
-        physicalResourceId: cr.PhysicalResourceId.of("RDSServiceLinkedRole"),
+        policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+          resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+        }),
       },
-      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-      }),
-      }
     );
     /**
      * Retrieve a secret from Secret Manager
@@ -51,7 +51,7 @@ export class DatabaseStack extends Stack {
     const secret = secretmanager.Secret.fromSecretNameV2(
       this,
       "ImportedSecrets",
-      "KCSecrets"
+      "KCSecrets",
     );
 
     /**
@@ -81,21 +81,26 @@ export class DatabaseStack extends Stack {
           username: SecretValue.unsafePlainText("applicationUsername"), // will be changed at runtime
           password: SecretValue.unsafePlainText("applicationPassword"), // will be changed at runtime
         },
-      }
+      },
     );
+
+    // RDS retires old minor versions for new instances; keep this on a
+    // version listed by `aws rds describe-db-engine-versions --engine postgres`.
+    // 16.15 is newer than the constants in aws-cdk-lib 2.274.0, so use `of()`.
+    const postgresVersion = rds.PostgresEngineVersion.of("16.15", "16");
 
     const parameterGroup = new rds.ParameterGroup(
       this,
       `${id}-rdsParameterGroup`,
       {
         engine: rds.DatabaseInstanceEngine.postgres({
-          version: rds.PostgresEngineVersion.VER_16_9,
+          version: postgresVersion,
         }),
         description: "Empty parameter group",
         parameters: {
           "rds.force_ssl": "1",
         },
-      }
+      },
     );
 
     /**
@@ -107,17 +112,17 @@ export class DatabaseStack extends Stack {
         subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       },
       engine: rds.DatabaseInstanceEngine.postgres({
-        version: rds.PostgresEngineVersion.VER_16_9,
+        version: postgresVersion,
       }),
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.BURSTABLE4_GRAVITON,
-        ec2.InstanceSize.MEDIUM
+        ec2.InstanceSize.MEDIUM,
       ),
       credentials: rds.Credentials.fromUsername(
         secret.secretValueFromJson("DB_Username").unsafeUnwrap(),
         {
           secretName: this.secretPathAdminName,
-        }
+        },
       ),
       multiAz: false,
       allocatedStorage: 100,
@@ -149,13 +154,13 @@ export class DatabaseStack extends Stack {
         dbSecurityGroup.addIngressRule(
           ec2.Peer.ipv4(cidr),
           ec2.Port.tcp(5432),
-          `Allow PostgreSQL traffic from private subnet CIDR range ${cidr}`
+          `Allow PostgreSQL traffic from private subnet CIDR range ${cidr}`,
         );
       });
     } else {
       throw new Error(
         "vpcStack.privateSubnetsCidrStrings is empty; refusing to fall back to " +
-        "VPC-wide RDS ingress. Populate it for this VPC path before deploying."
+          "VPC-wide RDS ingress. Populate it for this VPC path before deploying.",
       );
     }
 
@@ -165,13 +170,10 @@ export class DatabaseStack extends Stack {
     const rdsProxyRole = new iam.Role(this, `${id}-DBProxyRole`, {
       assumedBy: new iam.ServicePrincipal("rds.amazonaws.com"),
     });
-
-    rdsProxyRole.addToPolicy(
-      new iam.PolicyStatement({
-        resources: ["*"],
-        actions: ["rds-db:connect"],
-      })
-    );
+    // No wildcard rds-db:connect here: the proxy authenticates to the DB with the
+    // Secrets Manager credentials below (addProxy grants read on them), and the
+    // instance-scoped grantConnect further down covers IAM auth. A "*" grant would
+    // allow connecting as any DB user (incl. app_tc / master) on any instance.
 
     /**
      * Create RDS Proxy for database connections with all secrets
@@ -179,7 +181,7 @@ export class DatabaseStack extends Stack {
     const secretPathAdmin = secretmanager.Secret.fromSecretNameV2(
       this,
       "AdminSecret",
-      this.secretPathAdminName
+      this.secretPathAdminName,
     );
 
     const rdsProxy = this.dbInstance.addProxy(id + "-proxy", {
@@ -214,12 +216,22 @@ export class DatabaseStack extends Stack {
 
     /**
      * Enable automatic secret rotation for database credentials
-     * Note: Admin secret rotation already exists in the stack, so we only manage
-     * rotation for application user and table creator credentials.
      */
-    
-    // 1. Admin credentials rotation is already configured - do not create duplicate
-    // The existing rotation schedule for secretPathAdmin will remain active.
+
+    // 1. Rotation for the admin (master) credentials (single-user strategy).
+    // Earlier code assumed this already existed; the deployed secret had never
+    // rotated (finding F17). Attached to the instance's own generated secret
+    // (the SecretTargetAttachment), so the rotation Lambda gets the host and
+    // the full secret ARN. RDS Proxy rereads the secret, so new connections
+    // pick up the new password; a migration running during the rotation may
+    // need a re-run.
+    this.dbInstance.secret!.addRotationSchedule("AdminRot", {
+      automaticallyAfter: Duration.days(30),
+      hostedRotation: secretsmanager.HostedRotation.postgreSqlSingleUser({
+        vpc: vpcStack.vpc,
+        functionName: `${id}-AdminRotation`,
+      }),
+    });
 
     // 2. Rotation for application user credentials (multi-user strategy)
     this.secretPathUser.addRotationSchedule("AppUserRot", {

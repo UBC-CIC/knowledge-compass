@@ -21,6 +21,7 @@ import unittest
 
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 import helpers.config as config  # noqa: E402
 from helpers.journeys import DEFAULT_CATALOG, clean_steps  # noqa: E402
@@ -151,8 +152,13 @@ class Migration024SyncTests(unittest.TestCase):
         plain = _load_seed("027_plain_conversation_prompts.js")
         self.assertEqual(plain["detectiveOld"], self.seed["detectiveBase"])
         self.assertEqual(plain["suggestionOld"], self.seed["suggestionBase"].replace(old, new))
-        self.assertEqual(plain["detective"], config.DETECTIVE_PHASE_PROMPT)
-        self.assertEqual(plain["suggestion"], config.SUGGESTION_PHASE_PROMPT)
+        latest = _load_seed("043_journey_document_prompts.js")
+        self.assertEqual(latest["detectiveOld"], plain["detective"])
+        self.assertEqual(latest["suggestionOld"], plain["suggestion"])
+        self.assertEqual(latest["detective"], config.DETECTIVE_PHASE_PROMPT)
+        self.assertEqual(latest["suggestion"], config.SUGGESTION_PHASE_PROMPT)
+        self.assertNotIn("<", latest["detective"])
+        self.assertNotIn("{", latest["suggestion"])
         self.assertNotIn("SITUATION A", config.SUGGESTION_PHASE_PROMPT)
         self.assertNotIn("Journey 1 signals", config.DETECTIVE_PHASE_PROMPT)
 
@@ -229,6 +235,14 @@ class Migration025SyncTests(unittest.TestCase):
         self.assertEqual(seed["role"], config.ROLE)
         self.assertLessEqual(len(seed["role"]), seed["characterLimit"])
         self.assertNotIn("JOURNEY 1", seed["role"])
+
+
+class Migration018GuardrailsSyncTests(unittest.TestCase):
+    def test_guardrails_fallback_matches_018(self):
+        # SCOPE_RULE is code-owned and added by guardrails_block_text();
+        # GUARDRAILS itself must stay the 018 seed.
+        self.assertEqual(config.GUARDRAILS.strip(), _migration_018_content("guardrails").strip())
+        self.assertNotIn("SCOPE:", config.GUARDRAILS)
 
 
 if __name__ == "__main__":

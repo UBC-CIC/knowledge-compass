@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { fakeSql, loadHandler, quietly } = require("./_loadHandler.js");
+const { fakeSql, loadHandler, quietly, TEST_ALLOWED_ORIGIN } = require("./_loadHandler.js");
 
 async function invoke(handlerName, sql, event) {
   const { handler } = loadHandler(handlerName, sql);
@@ -16,7 +16,9 @@ async function invoke(handlerName, sql, event) {
   return { statusCode: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : null };
 }
 
-const adminContext = { authorizer: { role: "admin", email: "admin@example.com" } };
+const adminContext = {
+  authorizer: { role: "admin", email: "admin@example.com", userId: "11111111-2222-3333-4444-555555555555" },
+};
 
 // ── PUT / GET /admin/system-settings ─────────────────────────────────────────
 
@@ -151,9 +153,14 @@ test("PUT stays admin-only: non-admin callers are rejected before any query", as
     assert.equal(res.statusCode, 403);
     assert.equal(sql.calls.length, 0);
   }
-  // An admin role without the authorizer email is refused too.
+  // An admin role without the authorizer userId (Cognito sub) is refused too,
+  // even when it carries an email.
   const sql = settingsSql();
-  const res = await put(sql, { service_status: "banner", service_message: "x" }, { authorizer: { role: "admin" } });
+  const res = await put(
+    sql,
+    { service_status: "banner", service_message: "x" },
+    { authorizer: { role: "admin", email: "admin@example.com" } }
+  );
   assert.equal(res.statusCode, 401);
   assert.equal(updateQuery(sql), undefined);
 });
@@ -178,7 +185,11 @@ test("GET /admin/system-settings returns the service fields, and a normal fallba
 // ── GET /system-settings/service-status (public, anonymous-token) ────────────
 
 const getPublic = (sql) =>
-  invoke("systemMessagesHandler", sql, { httpMethod: "GET", resource: "/system-settings/service-status" });
+  invoke("systemMessagesHandler", sql, {
+    httpMethod: "GET",
+    resource: "/system-settings/service-status",
+    headers: { origin: TEST_ALLOWED_ORIGIN },
+  });
 
 test("the public read returns ONLY service_status and service_message, with a short public cache header", async () => {
   const sql = fakeSql(() => [
@@ -199,7 +210,7 @@ test("the public read returns ONLY service_status and service_message, with a sh
   assert.deepEqual(Object.keys(res.body).sort(), ["service_message", "service_status"]);
   assert.deepEqual(res.body, { service_status: "banner", service_message: "Planned work tonight." });
   assert.equal(res.headers["Cache-Control"], "public, max-age=30");
-  assert.ok(res.headers["Access-Control-Allow-Origin"] !== undefined, "CORS headers are kept");
+  assert.equal(res.headers["Access-Control-Allow-Origin"], TEST_ALLOWED_ORIGIN, "CORS headers are kept");
 });
 
 test("the public read selects only the two columns", async () => {
@@ -219,6 +230,26 @@ test("the public read falls back to normal with no row, an unknown value, or a n
   // A leftover message is not shown while the status is normal.
   const normal = await getPublic(fakeSql(() => [{ service_status: "normal", service_message: "old" }]));
   assert.deepEqual(normal.body, { service_status: "normal", service_message: null });
+});
+
+test("the public character cap returns the stored value, or 2000 when the row is missing", async () => {
+  const getCap = (sql) =>
+    invoke("systemMessagesHandler", sql, {
+      httpMethod: "GET",
+      resource: "/system-settings/max-characters-per-user-message",
+    });
+
+  const stored = await getCap(fakeSql(() => [{ max_characters_per_user_message: 750 }]));
+  assert.equal(stored.statusCode, 200);
+  assert.deepEqual(stored.body, { max_characters_per_user_message: 750 });
+
+  const missing = await getCap(fakeSql(() => []));
+  assert.equal(missing.statusCode, 200);
+  assert.deepEqual(missing.body, { max_characters_per_user_message: 2000 });
+
+  // A stored value above the code-level ceiling is published as the ceiling.
+  const over = await getCap(fakeSql(() => [{ max_characters_per_user_message: 200000 }]));
+  assert.deepEqual(over.body, { max_characters_per_user_message: 4000 });
 });
 
 test("read_only is returned as-is", async () => {

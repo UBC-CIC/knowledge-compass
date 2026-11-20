@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from helpers import embeddings
+from kc_shared import embeddings
 
 
 class EmbeddingSpaceError(RuntimeError):

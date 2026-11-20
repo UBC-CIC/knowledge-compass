@@ -43,6 +43,7 @@ async function captured(fn) {
 function createSql() {
   return fakeSql((text) => {
     if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
     if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
     return [];
   });
@@ -241,10 +242,22 @@ test("a valid key is fetched once and reused", async () => {
   assert.ok(inserts.every(tagged));
 });
 
+test("after a signing-key rotation, tags signed with the previous key still verify", async () => {
+  const NEW_KEY = "n".repeat(48);
+  const secrets = { [SECRET_NAME]: JSON.stringify({ signingKey: NEW_KEY, previousSigningKey: KEY }) };
+  assert.ok(tagged((await createSession({ eval: tagFor(USER, {}, NEW_KEY) }, { secrets })).insert));
+  assert.ok(tagged((await createSession({ eval: tagFor(USER) }, { secrets })).insert));
+  const retired = await createSession({ eval: tagFor(USER, {}, "r".repeat(48)) }, { secrets });
+  assert.ok(!tagged(retired.insert));
+});
+
 test("a tag placed inside metadata is ignored", async () => {
   const tag = tagFor(USER);
-  const { insert } = await createSession({ metadata: { eval: tag, eval_run_id: tag.run_id } });
-  assert.ok(!tagged(insert));
+  // Unknown metadata keys are rejected outright (utils/sessionMetadata.js),
+  // so no session, tagged or not, is created.
+  const { res, insert } = await createSession({ metadata: { eval: tag, eval_run_id: tag.run_id } });
+  assert.equal(res.statusCode, 400);
+  assert.equal(insert, undefined);
 });
 
 test("neither the tag nor the signing key is logged", async () => {

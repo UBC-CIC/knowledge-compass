@@ -7,7 +7,7 @@ an SNS topic when something needs attention:
   * embedding models: every non-purged row of `embedding_spaces` (a retired space still
     counts, because a rollback would use it)
   * generation models: the SSM parameters in GENERATION_MODEL_PARAMS (default
-    /KC/LLM/HaikuArn and /KC/LLM/SonnetArn, the two parameters the app reads)
+    /KC/LLM/HaikuArn, the parameter the app reads)
 
 A model is flagged when
   * Bedrock reports a lifecycle status other than ACTIVE (for example LEGACY),
@@ -44,7 +44,7 @@ logger.setLevel(logging.INFO)
 # exactly 90 days away is not yet flagged.
 WARN_DAYS = 90
 
-DEFAULT_GENERATION_PARAMS = "/KC/LLM/HaikuArn,/KC/LLM/SonnetArn"
+DEFAULT_GENERATION_PARAMS = "/KC/LLM/HaikuArn"
 # Cross-region inference profile ids start with a geography; the model id follows.
 _GEO_PREFIXES = {"us", "eu", "apac", "us-gov", "global", "ca", "jp", "au"}
 _SNS_SUBJECT_MAX = 100
@@ -251,7 +251,7 @@ def build_message(findings: List[Dict[str, Any]], unresolved: List[str], notes: 
         lines.append("")
         lines.append("Could not be resolved to a model id (not checked): " + ", ".join(unresolved))
     lines.append("")
-    lines.append("Next steps: see Docs/runbooks/embedding-model-swap.md (lifecycle alerts).")
+    lines.append("Next steps: switch models from Search index in the admin dashboard (Docs/KNOWLEDGE_BASE_DOCUMENTATION.md, Embedding Spaces).")
     return subject[:_SNS_SUBJECT_MAX], "\n".join(lines)
 
 
@@ -275,6 +275,7 @@ def _secrets_client():
 
 def _connect_to_db():
     import psycopg2  # imported here: the layer provides it in Lambda
+    from botocore.httpsession import get_cert_path
 
     secret = json.loads(_secrets_client().get_secret_value(SecretId=os.environ["SM_DB_CREDENTIALS"])["SecretString"])
     return psycopg2.connect(
@@ -283,7 +284,10 @@ def _connect_to_db():
         password=secret["password"],
         host=os.environ["RDS_PROXY_ENDPOINT"],
         port=secret["port"],
-        sslmode="require",
+        # verify-full against botocore's public CA bundle: RDS Proxy serves an
+        # ACM (Amazon Trust Services) certificate.
+        sslmode="verify-full",
+        sslrootcert=get_cert_path(True),
     )
 
 

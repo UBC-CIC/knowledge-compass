@@ -20,6 +20,9 @@ const USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11";
 const OTHER_USER = "8b9e4c2d-7a1f-4e3b-a5c6-2d1e0f9a8b7c";
 const SESSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
 const SECRET = "test-jwt-secret";
+// websocket/ipLimit.js reads its HMAC key from WS_IP_HASH_SECRET (field ipHashKey).
+const IP_HASH_SECRET_ID = "test-ip-hash-secret";
+const IP_HASH_KEY = "test-ip-hash-key-0123456789abcdef0123456789abcdef";
 const LAMBDA_DIR = path.resolve(__dirname, "..", "..");
 
 // Tokens are opaque ids; verify only accepts ones signed here with the right
@@ -61,7 +64,10 @@ function load(relativePath, extraFakes = {}, jwt = fakeJwt()) {
     jsonwebtoken: jwt,
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
-        async send() {
+        async send(command) {
+          if (command.input?.SecretId === IP_HASH_SECRET_ID) {
+            return { SecretString: JSON.stringify({ ipHashKey: IP_HASH_KEY }) };
+          }
           return { SecretString: JSON.stringify({ jwtSecret: SECRET }) };
         }
       },
@@ -93,6 +99,14 @@ function load(relativePath, extraFakes = {}, jwt = fakeJwt()) {
       },
       PostToConnectionCommand: FakeCommand,
       DeleteConnectionCommand,
+    },
+    // websocket/messageLimit.js requires postgres at load time (provided by the
+    // Lambda layer, not installed locally). These cases never configure the
+    // database, so a call here is a test bug.
+    postgres: () => {
+      const sql = () => Promise.reject(new Error("unexpected database call"));
+      sql.end = async () => {};
+      return sql;
     },
     ...extraFakes,
   };
@@ -130,9 +144,14 @@ const ACCESS = { role: "user", typ: "access", iss: ISSUER, aud: "kc-public-api" 
 
 let savedEnv;
 test.beforeEach(() => {
-  savedEnv = { JWT_ISSUER: process.env.JWT_ISSUER, CONNECTIONS_TABLE_NAME: process.env.CONNECTIONS_TABLE_NAME };
+  savedEnv = {
+    JWT_ISSUER: process.env.JWT_ISSUER,
+    CONNECTIONS_TABLE_NAME: process.env.CONNECTIONS_TABLE_NAME,
+    WS_IP_HASH_SECRET: process.env.WS_IP_HASH_SECRET,
+  };
   process.env.JWT_ISSUER = ISSUER;
   process.env.CONNECTIONS_TABLE_NAME = "test-connections";
+  process.env.WS_IP_HASH_SECRET = IP_HASH_SECRET_ID;
 });
 test.afterEach(() => {
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -151,7 +170,7 @@ test("authorizer: bound access tokens expose their user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER }, SECRET, {}));
   assert.equal(policy.principalId, USER);
-  assert.deepEqual(policy.context, { userId: USER, role: "user" });
+  assert.deepEqual(policy.context, { userId: USER, role: "user", tokenId: "" });
   assert.equal(policy.policyDocument.Statement[0].Effect, "Allow");
 });
 
@@ -159,6 +178,20 @@ test("authorizer: anonymous tokens carry no user id", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS }, SECRET, {}));
   assert.equal(policy.context.userId, "");
+  assert.equal(policy.principalId, "anonymous");
+});
+
+const TOKEN_ID = "6a1f0e2d-3c4b-4a59-8e7f-0a1b2c3d4e5f";
+
+test("authorizer: an anonymous token's jti becomes tokenId and principalId, never userId", async () => {
+  const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
+  const policy = await authorize(mod, jwt.sign({ ...ACCESS, jti: TOKEN_ID }, SECRET, {}));
+  assert.equal(policy.principalId, `anonymous:${TOKEN_ID}`);
+  assert.deepEqual(policy.context, { userId: "", role: "user", tokenId: TOKEN_ID });
+
+  const bound = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER, jti: TOKEN_ID }, SECRET, {}));
+  assert.equal(bound.principalId, USER);
+  assert.deepEqual(bound.context, { userId: USER, role: "user", tokenId: TOKEN_ID });
 });
 
 test("authorizer: credentials, wrong typ/iss/aud and bad tokens are unauthorized", async () => {
@@ -194,14 +227,18 @@ test("authorizer: unset JWT_ISSUER refuses every token", async () => {
 test("authorizer: extra claims are not forwarded into the context", async () => {
   const { mod, jwt } = load("authorization/userAuthorizerFunction.js");
   const policy = await authorize(mod, jwt.sign({ ...ACCESS, sub: USER, jti: "j", admin: true, userId: OTHER_USER }, SECRET, {}));
-  assert.deepEqual(Object.keys(policy.context).sort(), ["role", "userId"]);
+  assert.deepEqual(Object.keys(policy.context).sort(), ["role", "tokenId", "userId"]);
   assert.equal(policy.context.userId, USER);
+  assert.equal(policy.context.tokenId, "", "a non-UUID jti is not forwarded");
 });
 
 // ---------- websocket/default.js ----------
 
 const wsEvent = (message) => ({
-  requestContext: { connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$default" },
+  requestContext: {
+    connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$default",
+    identity: { sourceIp: "203.0.113.7" },
+  },
   body: JSON.stringify({ action: "generate_text", query: "hello", chat_session_id: SESSION, ...message }),
 });
 
@@ -221,6 +258,7 @@ test("websocket: missing, anonymous, credential, untyped or mismatched tokens ar
   const cases = [
     [{}, 401],
     [{ token: jwt.sign({ ...ACCESS }, SECRET, {}) }, 401],
+    [{ token: jwt.sign({ ...ACCESS, jti: TOKEN_ID }, SECRET, {}) }, 401],
     [{ token: jwt.sign({ typ: "credential", sub: USER, iss: ISSUER, aud: "kc-token-exchange" }, SECRET, {}) }, 401],
     [{ token: jwt.sign({ ...ACCESS, sub: USER }, "other-secret", {}) }, 401],
     [{ token: jwt.sign({ role: "user", sub: USER }, SECRET, {}), user_id: OTHER_USER }, 401],
@@ -259,8 +297,18 @@ test("a token from issueAccessToken passes the REST authorizer and websocket/acc
 
   const token = await credentials.issueAccessToken(USER);
   const policy = await authorize(authorizer, token);
-  assert.deepEqual(policy.context, { userId: USER, role: "user" });
+  const { jti } = jwt.issued.get(token).payload;
+  assert.match(jti, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  assert.deepEqual(policy.context, { userId: USER, role: "user", tokenId: jti });
   assert.equal(await wsToken.verifyAccessToken(token), USER);
+
+  // An anonymous token passes the REST authorizer with a per-token principal,
+  // and websocket/accessToken.js still refuses it.
+  const anonymous = await credentials.issueAccessToken(null);
+  const anonPolicy = await authorize(authorizer, anonymous);
+  assert.equal(anonPolicy.context.userId, "");
+  assert.equal(anonPolicy.principalId, `anonymous:${jwt.issued.get(anonymous).payload.jti}`);
+  assert.equal(await wsToken.verifyAccessToken(anonymous), null);
 
   // A credential is accepted by neither.
   const credential = await credentials.issueUserCredential(USER, 0);

@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 import helpers.config as config  # noqa: E402
 from helpers import journeys, logic, routing  # noqa: E402
@@ -172,7 +173,7 @@ class DetectiveBlockTests(unittest.TestCase):
 class PromptAssemblyTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.multiple(
-            config, HAIKU_ARN="haiku", SONNET_ARN="sonnet", ROUTING_MODE="dynamic",
+            config, HAIKU_ARN="haiku", ROUTING_MODE="dynamic",
             MIN_EXCHANGES_BEFORE_SUGGEST=4, JOURNEY_CATALOG=DEFAULT_CATALOG,
         )
         patcher.start()
@@ -259,6 +260,14 @@ class PromptAssemblyTests(unittest.TestCase):
             self.assertIn("<supported_journeys>\nJ1 — Involuntary partial day attendance: A child", role)
             self.assertIn("\nJ2 — Transitions and future planning: ", role)
         self.assertNotIn("JOURNEY 1", config.ROLE)
+
+    def test_scope_rule_follows_admin_guardrails_in_both_phases(self):
+        admin_text = "NEVER:\n- Edited by an admin."
+        for phase in (DETECTIVE, SUGGESTION):
+            with mock.patch.object(config, "GUARDRAILS", admin_text):
+                static, _, _, _, _ = logic.get_current_prompt(phase, 0, None, _route(journey="J1", situation="C"))
+            block = static.split("<guardrails>\n", 1)[1].split("\n</guardrails>", 1)[0]
+            self.assertEqual(block, f"{admin_text}\n\n{config.SCOPE_RULE}", phase)
 
     def test_journey_list_follows_the_catalog(self):
         catalog = _custom_catalog()
@@ -348,6 +357,49 @@ class SeenKeysTests(unittest.TestCase):
         state = RoutingState.from_metadata(data, 0, 4)
         self.assertEqual(state.journeys_seen, ())
         self.assertEqual(state.clusters_seen, ("A",))
+
+
+class DocumentCoverageTest(unittest.TestCase):
+    def catalog(self):
+        return JourneyCatalog((
+            Journey(
+                key="J1", name="One", description="d", detection_signals="sent home",
+                detective_questions="ask this", guidance="guide this",
+                clusters=(
+                    Cluster(key="A", name="Sent home early", matches_when="m", response_pattern="steps a"),
+                    Cluster(key="B", name="Something else", matches_when="m", response_pattern="steps b"),
+                ),
+            ),
+            Journey(
+                key="J2", name="Two", description="d", detection_signals="w",
+                detective_questions="ask two", guidance="guide two",
+                clusters=(Cluster(key="C", name="Other", matches_when="m", response_pattern="steps c"),),
+            ),
+        ))
+
+    def test_ready_documents_replace_only_the_situations_they_cover(self):
+        covered = journeys.apply_document_coverage(self.catalog(), {
+            "J1": {"names": {"sent home early"}, "document_ids": ["d1"], "sections": []},
+        })
+        one = covered.journey("J1")
+        self.assertEqual(one.detective_questions, "")
+        self.assertEqual(one.guidance, "")
+        self.assertEqual(one.clusters[0].response_pattern, "")
+        self.assertEqual(one.clusters[1].response_pattern, "steps b")
+        two = covered.journey("J2")
+        self.assertEqual(two.detective_questions, "ask two")
+        self.assertEqual(two.guidance, "guide two")
+        self.assertEqual(two.clusters[0].response_pattern, "steps c")
+
+    def test_no_coverage_keeps_typed_text(self):
+        same = journeys.apply_document_coverage(self.catalog(), {})
+        self.assertEqual(same.journey("J1").detective_questions, "ask this")
+
+    def test_detective_block_lists_uploaded_situations(self):
+        block = build_detective_block(self.catalog(), None, {"J1": "  Situations in the uploaded guides:\n    - Sent home early"})
+        self.assertIn("Situations in the uploaded guides:", block)
+        self.assertIn("Sent home early", block)
+        self.assertIn("ask two", block)
 
 
 if __name__ == "__main__":

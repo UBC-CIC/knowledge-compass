@@ -23,6 +23,8 @@ import {
 } from "@/lib/demo";
 import { getPublicToken, invalidatePublicToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
+import { SessionLimitError } from "@/lib/sessionLimit";
+import { chatErrorMessage } from "@/lib/chatErrors";
 import ServiceStatusBanner from "@/components/ChatInterface/ServiceStatusBanner";
 import {
   NORMAL_SERVICE_STATE,
@@ -36,7 +38,9 @@ type MaxCharactersResponse = {
   max_characters_per_user_message?: number;
 };
 
-const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 50000;
+// Same missed-load default as textGeneration/helpers/config.py. A failed
+// fetch must not leave the composer more permissive than the server.
+const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
 
 // Legacy (pre-Inclusion Canada) auto-sent opener. No longer sent; kept verbatim
 // only so older chat histories that start with it hide that first message.
@@ -68,23 +72,25 @@ const WELCOME_STARTERS = [
 ];
 
 const WELCOME_HEADING =
-  "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.";
-const WELCOME_ASK =
-  "Type in information about what's happening. Is there something happening with your child's schooling right now?";
-// Earlier heading/ask wording. Still stripped from the stored welcome message
-// so admin-edited copies that kept it don't render it twice.
+  "Hello, I'm here to help you navigate support that is available to you.";
+const WELCOME_ASK = "Type in information about what's happening.";
+// Longer/older heading, ask, and body wording. Stripped before the current
+// heading/ask so leftover phrases (e.g. "from Inclusion Canada") do not show.
 const LEGACY_WELCOME_CHROME = [
+  "Hello, I'm here to help you navigate support that is available to you from Inclusion Canada.",
   "Hi, I'm here to help you navigate your child's education.",
+  "Type in information about what's happening. Is there something happening with your child's schooling right now?",
   "Tell me what's been happening. What's going on with your child's schooling right now?",
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future — you don't have to figure this out alone.",
+  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.",
 ];
-const DEFAULT_WELCOME_MESSAGE =
-  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_WELCOME_MESSAGE = "";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 
 function welcomeBody(message: string): string {
   let text = message.trim();
-  for (const chrome of [WELCOME_HEADING, WELCOME_ASK, ...LEGACY_WELCOME_CHROME]) {
+  for (const chrome of [...LEGACY_WELCOME_CHROME, WELCOME_HEADING, WELCOME_ASK]) {
     text = text.split(chrome).join("");
   }
   return text.replace(/\n{3,}/g, "\n\n").trim();
@@ -334,7 +340,7 @@ export default function AIChatPage({
                 msg.id === streamingMessageId
                   ? {
                       ...msg,
-                      text: message.message || "An error occurred",
+                      text: message.message || chatErrorMessage(message.error, null) || "An error occurred",
                       isTyping: false,
                     }
                   : msg
@@ -579,7 +585,25 @@ export default function AIChatPage({
     let sessionId = activeChatSessionId;
     if (!sessionId) {
       skipNextHistoryLoadRef.current = true;
-      const session = await createNewChatSession();
+      let session;
+      try {
+        session = await createNewChatSession();
+      } catch (err) {
+        skipNextHistoryLoadRef.current = false;
+        if (!(err instanceof SessionLimitError)) throw err;
+        // Daily session limit: say so, keep the typed text, and leave the
+        // composer usable for existing chats.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            sender: "bot",
+            text: err.message,
+            time: Date.now(),
+          },
+        ]);
+        return;
+      }
       if (!session) {
         skipNextHistoryLoadRef.current = false;
         return;
@@ -752,15 +776,15 @@ export default function AIChatPage({
           }
         }
         if (response.status === 429) {
-          const errData = await response.json();
-          if (errData.error === "TOKEN_LIMIT_EXCEEDED") {
+          const errData = await response.json().catch(() => null);
+          if (errData?.error === "TOKEN_LIMIT_EXCEEDED") {
             setIsTokenLimitReached(true);
             if (errData.token_usage?.reset_at) {
               setTokenResetTime(formatResetTime(errData.token_usage.reset_at));
             }
             throw new Error(errData.message || "Token limit exceeded");
           }
-          if (errData.error === "DAILY_CHARACTER_LIMIT_EXCEEDED") {
+          if (errData?.error === "DAILY_CHARACTER_LIMIT_EXCEEDED") {
             // Lock input only when nothing is left today (see the WS handler).
             if ((errData.character_usage?.remaining ?? 0) <= 0) {
               setIsTokenLimitReached(true);
@@ -779,6 +803,19 @@ export default function AIChatPage({
                         "You've reached today's message limit. Please come back tomorrow.",
                       isTyping: false,
                     }
+                  : msg
+              )
+            );
+            return;
+          }
+          // Service-wide limits, the pause switch and a busy assistant: show the
+          // message without locking the composer.
+          const limitMessage = chatErrorMessage(errData?.error, errData?.message);
+          if (limitMessage) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === botMsg.id
+                  ? { ...msg, text: limitMessage, isTyping: false }
                   : msg
               )
             );
@@ -927,18 +964,18 @@ export default function AIChatPage({
     <div className="flex h-full min-h-0 w-full flex-col">
       <ServiceStatusBanner state={serviceState} />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain chat-scrollbar w-full px-4 md:px-[34px]">
-        <div className="mx-auto w-full max-w-[680px] py-10 pb-6">
+        <div className="mx-auto w-full min-w-0 max-w-[680px] pt-6 pb-6 md:pt-10">
           {isWelcome ? (
             <div>
-              <h1 className="font-serif text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
+              <h1 className="font-serif text-[28px] md:text-[40px] font-semibold leading-[1.16] tracking-[-0.015em] text-pretty">
                 {WELCOME_HEADING}
               </h1>
               {displayedWelcome ? (
-                <p className="mt-4 text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
+                <p className="mt-4 text-base md:text-[17.5px] leading-[1.62] text-foreground/80 text-pretty whitespace-pre-line">
                   {displayedWelcome}
                 </p>
               ) : null}
-              <p className="mt-3.5 text-[17.5px] font-semibold leading-relaxed text-pretty">
+              <p className="mt-3.5 text-base md:text-[17.5px] font-semibold leading-relaxed text-pretty">
                 {WELCOME_ASK}
               </p>
 
@@ -956,7 +993,7 @@ export default function AIChatPage({
                     <span className="mt-px shrink-0 rounded-md bg-secondary px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.03em] text-secondary-foreground">
                       {starter.tag}
                     </span>
-                    <span>
+                    <span className="min-w-0">
                       <span className="block text-[15.5px] font-semibold leading-snug">
                         {starter.text}
                       </span>
@@ -1000,7 +1037,7 @@ export default function AIChatPage({
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-[18px] pt-3 md:px-[34px]">
+      <div className="shrink-0 px-4 pb-3 pt-2 md:px-[34px] md:pb-[18px] md:pt-3">
         <div className="mx-auto w-full max-w-[680px]">
           {latestWarning ? (
             <GroundingWarningBanner

@@ -35,6 +35,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
 
+from helpers.admin_audit import actor_from_event
 from helpers.csv_links import (
     delete_unreferenced_link_sources,
     delete_unreferenced_row_sources,
@@ -936,7 +937,8 @@ def process_csv_links(event, connection, context=None) -> dict:
         if continuation < _int_env("LINK_MAX_CONTINUATIONS", 20):
             try:
                 invoke_link_worker(ingestion_run_id=run_id, data_source_id=data_source_id,
-                                   sync_session_id=session_id, continuation=continuation + 1)
+                                   sync_session_id=session_id, continuation=continuation + 1,
+                                   actor=actor_from_event(event))
                 logger.info(
                     "Link phase for run %s continues: %d fetch row(s), %d index row(s) pending",
                     run_id,

@@ -7,6 +7,7 @@ import { useUser } from "@/providers/user";
 import { Menu, X } from "lucide-react";
 import { useSidebar } from "@/providers/sidebar";
 import AIChatPage from "@/pages/ChatInterface/ChatInterface";
+import GuestStartError from "@/components/ChatInterface/GuestStartError";
 import {
   DEMO_USER_ID,
   deleteDemoSessionState,
@@ -16,14 +17,14 @@ import {
 } from "@/lib/demo";
 import { getPublicToken as getUserToken } from "@/lib/publicToken";
 import { API_ENDPOINT } from "@/lib/api";
+import { SessionLimitError, sessionLimitError } from "@/lib/sessionLimit";
 
-const DEFAULT_WELCOME_MESSAGE =
-  "Whether your child is being sent home early or excluded from school activities, or you're planning for their future, you don't have to figure this out alone.";
+const DEFAULT_WELCOME_MESSAGE = "";
 const DEFAULT_DISCLAIMER =
   "Knowledge Compass shares information from Inclusion Canada's reviewed guidance. It isn't legal advice, and it can make mistakes.";
 
 export default function HomePage() {
-  const { userId, isLoading: isLoadingUser } = useUser();
+  const { userId, isLoading: isLoadingUser, error: userError, retry } = useUser();
   const { mobileOpen, toggleMobile } = useSidebar();
 
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
@@ -203,6 +204,8 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
       );
 
       if (!createResponse.ok) {
+        const limitError = await sessionLimitError(createResponse);
+        if (limitError) throw limitError;
         throw new Error("Failed to create chat session");
       }
 
@@ -214,6 +217,8 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
 
       return newSession;
     } catch (err) {
+      // The caller shows the daily session limit to the user.
+      if (err instanceof SessionLimitError) throw err;
       console.error("Error creating chat session:", err);
       return null;
     }
@@ -305,6 +310,10 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
     );
   }
 
+  if (!isDemoMode && !userId && userError) {
+    return <GuestStartError message={userError.message} onRetry={retry} />;
+  }
+
   return (
     <ViewProvider
       value={{
@@ -330,7 +339,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
         <div className="flex h-full overflow-hidden bg-white">
           <SideBar />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10 px-4 py-4 md:px-[34px]">
+            <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10 px-4 py-2 md:px-[34px] md:py-4">
               <button
                 type="button"
                 onClick={toggleMobile}

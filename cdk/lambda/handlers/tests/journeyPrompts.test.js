@@ -27,7 +27,9 @@ function fakeSql(handler = () => []) {
 }
 
 const adminEvent = (overrides = {}) => ({
-  requestContext: { authorizer: { email: "admin@example.com", role: "admin" } },
+  requestContext: {
+    authorizer: { email: "admin@example.com", role: "admin", userId: "11111111-2222-3333-4444-555555555555" },
+  },
   ...overrides,
 });
 
@@ -108,6 +110,7 @@ test("shapeFeedback lists every catalog item with counts and keeps unknown keys"
       { kind: "journey", key: "J1", up: 3, down: 1, sessions: 4 },
       { kind: "journey", key: "OLD", up: 1, down: 0, sessions: 1 },
       { kind: "cluster", key: "C", up: 2, down: 1, sessions: 3 },
+      { kind: "section", key: "J1\u001fSent home", up: 4, down: 1, sessions: 5 },
       { kind: "untagged", key: null, up: 0, down: 2, sessions: 2 },
     ],
     [{ id: "j1", key: "J1", name: "One", is_archived: false }, { id: "j2", key: "J2", name: "Two", is_archived: true }],
@@ -116,6 +119,7 @@ test("shapeFeedback lists every catalog item with counts and keeps unknown keys"
   );
   assert.deepEqual(out.journeys.map((j) => [j.key, j.up, j.down]), [["J1", 3, 1], ["J2", 0, 0], ["OLD", 1, 0]]);
   assert.equal(out.clusters[0].journey_key, "J1");
+  assert.deepEqual(out.sections, [{ key: "Sent home", journey_key: "J1", up: 4, down: 1, sessions: 5 }]);
   assert.deepEqual(out.untagged, { up: 0, down: 2, sessions: 2 });
   assert.equal(out.days, 30);
   // Counts only: no comment or message fields.
@@ -142,13 +146,44 @@ test("validation errors return 400 before touching the database", async () => {
   assert.match(field.body.error, /field must be one of/);
 });
 
-test("missing admin email is 401", async () => {
-  const res = await call(
-    fakeSql(),
-    "POST /admin/journeys",
-    { requestContext: { authorizer: {} }, body: JSON.stringify({ key: "J3", name: "x" }) }
-  );
-  assert.equal(res.statusCode, 401);
+test("missing authorizer userId is 401", async () => {
+  for (const authorizer of [{}, { role: "admin", email: "admin@example.com" }]) {
+    const sql = fakeSql();
+    const res = await call(
+      sql,
+      "POST /admin/journeys",
+      { requestContext: { authorizer }, body: JSON.stringify({ key: "J3", name: "x" }) }
+    );
+    assert.equal(res.statusCode, 401);
+    assert.equal(sql.calls.length, 0);
+  }
+});
+
+test("resolveAdmin looks up the Cognito sub, never the email", async () => {
+  // The elevation UPDATE returns nothing here, so the row stays non-admin.
+  const sql = fakeSql((text) => (text.includes("FROM users") ? [{ id: UUID, role: "student" }] : []));
+  const res = await call(sql, "POST /admin/journeys", adminEvent({ body: JSON.stringify({ key: "J3", name: "x" }) }));
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { error: "User is not an admin" });
+  const lookup = sql.calls.find((c) => c.text.includes("FROM users"));
+  assert.match(lookup.text, /WHERE cognito_sub = \?/);
+  assert.deepEqual(lookup.values, ["11111111-2222-3333-4444-555555555555"]);
+  // Elevation may detach the verified address from other rows (UPDATE), but
+  // never selects the admin row by email.
+  assert.ok(!sql.calls.some((c) => /^\s*SELECT/.test(c.text) && /WHERE (lower\()?email/.test(c.text)));
+});
+
+test("resolveAdmin elevates a non-admin row of an admin-group caller", async () => {
+  const sql = fakeSql((text, values) => {
+    if (text.includes("FROM users")) return [{ id: UUID, email: "admin@example.com", role: "student" }];
+    if (/^\s*UPDATE users/.test(text)) return [{ id: UUID, email: values[1], role: values[0] }];
+    if (/^\s*INSERT INTO journeys/.test(text)) return [{ id: UUID, key: "J3", name: "x" }];
+    return [];
+  });
+  const res = await call(sql, "POST /admin/journeys", adminEvent({ body: JSON.stringify({ key: "J3", name: "x" }) }));
+  assert.notEqual(res.statusCode, 403, JSON.stringify(res.body));
+  assert.ok(sql.calls.some((c) => /^\s*UPDATE users/.test(c.text) && c.values[0] === "admin"));
+  assert.ok(sql.calls.some((c) => /^\s*INSERT INTO admin_audit/.test(c.text)));
 });
 
 test("duplicate journey key is 409", async () => {
@@ -196,6 +231,23 @@ test("new prompt version over the character limit is rejected", async () => {
   assert.ok(!sql.calls.some((c) => c.text.includes("INSERT INTO journey_prompt_versions")));
 });
 
+test("a ready document blocks a new journey guidance version", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+    if (text.includes("FOR UPDATE")) return [{ id: UUID }];
+    if (text.includes("guideline_sections")) return [{ heading_path: "Journey > Sent home", section_key: "k" }];
+    return [];
+  });
+  const res = await call(
+    sql,
+    "POST /admin/journey-prompts",
+    adminEvent({ body: JSON.stringify({ field: "guidance", owner_id: UUID, content: "new guidance" }) })
+  );
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.error, /uploaded documents/);
+  assert.ok(!sql.calls.some((c) => c.text.includes("INSERT INTO journey_prompt_versions")));
+});
+
 test("active versions cannot be deleted", async () => {
   const sql = fakeSql((text) => {
     if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
@@ -207,6 +259,26 @@ test("active versions cannot be deleted", async () => {
   assert.ok(!sql.calls.some((c) => c.text.includes("DELETE FROM")));
 });
 
+test("a concurrent prompt activation that hits the one-active index is a 409 (f-e1a8b540)", async () => {
+  const sql = fakeSql((text) => {
+    if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+    if (text.includes("journey_prompt_versions WHERE id") && text.includes("FOR UPDATE")) {
+      return [{ id: UUID, field: "guidance", is_active: false, journey_id: UUID, cluster_id: null }];
+    }
+    if (text.includes("SET is_active = true")) {
+      const err = new Error("duplicate key value violates unique constraint");
+      err.code = "23505";
+      throw err;
+    }
+    return [];
+  });
+  const res = await call(sql, "POST /admin/journey-prompts/{version_id}/activate", adminEvent({ pathParameters: { version_id: UUID } }));
+  assert.equal(res.statusCode, 409);
+  const deactivate = sql.calls.findIndex((c) => c.text.includes("SET is_active = false"));
+  const activate = sql.calls.findIndex((c) => c.text.includes("SET is_active = true"));
+  assert.ok(deactivate >= 0 && deactivate < activate, "deactivates before activating");
+});
+
 test("missing tables give a 503 hint", async () => {
   const sql = fakeSql(() => {
     const err = new Error("relation does not exist");
@@ -215,4 +287,47 @@ test("missing tables give a 503 hint", async () => {
   });
   const res = await call(sql, "GET /admin/journeys", adminEvent());
   assert.equal(res.statusCode, 503);
+});
+
+test("every journey and prompt mutation writes an admin_audit row with ids only (f-c47d6990)", async () => {
+  const VERSION = "5c3b2a19-0d8e-4f7a-b6c5-4e3d2c1b0a99";
+  const CONTENT = "Ask the school for the reason in writing.";
+  const sql = () =>
+    fakeSql((text) => {
+      if (text.includes("FROM users")) return [{ id: UUID, role: "admin" }];
+      if (text.includes("journey_prompt_versions WHERE id") && text.includes("FOR UPDATE")) {
+        return [{ id: VERSION, field: "guidance", version: 2, is_active: false, journey_id: UUID, cluster_id: null }];
+      }
+      if (text.includes("FOR UPDATE")) return [{ id: UUID, is_archived: false }];
+      if (text.includes("SELECT id FROM journeys WHERE id")) return [{ id: UUID }];
+      if (text.includes("AS others")) return [{ others: 1 }];
+      if (text.includes("next_version")) return [{ next_version: 2 }];
+      if (text.includes("SELECT character_limit")) return [{ character_limit: 5000 }];
+      if (text.includes("RETURNING id")) return [{ id: VERSION }];
+      return [];
+    });
+  const cases = [
+    ["POST /admin/journeys", {}, { key: "J9", name: "New journey" }, "journey.create"],
+    ["PUT /admin/journeys/{journey_id}", { journey_id: UUID }, { name: "Renamed" }, "journey.update"],
+    ["POST /admin/journeys/{journey_id}/clusters", { journey_id: UUID }, { key: "C9", name: "Sent home", matches_when: "x" }, "journey_cluster.create"],
+    ["PUT /admin/clusters/{cluster_id}", { cluster_id: UUID }, { name: "Renamed" }, "journey_cluster.update"],
+    ["POST /admin/journey-prompts", {}, { field: "guidance", owner_id: UUID, content: CONTENT }, "journey_prompt.create"],
+    ["DELETE /admin/journey-prompts/{version_id}", { version_id: VERSION }, undefined, "journey_prompt.delete"],
+    ["POST /admin/journey-prompts/{version_id}/activate", { version_id: VERSION }, undefined, "journey_prompt.activate"],
+  ];
+  const saved = console.log;
+  console.log = () => {};
+  try {
+    for (const [routeKey, pathParameters, body, action] of cases) {
+      const db = sql();
+      const res = await call(db, routeKey, adminEvent({ pathParameters, body: body && JSON.stringify(body) }));
+      assert.ok(res.statusCode < 300, `${routeKey}: ${res.statusCode} ${JSON.stringify(res.body)}`);
+      const audits = db.calls.filter((c) => /^\s*INSERT INTO admin_audit/.test(c.text));
+      assert.equal(audits.length, 1, routeKey);
+      assert.equal(audits[0].values[2], action, routeKey);
+      assert.ok(!JSON.stringify(audits[0].values).includes(CONTENT), `${routeKey} must not audit prompt content`);
+    }
+  } finally {
+    console.log = saved;
+  }
 });

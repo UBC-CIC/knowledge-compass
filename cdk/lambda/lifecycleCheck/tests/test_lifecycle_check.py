@@ -329,11 +329,26 @@ class HandlerTests(unittest.TestCase):
             env.run()
 
     def test_generation_parameters_come_from_configuration(self):
-        env = Env(self, generation={"/KC/LLM/HaikuArn": HAIKU, "/KC/LLM/SonnetArn": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
-                  listings={REGION: listing(summary(HAIKU), summary("anthropic.claude-3-5-sonnet-20241022-v2:0"))})
+        env = Env(self, generation={"/KC/LLM/HaikuArn": HAIKU}, listings={REGION: listing(summary(HAIKU))})
         env.run()
         names = env.ssm.get_parameters.call_args.kwargs["Names"]
-        self.assertEqual(names, ["/KC/LLM/HaikuArn", "/KC/LLM/SonnetArn"])
+        self.assertEqual(names, ["/KC/LLM/HaikuArn"])
+
+
+class DbTlsTests(unittest.TestCase):
+    def test_connect_uses_verify_full_with_a_real_ca_bundle(self):
+        psycopg2 = mock.Mock()
+        secrets = mock.Mock()
+        secrets.get_secret_value.return_value = {
+            "SecretString": json.dumps({"dbname": "d", "username": "u", "password": "p", "port": 5432})
+        }
+        with mock.patch.dict(sys.modules, {"psycopg2": psycopg2}), \
+                mock.patch.object(lc, "_secrets_client", return_value=secrets), \
+                mock.patch.dict(os.environ, {"SM_DB_CREDENTIALS": "s", "RDS_PROXY_ENDPOINT": "proxy.example"}):
+            lc._connect_to_db()
+        kwargs = psycopg2.connect.call_args.kwargs
+        self.assertEqual(kwargs["sslmode"], "verify-full")
+        self.assertTrue(os.path.isfile(kwargs["sslrootcert"]))
 
 
 if __name__ == "__main__":

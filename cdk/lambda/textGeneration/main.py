@@ -1,7 +1,7 @@
 
 import boto3.exceptions
 import json
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 import logging
 import os
 import uuid
@@ -88,10 +88,20 @@ def _post_ws(apigw_management, connection_id, payload):
         return False
 
 
+def _event_summary(event):
+    """Allow-listed routing fields only. Never the whole event: headers carry
+    the caller's Authorization bearer token and the body carries the query."""
+    request_context = event.get('requestContext') or {}
+    return {
+        'resource': event.get('resource'),
+        'httpMethod': event.get('httpMethod'),
+        'routeKey': request_context.get('routeKey'),
+        'requestId': request_context.get('requestId'),
+    }
+
+
 def handler(event, context=None):
-    # Log event but exclude body to prevent sensitive data exposure (user_id, chat_session_id)
-    safe_event = {k: v for k, v in event.items() if k != 'body'}
-    logger.info("Event: %s (body omitted)", json.dumps(safe_event, default=str))
+    logger.info("Event: %s", json.dumps(_event_summary(event), default=str))
 
     # Resolved up front so every failure path can send a terminal "error"
     # event; otherwise the client waits on its typing indicator forever.
@@ -148,16 +158,10 @@ def handler(event, context=None):
         return fail(status_code, error, "Your session has expired. Please refresh the page and try again.")
 
     # Presence/type check must come before the length check (len(None) raises).
+    # The length check itself runs only after config.load_config, below: on a
+    # cold container the module global is still the hard-coded fallback.
     if not isinstance(query, str) or not query.strip() or not chat_session_id:
         return fail(400, 'Missing query or chat_session_id')
-
-    # Perform Query Length Validation
-    if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
-        return fail(
-            400,
-            f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters',
-            f'Your message is too long. Please keep it under {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters.',
-        )
 
     # Sanitize session ID before querying DB
     try:
@@ -194,8 +198,18 @@ def handler(event, context=None):
                 service['message'] or READ_ONLY_DEFAULT_MESSAGE,
             )
 
-        # Load dynamic configuration from DB
+        # Load dynamic configuration from DB before the per-message cap.
+        # MAX_CHARACTERS_PER_USER_MESSAGE stays at the hard-coded fallback until
+        # this runs, and load_config refreshes it when the TTL has elapsed, so
+        # the check has to read the global afterwards.
         config.load_config(conn)
+
+        if len(query) > config.MAX_CHARACTERS_PER_USER_MESSAGE:
+            return fail(
+                400,
+                f'Query exceeds maximum length of {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters',
+                f'Your message is too long. Please keep it under {config.MAX_CHARACTERS_PER_USER_MESSAGE} characters.',
+            )
 
         # One in-flight generation per user. Claimed before the daily
         # reservation so a rejected parallel message is not counted. The Lambda
@@ -244,7 +258,7 @@ def handler(event, context=None):
             chat_session_id=chat_session_id,
             user_id=user_id,
             db_connection=conn,
-            stream_callback=stream_chunk,
+            stream_callback=stream_chunk if (apigw_management and connection_id) else None,
         )
         
         # Format response to match API contract

@@ -253,6 +253,58 @@ class CrawlerSpaceTests(_IngestMixin, unittest.TestCase):
         lookups = [p for s, p in conn.executed if "FROM chunks c LEFT JOIN" in s]
         self.assertEqual(lookups, [(SPACE_ID, "src-1")])
 
+    def test_upsert_source_refreshes_only_a_row_of_the_same_type(self):
+        conn = ScriptedConnection({"INSERT INTO sources": ([], ("src-1",))})
+        self.assertEqual(self.mod.upsert_source(conn, "https://example.org/a", "A"), "src-1")
+        sql = conn.executed[0][0]
+        self.assertIn("WHERE sources.source_type = EXCLUDED.source_type", sql)
+        self.assertNotIn("source_type = EXCLUDED.source_type", sql.split("WHERE", 1)[0])
+
+    def test_upsert_source_returns_none_when_the_url_belongs_to_another_type(self):
+        conn = ScriptedConnection()
+        self.assertIsNone(self.mod.upsert_source(conn, "https://example.org/a", "A"))
+
+    def test_write_to_db_skips_a_page_whose_url_is_not_web_without_deleting_chunks(self):
+        self.mod.ACTIVE_SPACE = dict(TITAN_ROW)
+        conn = ScriptedConnection({
+            "to_regclass('public.web_source_owners')": ([], None),
+            "INSERT INTO ingestion_runs": ([], ("run-1",)),
+        })
+        ids = iter([("seed-src",), None])
+        original_cursor = conn.cursor
+
+        def cursor():
+            cur = original_cursor()
+            execute = cur.execute
+
+            def scripted_execute(sql, params=None):
+                execute(sql, params)
+                if "INSERT INTO sources" in " ".join(sql.split()):
+                    cur._one = next(ids)
+
+            cur.execute = scripted_execute
+            return cur
+
+        conn.cursor = cursor
+        page = {"url": "https://example.org/taken", "title": "Taken", "chunks": [self.chunk(0, "h", "body")]}
+        with mock.patch.object(self.mod, "get_db_connection", return_value=conn), \
+                mock.patch.object(self.mod, "embed_texts") as embed, \
+                mock.patch.object(self.mod, "delete_stale_chunks") as delete:
+            self.mod.write_to_db([page], "https://example.org", 5, 300)
+        embed.assert_not_called()
+        delete.assert_not_called()
+        self.assertFalse(any("DELETE FROM chunks" in sql for sql, _ in conn.executed))
+
+    def test_write_to_db_refuses_a_seed_that_belongs_to_an_upload(self):
+        self.mod.ACTIVE_SPACE = dict(TITAN_ROW)
+        conn = ScriptedConnection({"to_regclass('public.web_source_owners')": ([], None)})
+        with mock.patch.object(self.mod, "get_db_connection", return_value=conn), \
+                mock.patch.object(self.mod, "delete_stale_chunks") as delete:
+            with self.assertRaises(RuntimeError) as raised:
+                self.mod.write_to_db([], "https://example.org/video", 5, 300)
+        self.assertIn("uploaded source", str(raised.exception))
+        delete.assert_not_called()
+
     def test_write_to_db_resolves_the_space_when_none_was_loaded_at_startup(self):
         conn = ScriptedConnection({
             "FROM embedding_active_space a": ([], space_db_row()),
@@ -266,7 +318,8 @@ class CrawlerSpaceTests(_IngestMixin, unittest.TestCase):
     def _run_main(self, argv, space):
         seen = {}
 
-        async def fake_crawl(seed_url, max_pages, max_words, use_semantic=False, semantic_threshold=0.6):
+        async def fake_crawl(seed_url, max_pages, max_words, use_semantic=False, semantic_threshold=0.6,
+                             scope=None):
             seen["threshold"] = semantic_threshold
             return [], set()
 
@@ -323,6 +376,31 @@ class TranscriberSpaceTests(_IngestMixin, unittest.TestCase):
         upserts = [p for s, p in conn.executed if "INSERT INTO chunk_embeddings" in s]
         self.assertEqual(len(upserts), 1)
         self.assertIn(SPACE_ID, upserts[0])
+
+    def test_upsert_source_updates_only_video_rows(self):
+        conn = ScriptedConnection({"INSERT INTO sources": ([], ("src-1",))})
+        self.assertEqual(self.mod.upsert_source(conn, "https://youtu.be/x", "Talk"), "src-1")
+        sql = conn.executed[0][0]
+        self.assertIn("WHERE sources.source_type = 'video'::source_type", sql)
+
+    def test_upsert_source_aborts_when_the_url_is_not_a_video(self):
+        conn = ScriptedConnection()
+        with self.assertRaises(RuntimeError) as raised:
+            self.mod.upsert_source(conn, "https://example.org/page", "Talk")
+        self.assertIn("non-video", str(raised.exception))
+
+    def test_write_to_db_does_not_delete_chunks_when_the_url_is_not_a_video(self):
+        self.mod.ACTIVE_SPACE = dict(TITAN_ROW)
+        conn = ScriptedConnection()
+        with mock.patch.object(self.mod, "get_db_connection", return_value=conn), \
+                mock.patch.object(self.mod, "embed_texts") as embed, \
+                mock.patch.object(self.mod, "delete_stale_chunks") as delete:
+            with self.assertRaises(RuntimeError):
+                self.mod.write_to_db([self.chunk()], "https://example.org/page", "Talk")
+        embed.assert_not_called()
+        delete.assert_not_called()
+        self.assertFalse(any("DELETE FROM chunks" in sql for sql, _ in conn.executed))
+        self.assertEqual(conn.commits, 0)
 
     def _run_main(self, argv, space):
         seen = {}

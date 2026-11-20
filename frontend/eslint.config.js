@@ -12,9 +12,16 @@ export default defineConfig([
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
-      reactHooks.configs['recommended-latest'],
       reactRefresh.configs.vite,
     ],
+    // eslint-plugin-react-hooks v7's presets also enable React Compiler
+    // diagnostics (set-state-in-effect, refs, immutability). Keep the
+    // classic two rules (v5 behaviour) until those are adopted deliberately.
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+    },
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,

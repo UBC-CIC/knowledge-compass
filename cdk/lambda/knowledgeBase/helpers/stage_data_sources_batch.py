@@ -1,9 +1,20 @@
 import json
 import logging
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.ingestion_lock import reject_if_locked
-from helpers.admin_user import admin_email_from_request, get_or_create_admin_user_id
-from helpers.stage_data_sources import StageRejected, stage_file_pair
+from helpers.admin_user import (
+    admin_email_from_request,
+    admin_sub_from_request,
+    get_or_create_admin_user_id,
+)
+from helpers.admin_audit import log_admin_audit
+from helpers.stage_data_sources import (
+    BATCH_STAGE_AUDIT_ACTION,
+    StageRejected,
+    insert_stage_audit,
+    stage_audit_target,
+    stage_file_pair,
+)
 from helpers.upload_identity import delete_s3_objects, upload_source_key
 
 logger = logging.getLogger()
@@ -27,9 +38,13 @@ def stage_data_sources_batch(event, body, connection):
     ("replaced"), a byte-identical re-upload is dropped ("unchanged"), and a
     source that is mid-ingestion is left alone ("skipped").
 
+    The acting admin is the authorizer email. A created_by field in the body
+    is ignored. When any pair is staged, replaced or unchanged, one admin_audit
+    row ("data_source.stage_batch": type, outcome and ids per pair) commits with
+    the batch.
+
     Request body:
     {
-      "created_by": "admin@example.com",
       "items": [
         {
           "type": "csv" | "markdown",
@@ -48,11 +63,14 @@ def stage_data_sources_batch(event, body, connection):
     if locked:
         return locked
 
-    created_by = admin_email_from_request(event, body)
-    items = body.get("items")
+    # Audit identity is the authorizer only. A missing email is 401, and the
+    # body is never consulted (finding f-c4d6f814).
+    created_by = admin_email_from_request(event)
+    admin_sub = admin_sub_from_request(event)
+    if not admin_sub or not created_by:
+        return _response(event, 401, {"error": "Unauthorized"})
 
-    if not created_by:
-        return _response(event, 400, {"error": "Missing created_by"})
+    items = body.get("items")
 
     if not isinstance(items, list) or len(items) == 0:
         return _response(event, 400, {"error": "items must be a non-empty array"})
@@ -60,7 +78,7 @@ def stage_data_sources_batch(event, body, connection):
     if len(items) > 100:
         return _response(event, 400, {"error": "Too many items. Maximum is 100 per batch."})
 
-    created_by_user_id = get_or_create_admin_user_id(connection, created_by)
+    created_by_user_id = get_or_create_admin_user_id(connection, admin_sub, created_by)
     if not created_by_user_id:
         return _response(event, 400, {"error": "Admin user not found in database"})
     connection.commit()
@@ -71,6 +89,8 @@ def stage_data_sources_batch(event, body, connection):
     skipped = []
     errors = []
     s3_cleanup = []
+    audit_items = []
+    actor = None
 
     # source_key -> file name of the item that claimed it earlier in this batch.
     # Two files whose names only differ by case/punctuation ("Data.csv",
@@ -114,6 +134,7 @@ def stage_data_sources_batch(event, body, connection):
                 result = stage_file_pair(
                     connection,
                     created_by_user_id=created_by_user_id,
+                    issued_to=admin_sub,
                     source_type=source_type,
                     primary_file_name=primary_file_name,
                     primary_s3_bucket=primary_s3_bucket,
@@ -136,6 +157,9 @@ def stage_data_sources_batch(event, body, connection):
                 continue
 
             s3_cleanup.extend(result["s3_cleanup"])
+            audit_items.append(stage_audit_target(
+                source_type, result["action"], result["data_source_ids"], result["ingestion_run_ids"]
+            ))
             entry = {"index": i, "file": primary_file_name, "data_source_ids": result["data_source_ids"]}
             if result["suggested_url_column"]:
                 entry["suggested_url_column"] = result["suggested_url_column"]
@@ -146,6 +170,8 @@ def stage_data_sources_batch(event, body, connection):
             else:
                 staged.append(entry)
 
+        if audit_items:
+            actor = insert_stage_audit(connection, event, BATCH_STAGE_AUDIT_ACTION, {"items": audit_items})
         connection.commit()
 
     except Exception as e:
@@ -153,6 +179,8 @@ def stage_data_sources_batch(event, body, connection):
         logger.error("Batch staging failed: %s", e, exc_info=True)
         return _response(event, 500, {"error": "Batch staging failed"})
 
+    if actor is not None:
+        log_admin_audit(actor, BATCH_STAGE_AUDIT_ACTION, {"items": audit_items})
     delete_s3_objects(s3_cleanup)
 
     return _response(event, 200, {

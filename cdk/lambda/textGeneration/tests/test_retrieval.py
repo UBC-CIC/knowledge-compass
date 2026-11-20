@@ -18,8 +18,10 @@ from unittest import mock
 
 # Make `helpers` importable when running from the textGeneration directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
-from helpers import retrieval, retrieval_core  # noqa: E402
+from helpers import retrieval  # noqa: E402
+from kc_shared import retrieval_core  # noqa: E402
 from helpers.embedding_space import ActiveSpace, EmbeddingSpaceError  # noqa: E402
 
 

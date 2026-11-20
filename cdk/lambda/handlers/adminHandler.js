@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AWS Lambda Handler for Admin Operations
  *
  * This Lambda function handles HTTP requests for administrative operations including:
@@ -11,12 +11,15 @@
  */
 
 const postgres = require("postgres");
-const { randomUUID } = require("crypto");
 const { getCorsHeaders } = require("./utils/cors.js");
-const { handleJourneyRequest, isJourneyRoute } = require("./utils/journeyPrompts.js");
+const { handleJourneyRequest } = require("./utils/journeyPrompts.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
+const { adminSubFromEvent, resolveAdminUser } = require("./utils/adminIdentity.js");
+const { ensureStaffUser, normalizeEmail } = require("../authorization/staffIdentity.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./utils/adminAudit.js");
+const { parsePositiveInt, validateUUID } = require("./utils/validation.js");
 const {
   handleFeedbackTriageRequest,
-  isFeedbackTriageRoute,
   fetchFeedbackLists,
 } = require("./utils/feedbackTriage.js");
 const {
@@ -41,6 +44,20 @@ const SYSTEM_MESSAGE_TYPES = new Set([
 
 const UI_ONLY_SYSTEM_MESSAGE_TYPES = new Set(["welcome_message", "disclaimer"]);
 
+// Code-level ceilings on the public usage limits. Saves above these are
+// rejected. textGeneration/helpers/config.py (LIMIT_CEILINGS) also caps the
+// loaded values at the same numbers, so a value written straight to the
+// database cannot raise a limit either. Keep the two in sync, along with
+// websocket/messageLimit.js, systemMessagesHandler.js and
+// frontend/src/lib/assistantSettings.ts.
+const LIMIT_CEILINGS = Object.freeze({
+  max_messages_per_day: 100,
+  max_characters_per_user_message: 4000,
+  max_characters_per_day: 20000,
+  max_messages_per_day_global: 20000,
+  max_characters_per_ai_message: 10000,
+});
+
 // Used only when a type has no existing row to inherit character_limit from.
 // Mirrors the limits seeded in migrations 002/004/010.
 const DEFAULT_CHARACTER_LIMITS = {
@@ -55,6 +72,12 @@ const DEFAULT_CHARACTER_LIMITS = {
   welcome_message: 2000,
   disclaimer: 700,
 };
+
+// A create or activate that loses a race with another change to the same type
+// hits uq_system_messages_active or uq_system_messages_type_version (23505).
+const CONCURRENT_PROMPT_CHANGE =
+  "Another change to this prompt was saved at the same time. Reload and try again.";
+const isUniqueViolation = (err) => err?.code === "23505";
 
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
@@ -81,15 +104,18 @@ const initConnection = async () => {
       await sqlConnection`SELECT 1`;
       console.log("Database connection initialized successfully");
     } catch (error) {
-      console.error("Error initializing database connection:", error);
+      console.error("Error initializing database connection:", errorSummary(error));
       throw error;
     }
   }
 };
 
+// HTTP methods this function serves (OpenAPI_Swagger_Definition.yaml).
+const SERVED_METHODS = "DELETE,GET,POST,PUT";
+
 const createResponse = async (event) => ({
     statusCode: 200,
-    headers: await getCorsHeaders(event),
+    headers: await getCorsHeaders(event, SERVED_METHODS),
     body: "",
 });
 
@@ -103,7 +129,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
   response.statusCode = 500;
-  console.error("Internal server error:", error);
+  console.error("Internal server error:", errorSummary(error));
   response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -119,13 +145,12 @@ exports.handler = async (event) => {
   if (callerRole !== 'admin') {
     response.statusCode = 403;
     response.body = JSON.stringify({ error: 'Admin access required' });
-    return response;
+    return logAndReturn(event, response);
   }
 
   // Ensure database connection is ready
   await initConnection();
 
-  let data; // Variable to store response data
   try {
     // Route requests based on HTTP method and URL path
     // event.httpMethod: GET, POST, PUT, DELETE
@@ -145,47 +170,49 @@ exports.handler = async (event) => {
 
     // Handle different API endpoints using switch statement
     switch (pathData) {
-      // POST /admin/promote_user - Ensure the signed-in admin exists in users
+      // POST /admin/promote_user - Ensure the signed-in admin exists in users.
+      // Acts only on the caller, identified by the Cognito sub; body email,
+      // role and user_id are ignored (the authorizer already proved admin
+      // group membership). Never keyed on users.email, which guests can write.
       case "POST /admin/promote_user": {
-        let body;
         try {
-          body = parseBody(event.body);
+          parseBody(event.body);
         } catch (error) {
           response.statusCode = 400;
           response.body = JSON.stringify({ error: error.message });
           break;
         }
 
-        const email = (body?.email || event.requestContext?.authorizer?.email || "").trim().toLowerCase();
-        const role = body?.role || "admin";
-
-        if (!email) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "email is required" });
+        const adminSub = adminSubFromEvent(event);
+        if (!adminSub) {
+          response.statusCode = 401;
+          response.body = JSON.stringify({ error: "Unauthorized" });
           break;
         }
+        const adminEmail = normalizeEmail(event.requestContext?.authorizer?.email);
 
-        const validRoles = ["admin", "student"];
-        if (!validRoles.includes(role)) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: "role must be 'admin' or 'student'" });
-          break;
-        }
+        // The audit row is written in ensureStaffUser's transaction, so the
+        // role change and its record commit or roll back together.
+        let promoteAudit;
+        const ensured = await ensureStaffUser(sqlConnection, {
+          sub: adminSub,
+          email: adminEmail,
+          displayName: adminEmail,
+          role: "admin",
+          elevate: true,
+          onWrite: (tx, row) => {
+            promoteAudit = auditEntry(event, "admin.promote_user", {
+              user_id: row.id,
+              outcome: row.outcome,
+              role: row.role,
+            });
+            return insertAdminAudit(tx, promoteAudit);
+          },
+        });
+        logAdminAudit(promoteAudit);
 
         const updated = await sqlConnection`
-          INSERT INTO users (id, email, display_name, role, created_at, last_seen_at)
-          VALUES (
-            ${randomUUID()}::uuid,
-            ${email},
-            ${email},
-            ${role}::user_role,
-            NOW(),
-            NOW()
-          )
-          ON CONFLICT (email) DO UPDATE SET
-            role = ${role}::user_role,
-            last_seen_at = NOW()
-          RETURNING
+          SELECT
             id,
             email,
             display_name,
@@ -195,6 +222,8 @@ exports.handler = async (event) => {
             messages_sent,
             messages_window_started_at,
             metadata
+          FROM users
+          WHERE id = ${ensured.id}
         `;
 
         response.statusCode = 200;
@@ -281,38 +310,31 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
+        // Find admin user id by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
-        // Find admin user id (ensure role is admin)
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
-          break;
-        }
-
-        const createdByUserId = adminRows[0].id;
+        const createdByUserId = admin.id;
 
         // Create new version, make it active, deactivate old
         try {
           const created = await sqlConnection.begin(async (tx) => {
+            // Lock the active row first, as the activate route does, so the two
+            // routes serialize on it; the version number is then read in a
+            // fresh snapshot. uq_system_messages_active (migration 050) catches
+            // any race this lock does not cover (409 below).
+            await tx`
+              SELECT id
+              FROM system_messages
+              WHERE type = ${messageType}::system_message_type
+                AND is_active = true
+              FOR UPDATE
+            `;
+
             const [{ next_version }] = await tx`
               SELECT COALESCE(MAX(version), 0) + 1 AS next_version
               FROM system_messages
@@ -392,9 +414,17 @@ exports.handler = async (event) => {
               LIMIT 1
             `;
 
+            const audit = auditEntry(event, "system_message.create", {
+              id: inserted[0].id,
+              type: messageType,
+              version: next_version,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "created",
               row: out[0],
+              audit,
             };
           });
 
@@ -408,11 +438,17 @@ exports.handler = async (event) => {
             break;
           }
 
+          logAdminAudit(created.audit);
           response.statusCode = 200;
           response.body = JSON.stringify(created.row);
           break;
         } catch (err) {
-          console.error("POST /admin/system-messages/{system_message_type} failed:", err);
+          if (isUniqueViolation(err)) {
+            response.statusCode = 409;
+            response.body = JSON.stringify({ error: CONCURRENT_PROMPT_CHANGE });
+            break;
+          }
+          console.error("POST /admin/system-messages/{system_message_type} failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to create system message version" });
           break;
@@ -451,30 +487,11 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
-          break;
-        }
-
-        // Find admin user id
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
+        // Find admin user by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
@@ -509,11 +526,19 @@ exports.handler = async (event) => {
               return { kind: "not_found" };
             }
 
+            const audit = auditEntry(event, "system_message.delete", {
+              id: removed[0].id,
+              type: removed[0].type,
+              version: removed[0].version,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "deleted",
               id: removed[0].id,
               type: removed[0].type,
               version: removed[0].version,
+              audit,
             };
           });
 
@@ -534,6 +559,7 @@ exports.handler = async (event) => {
             break;
           }
 
+          logAdminAudit(deleted.audit);
           response.statusCode = 200;
           response.body = JSON.stringify({
             success: true,
@@ -545,7 +571,7 @@ exports.handler = async (event) => {
           });
           break;
         } catch (err) {
-          console.error("DELETE /admin/system-messages/{system_message_type}/{version_id} failed:", err);
+          console.error("DELETE /admin/system-messages/{system_message_type}/{version_id} failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to delete system message version" });
           break;
@@ -584,30 +610,11 @@ exports.handler = async (event) => {
           break;
         }
 
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
-          response.statusCode = 401;
-          response.body = JSON.stringify({ error: "Unauthorized" });
-          break;
-        }
-
-        // Find admin user id (ensure role is admin)
-        const adminRows = await sqlConnection`
-          SELECT id, email, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
-          break;
-        }
-
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
+        // Find admin user by Cognito sub (ensure role is admin)
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
@@ -699,8 +706,17 @@ exports.handler = async (event) => {
               LIMIT 1
             `;
 
+            const audit = auditEntry(event, "system_message.activate", {
+              id: target.id,
+              type: target.type,
+              version: target.version,
+              previous_active_id: previousActive ? previousActive.id : null,
+            });
+            await insertAdminAudit(tx, audit);
+
             return {
               kind: "activated",
+              audit,
               activated: out[0],
               previous_active: previousActive
                 ? {
@@ -719,7 +735,9 @@ exports.handler = async (event) => {
             break;
           }
 
-          // Both "already_active" and "activated" return 200
+          // Both "already_active" and "activated" return 200; only a real
+          // activation is audited.
+          if (result.kind === "activated") logAdminAudit(result.audit);
           response.statusCode = 200;
           response.body = JSON.stringify({
             success: true,
@@ -729,49 +747,17 @@ exports.handler = async (event) => {
           });
           break;
         } catch (err) {
-          console.error("POST /admin/system-messages/{system_message_type}/{version_id}/activate failed:", err);
+          if (isUniqueViolation(err)) {
+            response.statusCode = 409;
+            response.body = JSON.stringify({ error: CONCURRENT_PROMPT_CHANGE });
+            break;
+          }
+          console.error("POST /admin/system-messages/{system_message_type}/{version_id}/activate failed:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Failed to activate system message version" });
           break;
         }
       }
-
-      // POST /admin/users - Create new admin user in the system
-      case "POST /admin/users":
-        // Parse JSON request body containing new user data
-        let userData;
-        try {
-          userData = parseBody(event.body);
-        } catch (error) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({ error: error.message });
-          break;
-        }
-
-        // Extract user fields from request body
-        const { display_name, email, institution_id } = userData;
-
-        // Validate required fields
-        if (!display_name || !email) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({
-            error: "display_name and email are required",
-          });
-          break;
-        }
-
-        // Insert new admin user into database
-        // Using postgres library template literal syntax for better performance
-        const result = await sqlConnection`
-          INSERT INTO users (display_name, email, institution_id, role)
-          VALUES (${display_name}, ${email}, ${institution_id || null}, 'admin')
-          RETURNING id, display_name, email, role, institution_id, created_at
-        `;
-
-        response.statusCode = 201; // Created
-        data = result[0];
-        response.body = JSON.stringify(data);
-        break;
 
       // Get analytics data
       case "GET /admin/analytics": {
@@ -783,74 +769,99 @@ exports.handler = async (event) => {
         // Helper: compute totals (either all-time or between startDate and endDate).
         // Evaluation-harness sessions (cs.eval_run_id set, migration 035) are
         // test traffic and are excluded from every count.
+        // Each total adds analytics_archive (migration 048): per-day counts of
+        // guests deleted by the retention job (handlers/retentionHandler.js).
+        // A guest is either fully live or fully archived, so live and archived
+        // distinct-user counts never overlap. Archive rows are per day, so a
+        // range includes its whole first day.
         const fetchTotals = async (startDateIso /* string | null */, endDateIso /* string | null */) => {
           if (!startDateIso) {
             const totalsRows = await sqlConnection`
               SELECT
-                (SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs
-                  WHERE cs.eval_run_id IS NULL) AS users,
-                (SELECT COUNT(cs.id)::int FROM chat_sessions cs
-                  WHERE cs.eval_run_id IS NULL) AS chat_sessions,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                ((SELECT COUNT(DISTINCT cs.user_id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COUNT(DISTINCT aa.archive_user_id)::int FROM analytics_archive aa
+                  WHERE aa.sessions_created > 0)) AS users,
+                ((SELECT COUNT(cs.id)::int FROM chat_sessions cs
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.sessions_created), 0)::int FROM analytics_archive aa)) AS chat_sessions,
+                ((SELECT COUNT(cm.id)::int FROM chat_messages cm
                   JOIN chat_sessions cs ON cs.id = cm.chat_session_id
-                  WHERE cs.eval_run_id IS NULL) AS messages,
-                (SELECT COUNT(cm.id)::int FROM chat_messages cm
+                  WHERE cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.messages), 0)::int FROM analytics_archive aa)) AS messages,
+                ((SELECT COUNT(cm.id)::int FROM chat_messages cm
                   JOIN chat_sessions cs ON cs.id = cm.chat_session_id
-                  WHERE cm.sender = 'user' AND cs.eval_run_id IS NULL) AS questions,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  WHERE cm.sender = 'user' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.questions), 0)::int FROM analytics_archive aa)) AS questions,
+                ((SELECT COUNT(sf.id)::int FROM session_feedback sf
                   JOIN chat_sessions cs ON cs.id = sf.chat_session_id
-                  WHERE sf.rating = 'up' AND cs.eval_run_id IS NULL) AS thumbs_up,
-                (SELECT COUNT(sf.id)::int FROM session_feedback sf
+                  WHERE sf.rating = 'up' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.thumbs_up), 0)::int FROM analytics_archive aa)) AS thumbs_up,
+                ((SELECT COUNT(sf.id)::int FROM session_feedback sf
                   JOIN chat_sessions cs ON cs.id = sf.chat_session_id
-                  WHERE sf.rating = 'down' AND cs.eval_run_id IS NULL) AS thumbs_down
+                  WHERE sf.rating = 'down' AND cs.eval_run_id IS NULL)
+                 + (SELECT COALESCE(SUM(aa.thumbs_down), 0)::int FROM analytics_archive aa)) AS thumbs_down
             `;
             return totalsRows[0];
           }
 
           const totalsRows = await sqlConnection`
+            WITH archived AS (
+              SELECT
+                COUNT(DISTINCT aa.archive_user_id) FILTER (WHERE aa.sessions_created > 0)::int AS users,
+                COALESCE(SUM(aa.sessions_created), 0)::int AS chat_sessions,
+                COALESCE(SUM(aa.messages), 0)::int AS messages,
+                COALESCE(SUM(aa.questions), 0)::int AS questions,
+                COALESCE(SUM(aa.thumbs_up), 0)::int AS thumbs_up,
+                COALESCE(SUM(aa.thumbs_down), 0)::int AS thumbs_down
+              FROM analytics_archive aa
+              WHERE aa.activity_date >= DATE_TRUNC('day', ${startDateIso}::timestamp)
+                AND aa.activity_date < ${endDateIso}::timestamp
+            )
             SELECT
-              (SELECT COUNT(DISTINCT cs.user_id)::int
+              ((SELECT COUNT(DISTINCT cs.user_id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
                 AND cs.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS users,
+                AND cs.eval_run_id IS NULL) + archived.users) AS users,
 
-              (SELECT COUNT(cs.id)::int
+              ((SELECT COUNT(cs.id)::int
               FROM chat_sessions cs
               WHERE cs.created_at >= ${startDateIso}
                 AND cs.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS chat_sessions,
+                AND cs.eval_run_id IS NULL) + archived.chat_sessions) AS chat_sessions,
 
-              (SELECT COUNT(cm.id)::int
+              ((SELECT COUNT(cm.id)::int
               FROM chat_messages cm
               JOIN chat_sessions cs ON cs.id = cm.chat_session_id
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
-                AND cs.eval_run_id IS NULL) AS messages,
+                AND cs.eval_run_id IS NULL) + archived.messages) AS messages,
 
-              (SELECT COUNT(cm.id)::int
+              ((SELECT COUNT(cm.id)::int
               FROM chat_messages cm
               JOIN chat_sessions cs ON cs.id = cm.chat_session_id
               WHERE cm.created_at >= ${startDateIso}
                 AND cm.created_at < ${endDateIso}
                 AND cm.sender = 'user'
-                AND cs.eval_run_id IS NULL) AS questions,
+                AND cs.eval_run_id IS NULL) + archived.questions) AS questions,
 
-              (SELECT COUNT(sf.id)::int
+              ((SELECT COUNT(sf.id)::int
               FROM session_feedback sf
               JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
                 AND sf.rating = 'up'
-                AND cs.eval_run_id IS NULL) AS thumbs_up,
+                AND cs.eval_run_id IS NULL) + archived.thumbs_up) AS thumbs_up,
 
-              (SELECT COUNT(sf.id)::int
+              ((SELECT COUNT(sf.id)::int
               FROM session_feedback sf
               JOIN chat_sessions cs ON cs.id = sf.chat_session_id
               WHERE sf.updated_at >= ${startDateIso}
                 AND sf.updated_at < ${endDateIso}
                 AND sf.rating = 'down'
-                AND cs.eval_run_id IS NULL) AS thumbs_down
+                AND cs.eval_run_id IS NULL) + archived.thumbs_down) AS thumbs_down
+            FROM archived
           `;
           return totalsRows[0];
         };
@@ -937,18 +948,38 @@ exports.handler = async (event) => {
               AND sf.updated_at < ${endDateIso}
               AND cs.eval_run_id IS NULL
             GROUP BY DATE_TRUNC('day', sf.updated_at)::date
+          ),
+          -- Retired guests (analytics_archive, migration 048); disjoint from
+          -- the live users above, so their distinct counts add.
+          daily_archive AS (
+            SELECT
+              aa.activity_date AS date,
+              COALESCE(SUM(aa.sessions_created), 0)::int AS chat_sessions,
+              COUNT(*) FILTER (WHERE aa.sessions_created > 0)::int AS session_users,
+              COALESCE(SUM(aa.questions), 0)::int AS questions,
+              COUNT(*) FILTER (WHERE aa.questions > 0)::int AS question_users,
+              COALESCE(SUM(aa.thumbs_up), 0)::int AS thumbs_up,
+              COALESCE(SUM(aa.thumbs_down), 0)::int AS thumbs_down
+            FROM analytics_archive aa
+            WHERE aa.activity_date >= DATE_TRUNC('day', ${startDateIso}::timestamp)
+              AND aa.activity_date < ${endDateIso}::timestamp
+            GROUP BY aa.activity_date
           )
           SELECT
             TO_CHAR(ds.date, 'Mon DD') AS date,
-            COALESCE(GREATEST(dcs.session_users, dq.question_users), 0)::int AS users,
-            COALESCE(dq.questions, 0)::int AS questions,
-            COALESCE(dcs.chat_sessions, 0)::int AS chat_sessions,
-            COALESCE(df.thumbs_up, 0)::int AS thumbs_up,
-            COALESCE(df.thumbs_down, 0)::int AS thumbs_down
+            GREATEST(
+              COALESCE(dcs.session_users, 0) + COALESCE(da.session_users, 0),
+              COALESCE(dq.question_users, 0) + COALESCE(da.question_users, 0)
+            )::int AS users,
+            (COALESCE(dq.questions, 0) + COALESCE(da.questions, 0))::int AS questions,
+            (COALESCE(dcs.chat_sessions, 0) + COALESCE(da.chat_sessions, 0))::int AS chat_sessions,
+            (COALESCE(df.thumbs_up, 0) + COALESCE(da.thumbs_up, 0))::int AS thumbs_up,
+            (COALESCE(df.thumbs_down, 0) + COALESCE(da.thumbs_down, 0))::int AS thumbs_down
           FROM date_series ds
           LEFT JOIN daily_chat_sessions dcs ON ds.date = dcs.date
           LEFT JOIN daily_questions dq ON ds.date = dq.date
           LEFT JOIN daily_feedback df ON ds.date = df.date
+          LEFT JOIN daily_archive da ON ds.date = da.date
           ORDER BY ds.date ASC
         `;
 
@@ -1030,7 +1061,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify({ items });
           break;
         } catch (err) {
-          console.error("GET /admin/data_sources error:", err);
+          console.error("GET /admin/data_sources error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ message: "Internal Server Error" });
           break;
@@ -1056,8 +1087,6 @@ exports.handler = async (event) => {
             latest.max_characters_per_day,
             latest.max_messages_per_day_global,
             latest.max_characters_per_ai_message,
-            latest.temperature,
-            latest.top_p,
             latest.support_score_threshold,
             latest.scope_alignment_score_threshold,
             latest.grounded_threshold,
@@ -1070,8 +1099,10 @@ exports.handler = async (event) => {
           LEFT JOIN users u ON u.id = latest.updated_by
         `;
 
-        // But keep a safe fallback to avoid crashing UI. Keep in sync with
-        // textGeneration/helpers/config.py and frontend lib/assistantSettings.ts.
+        // Safe fallback when the table has no row. max_characters_per_user_message
+        // is 2000, the same missed-load default as textGeneration/helpers/config.py,
+        // the public GET route, and websocket/messageLimit.js. The 1..LIMIT_CEILINGS write
+        // check below is the range an administrator may save, not a fallback.
         const fallback = {
           max_messages_per_day: 45,
           min_messages_before_suggest: 4,
@@ -1081,8 +1112,6 @@ exports.handler = async (event) => {
           max_characters_per_day: 10000,
           max_messages_per_day_global: 5000,
           max_characters_per_ai_message: 5000,
-          temperature: 0.15,
-          top_p: 0.5,
           support_score_threshold: 0.25,
           scope_alignment_score_threshold: 0.25,
           grounded_threshold: 0.75,
@@ -1102,8 +1131,8 @@ exports.handler = async (event) => {
       case "GET /admin/users": {
         try {
           const qs = event.queryStringParameters ?? {};
-          const limit = Math.min(parseInt(qs.limit ?? "50", 10), 100); // cap limit to 100
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 50, 100);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
             SELECT id, email, display_name, role, created_at, last_seen_at
@@ -1116,7 +1145,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/users error:", err);
+          console.error("GET /admin/users error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1126,16 +1155,17 @@ exports.handler = async (event) => {
       // fetches the chat sessions for a specific user 
       case "GET /admin/users/{userId}/chat_sessions": {
         try {
-          const userId = event.pathParameters?.userId;
-          if (!userId) {
+          const userCheck = validateUUID(event.pathParameters?.userId, "userId");
+          if (!userCheck.valid) {
             response.statusCode = 400;
-            response.body = JSON.stringify({ error: "User ID is required" });
+            response.body = JSON.stringify({ error: userCheck.error });
             break;
           }
+          const userId = userCheck.value;
 
           const qs = event.queryStringParameters ?? {};
-          const limit = parseInt(qs.limit ?? "50", 10);
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 50, 100);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
             SELECT id, user_id, title, created_at, last_active_at
@@ -1149,7 +1179,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/users/{userId}/chat_sessions error:", err);
+          console.error("GET /admin/users/{userId}/chat_sessions error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1159,16 +1189,17 @@ exports.handler = async (event) => {
       // fetches the messages for a specific chat session
       case "GET /admin/chat_sessions/{sessionId}/messages": {
         try {
-          const sessionId = event.pathParameters?.sessionId;
-          if (!sessionId) {
+          const sessionCheck = validateUUID(event.pathParameters?.sessionId, "sessionId");
+          if (!sessionCheck.valid) {
             response.statusCode = 400;
-            response.body = JSON.stringify({ error: "Session ID is required" });
+            response.body = JSON.stringify({ error: sessionCheck.error });
             break;
           }
+          const sessionId = sessionCheck.value;
 
           const qs = event.queryStringParameters ?? {};
-          const limit = parseInt(qs.limit ?? "200", 10);
-          const offset = parseInt(qs.offset ?? "0", 10);
+          const limit = parsePositiveInt(qs.limit, 200, 1000);
+          const offset = parsePositiveInt(qs.offset, 0);
 
           const rows = await sqlConnection`
              SELECT id, chat_session_id, sender, content, sources, created_at
@@ -1182,7 +1213,7 @@ exports.handler = async (event) => {
           response.body = JSON.stringify(rows);
           break;
         } catch (err) {
-          console.error("GET /admin/chat_sessions/{sessionId}/messages error:", err);
+          console.error("GET /admin/chat_sessions/{sessionId}/messages error:", errorSummary(err));
           response.statusCode = 500;
           response.body = JSON.stringify({ error: "Internal Server Error" });
           break;
@@ -1224,8 +1255,6 @@ exports.handler = async (event) => {
           "max_characters_per_day",
           "max_messages_per_day_global",
           "max_characters_per_ai_message",
-          "temperature",
-          "top_p",
           "support_score_threshold",
           "scope_alignment_score_threshold",
           "grounded_threshold",
@@ -1245,9 +1274,8 @@ exports.handler = async (event) => {
           break;
         }
 
-        // validate user
-        const adminEmail = event.requestContext?.authorizer?.email;
-        if (!adminEmail) {
+        // validate user (Cognito sub from the admin authorizer)
+        if (!adminSubFromEvent(event)) {
           response.statusCode = 401;
           response.body = JSON.stringify({ error: "Unauthorized" });
           break;
@@ -1257,11 +1285,11 @@ exports.handler = async (event) => {
           patch.max_messages_per_day !== undefined &&
           (!isFiniteInt(patch.max_messages_per_day) ||
             patch.max_messages_per_day < 1 ||
-            patch.max_messages_per_day > 1000)
+            patch.max_messages_per_day > LIMIT_CEILINGS.max_messages_per_day)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_messages_per_day must be an integer between 1 and 1000",
+            error: `max_messages_per_day must be an integer between 1 and ${LIMIT_CEILINGS.max_messages_per_day}`,
           });
           break;
         }
@@ -1303,15 +1331,18 @@ exports.handler = async (event) => {
           break;
         }
 
+        // 1..ceiling is the range an administrator may save. A missing value
+        // stays 2000 (config.py, the admin GET fallback, and the public read),
+        // not this upper bound.
         if (
           patch.max_characters_per_user_message !== undefined &&
           (!isFiniteInt(patch.max_characters_per_user_message) ||
             patch.max_characters_per_user_message < 1 ||
-            patch.max_characters_per_user_message > 200000)
+            patch.max_characters_per_user_message > LIMIT_CEILINGS.max_characters_per_user_message)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_user_message must be a positive integer",
+            error: `max_characters_per_user_message must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_user_message}`,
           });
           break;
         }
@@ -1320,11 +1351,11 @@ exports.handler = async (event) => {
           patch.max_characters_per_day !== undefined &&
           (!isFiniteInt(patch.max_characters_per_day) ||
             patch.max_characters_per_day < 1 ||
-            patch.max_characters_per_day > 1000000)
+            patch.max_characters_per_day > LIMIT_CEILINGS.max_characters_per_day)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_day must be an integer between 1 and 1000000",
+            error: `max_characters_per_day must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_day}`,
           });
           break;
         }
@@ -1333,11 +1364,11 @@ exports.handler = async (event) => {
           patch.max_messages_per_day_global !== undefined &&
           (!isFiniteInt(patch.max_messages_per_day_global) ||
             patch.max_messages_per_day_global < 1 ||
-            patch.max_messages_per_day_global > 1000000)
+            patch.max_messages_per_day_global > LIMIT_CEILINGS.max_messages_per_day_global)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_messages_per_day_global must be an integer between 1 and 1000000",
+            error: `max_messages_per_day_global must be an integer between 1 and ${LIMIT_CEILINGS.max_messages_per_day_global}`,
           });
           break;
         }
@@ -1346,30 +1377,16 @@ exports.handler = async (event) => {
           patch.max_characters_per_ai_message !== undefined &&
           (!isFiniteInt(patch.max_characters_per_ai_message) ||
             patch.max_characters_per_ai_message < 1 ||
-            patch.max_characters_per_ai_message > 200000)
+            patch.max_characters_per_ai_message > LIMIT_CEILINGS.max_characters_per_ai_message)
         ) {
           response.statusCode = 400;
           response.body = JSON.stringify({
-            error: "max_characters_per_ai_message must be a positive integer",
-          });
-          break;
-        }
-
-        if (
-          patch.temperature !== undefined &&
-          (!isFiniteNumber(patch.temperature) ||
-            patch.temperature < 0 ||
-            patch.temperature > 2)
-        ) {
-          response.statusCode = 400;
-          response.body = JSON.stringify({
-            error: "temperature must be a number between 0 and 2",
+            error: `max_characters_per_ai_message must be an integer between 1 and ${LIMIT_CEILINGS.max_characters_per_ai_message}`,
           });
           break;
         }
 
         const unitIntervalFields = [
-          "top_p",
           "support_score_threshold",
           "scope_alignment_score_threshold",
           "grounded_threshold",
@@ -1430,27 +1447,15 @@ exports.handler = async (event) => {
           patch.service_message = cleaned === "" ? null : cleaned;
         }
 
-        // get admin user ID and confirm role
-        const adminRows = await sqlConnection`
-          SELECT id, role
-          FROM users
-          WHERE email = ${adminEmail}
-          LIMIT 1
-        `;
-
-        if (adminRows.length === 0) {
-          response.statusCode = 404;
-          response.body = JSON.stringify({ error: "Admin user not found" });
+        // get admin user ID by Cognito sub and confirm role
+        const admin = await resolveAdminUser(sqlConnection, event);
+        if (admin.error) {
+          response.statusCode = admin.statusCode;
+          response.body = JSON.stringify({ error: admin.error });
           break;
         }
 
-        if (adminRows[0].role !== "admin") {
-          response.statusCode = 403;
-          response.body = JSON.stringify({ error: "User is not an admin" });
-          break;
-        }
-
-        const updatedByUserId = adminRows[0].id;
+        const updatedByUserId = admin.id;
 
         // A banner or read-only mode needs something to show. Judge the result of the
         // patch, so setting the status alone works when a message is already stored and
@@ -1504,7 +1509,10 @@ exports.handler = async (event) => {
         }
 
         // Single UPDATE of the latest row (no â€œensure row existsâ€ step)
-        const updated = await sqlConnection`
+        // Runs in one transaction with its audit row (field names only, no values).
+        let settingsAudit = null;
+        const updated = await sqlConnection.begin(async (tx) => {
+          const rows = await tx`
           WITH latest AS (
             SELECT id
             FROM system_settings
@@ -1521,8 +1529,6 @@ exports.handler = async (event) => {
             max_characters_per_day = COALESCE(${patch.max_characters_per_day ?? null}::int, s.max_characters_per_day),
             max_messages_per_day_global = COALESCE(${patch.max_messages_per_day_global ?? null}::int, s.max_messages_per_day_global),
             max_characters_per_ai_message = COALESCE(${patch.max_characters_per_ai_message ?? null}::int, s.max_characters_per_ai_message),
-            temperature = COALESCE(${patch.temperature ?? null}::float8, s.temperature),
-            top_p = COALESCE(${patch.top_p ?? null}::float8, s.top_p),
             support_score_threshold = COALESCE(${patch.support_score_threshold ?? null}::float8, s.support_score_threshold),
             scope_alignment_score_threshold = COALESCE(${patch.scope_alignment_score_threshold ?? null}::float8, s.scope_alignment_score_threshold),
             grounded_threshold = COALESCE(${patch.grounded_threshold ?? null}::float8, s.grounded_threshold),
@@ -1542,8 +1548,6 @@ exports.handler = async (event) => {
             s.max_characters_per_day,
             s.max_messages_per_day_global,
             s.max_characters_per_ai_message,
-            s.temperature,
-            s.top_p,
             s.support_score_threshold,
             s.scope_alignment_score_threshold,
             s.grounded_threshold,
@@ -1553,6 +1557,19 @@ exports.handler = async (event) => {
             s.updated_by,
             s.updated_at
         `;
+          if (rows.length > 0) {
+            settingsAudit = auditEntry(event, "system_settings.update", {
+              settings_id: rows[0].id,
+              fields: Object.keys(patch),
+              // Pausing or resuming public chat: the new status (one of three fixed
+              // values, already validated) so the row says which. Never the message.
+              ...(patch.service_status !== undefined && { service_status: patch.service_status }),
+            });
+            await insertAdminAudit(tx, settingsAudit);
+          }
+          return rows;
+        });
+        if (settingsAudit) logAdminAudit(settingsAudit);
 
         if (updated.length === 0) {
           // Should never happen because we seed system_settings
@@ -1593,20 +1610,26 @@ exports.handler = async (event) => {
   return logAndReturn(event, response);
 };
 
-// Log response for debugging (visible in AWS CloudWatch Logs), then return it
-// to API Gateway. Analytics includes user-written feedback comments and journey
-// routes return large prompt trees; log status only for those. Feedback triage
-// is status-only too so it stays consistent with the feedback privacy rules.
+// Log a status line, then return the response to API Gateway. Admin responses
+// hold user emails, chat transcripts, raw sources and feedback comments, so
+// every route logs status only; no route logs its body. The status line names
+// the acting admin (Cognito sub from the authorizer) so every admin action,
+// including a denied one, is attributable (finding f-7f03f151), and the
+// resolved path ids it acted on (`target`), so a read of one family's
+// transcript records whose it was (finding f-c3162843).
 function logAndReturn(event, response) {
-  const routeKey = `${event.httpMethod} ${event.resource}`;
-  if (
-    event.resource === "/admin/analytics" ||
-    isJourneyRoute(routeKey) ||
-    isFeedbackTriageRoute(routeKey)
-  ) {
-    console.log({ statusCode: response.statusCode, resource: event.resource });
-  } else {
-    console.log(response);
-  }
+  const target = targetIds(event);
+  logResponse(event, response, { actorSub: adminSubFromEvent(event), ...(target && { target }) });
   return response;
+}
+
+// Path parameters are ids (UUIDs, journey/cluster keys, message types). Only
+// id-shaped values are logged, so no free text ever reaches the log.
+const TARGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+function targetIds(event) {
+  const ids = Object.entries(event?.pathParameters || {}).filter(
+    ([, value]) => typeof value === "string" && TARGET_ID_PATTERN.test(value)
+  );
+  return ids.length ? Object.fromEntries(ids) : undefined;
 }

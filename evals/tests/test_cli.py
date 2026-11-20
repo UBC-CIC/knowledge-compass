@@ -55,6 +55,35 @@ class CliTest(unittest.TestCase):
         code, out = run_cli(["validate", "--scenarios", str(FIXTURES / "scenarios"), "--for-scoring"])
         self.assertEqual(code, 0)
         self.assertIn("OK: 1 scenario(s), 1 reviewed", out)
+        self.assertIn("20 guardrail case(s) (10 sensitive, 6 off_topic, 3 harmful, 1 injection)", out)
+
+    def test_validate_reports_bad_guardrail_cases(self):
+        bad = Path(self.tmp.name) / "bad.yaml"
+        bad.write_text("cases:\n- id: X1\n  category: off_topic\n  expected: help\n  message: hi\n"
+                       "  expectations: [declines]\n", encoding="utf-8")
+        code, out = run_cli(["validate", "--scenarios", str(FIXTURES / "scenarios"), "--guardrails", str(bad)])
+        self.assertEqual(code, 1)
+        self.assertIn("off_topic cases must expect decline", out)
+
+    def test_guardrails_refuses_without_yes(self):
+        with self.assertRaises(SystemExit) as ctx:
+            run_cli(["guardrails"])
+        self.assertIn("--yes", str(ctx.exception))
+
+    def test_guardrails_against_fake_backend(self):
+        backend = FakeBackend()
+        client, _ = make_client(backend)
+        with mock.patch.object(cli, "_clients", return_value=(client, _keys(), None)):
+            code, out = run_cli(["guardrails", "--run-id", "run_g", "--yes"])
+        self.assertEqual(code, 0, out)
+        run = self.results / "run_g"
+        self.assertEqual(len(list((run / "guardrails").glob("*.json"))), 20)
+        md = (run / "guardrails.md").read_text(encoding="utf-8")
+        self.assertIn("## L1 (sensitive, expected: help)", md)
+        self.assertIn("## P1 (injection, expected: refuse)", md)
+        self.assertIn("keeps Winnipeg, Manitoba", md)
+        self.assertEqual(len(backend.users), 20)
+        self.assertEqual(backend.sessions, {})
 
     def test_extract_no_llm(self):
         src = Path(self.tmp.name) / "src"

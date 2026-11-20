@@ -1,9 +1,11 @@
 """
-Fails if a shared module drifts between its separately packaged copies.
+Fails if shared code drifts or is copied back into a Lambda package.
 
-textGeneration, knowledgeBase and the ECS containers are packaged separately,
-so shared code is kept as byte-identical copies. The first path in each group
-is canonical; edit it, then copy it over the others. Line endings are
+textGeneration and knowledgeBase import shared code from the kc_shared layer
+(cdk/layers/shared_python/python/kc_shared), so the Lambda packages hold no
+copies. The ECS containers cannot use a Lambda layer, so the crawler and
+transcriber keep a byte-identical copy of embeddings.py. The first path in each
+group is canonical; edit it, then copy it over the others. Line endings are
 normalized before comparing so a Windows checkout does not cause false failures.
 """
 
@@ -11,28 +13,20 @@ import os
 import unittest
 
 _CDK = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_SHARED = "layers/shared_python/python/kc_shared"
 
 # (canonical, mirror, mirror, ...) relative to cdk/.
 PARITY_GROUPS = [
     (
+        f"{_SHARED}/embeddings.py",
         "containers/common/embeddings.py",
-        "lambda/textGeneration/helpers/embeddings.py",
-        "lambda/knowledgeBase/helpers/embeddings.py",
-    ),
-    (
-        "lambda/textGeneration/helpers/retrieval_core.py",
-        "lambda/knowledgeBase/helpers/retrieval_core.py",
-    ),
-    (
-        "lambda/textGeneration/helpers/eval_scoring.py",
-        "lambda/knowledgeBase/helpers/eval_scoring.py",
-    ),
-    # Synthetic golden set (no personal data); the validate_space task reads the KB copy.
-    (
-        "lambda/textGeneration/tests/eval/golden_queries.json",
-        "lambda/knowledgeBase/helpers/golden_queries.json",
     ),
 ]
+
+# Modules that live only in the layer; a copy in a Lambda package would shadow
+# nothing (imports name kc_shared) but would drift unnoticed.
+LAYER_ONLY = ["cors.py", "retrieval_core.py", "eval_scoring.py", "embeddings.py", "golden_queries.json"]
+LAMBDA_PACKAGES = ["lambda/textGeneration", "lambda/knowledgeBase"]
 
 # Mirrors that are registered but not created yet. Their parity check is skipped
 # (with a reason) while the file is absent; add an entry here only while a mirror
@@ -70,6 +64,20 @@ class SharedModuleParityTests(unittest.TestCase):
                     if rel in PENDING_MIRRORS and not _exists(rel):
                         self.skipTest(PENDING_MIRRORS[rel])
                     self.assertTrue(_exists(rel), rel)
+
+
+    def test_lambda_packages_hold_no_copies(self):
+        for package in LAMBDA_PACKAGES:
+            for root, _dirs, files in os.walk(os.path.join(_CDK, *package.split("/"))):
+                if "__pycache__" in root:
+                    continue
+                for name in files:
+                    with self.subTest(package=package, file=name):
+                        self.assertNotIn(
+                            name,
+                            LAYER_ONLY,
+                            f"{os.path.join(root, name)} duplicates kc_shared; import it from the layer instead",
+                        )
 
 
 if __name__ == "__main__":

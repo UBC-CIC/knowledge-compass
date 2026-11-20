@@ -12,7 +12,7 @@
 1. Uses **Playwright** (headless Chromium) to render JS-heavy pages — required for Wix/SPA sites
 2. Extracts article content via **trafilatura** (readability-style boilerplate removal)
 3. Chunks content at **heading boundaries** (H1/H2/H3) with optional semantic splitting
-4. Embeds each chunk via **Cohere embed-english-v3** through Amazon Bedrock
+4. Embeds each chunk through Amazon Bedrock with the model of the **active embedding space** (read from the database)
 5. Writes to the unified **`sources` + `chunks`** tables in RDS PostgreSQL (pgvector)
 
 Change detection: each chunk stores a `content_hash` (sha256[:16] of body text). On re-crawl, chunks whose hash hasn't changed are skipped — no redundant embedding API calls.
@@ -79,7 +79,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 
 **Default (fixed-size):** splits at heading boundaries (H1/H2/H3 from trafilatura XML output). Sections longer than `max_words` are split at sentence boundaries with 2-sentence overlap.
 
-**Semantic (`--semantic`):** embeds each sentence individually, finds cosine similarity drops between adjacent sentences (topic changes), splits there. `max_words` is applied as a hard cap. Costs one extra Cohere batch call per page.
+**Semantic (`--semantic`):** embeds each sentence individually, finds cosine similarity drops between adjacent sentences (topic changes), splits there. `max_words` is applied as a hard cap. Costs one extra embedding batch call per page.
 
 `embed_text` (what gets embedded) = `"Section > Subsection\n\nBody text"` — heading path prefix ensures the embedding captures WHERE in the site the content lives, not just WHAT it says.
 
@@ -89,7 +89,7 @@ python crawler.py https://www.sourceforinclusiveeducation.ca --max-pages 100 --w
 
 Each page → one `sources` row (`source_type='web'`, `url=page_url`).
 Each chunk → one `chunks` row with:
-- `embedding vector(1024)`
+- one `chunk_embeddings` row holding its vector in the active embedding space
 - `metadata = {"heading_path": "Section > Subsection"}`
 - `content_hash` for change detection
 
@@ -108,7 +108,8 @@ Admin triggers crawl (frontend button)
 Lambda (proxy function)
   - Validates request
   - INSERT INTO ingestion_runs (source_id, status='queued') → returns job_id to frontend
-  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES, WRITE_DB
+  - Calls ECS RunTask API with env vars: JOB_ID, SEED_URL, MAX_PAGES, WRITE_DB,
+    CRAWL_INCLUDE_PATTERNS, CRAWL_EXCLUDE_PATTERNS
          │
          ▼
 ECS Fargate Task (Docker container with Playwright + crawler.py)
@@ -131,6 +132,85 @@ The Lambda is the consistent entry point — whether triggered by a human (front
 
 ---
 
+## URL Safety
+
+The crawler runs inside the VPC with database and Bedrock access, so it only
+fetches public http(s) destinations:
+
+- The website seed is validated three times: at staging
+  (`stage_data_sources.py`, stored normalized), again before `ecs:RunTask`
+  (`process_crawler_batch.py`; a rejected seed fails the run), and in the
+  container before crawling (`validate_seed_url`). Rules: http/https only, no
+  embedded credentials, ports 80/443/8080/8443, and every resolved address
+  must be public (no private, loopback, link-local/metadata, or reserved).
+- Every browser request is routed through `guard_route` (Playwright
+  `BrowserContext.route`, so popups opened by a crawled page are covered
+  too), which aborts non-public hosts and non-http(s) schemes;
+  navigations are refused in a pre-navigation hook; enqueued links are
+  filtered; service workers are blocked so they cannot bypass routing.
+- `common/url_safety.py` mirrors the Lambda `helpers/url_safety.py`; keep the
+  two in sync.
+
+Limits: Chromium resolves DNS again after the check (DNS rebinding), redirect
+hops of a navigation are not routed (the final URL is re-checked and nothing
+is stored from a non-public one), WebSockets are not guarded, and the
+Chromium sandbox is disabled on Fargate (see the Dockerfile).
+
+---
+
+## Include / Exclude Patterns
+
+A website's `include_patterns` and `exclude_patterns` limit what is crawled.
+Each is a list of Python regular expressions matched with `re.search` against
+the page URL (one per line in the admin form). A URL is in scope when no
+exclude pattern matches and, if include patterns exist, at least one include
+pattern matches. `common/crawl_scope.py` holds the rules; the Lambda copy
+`helpers/crawl_scope.py` must stay identical (a test compares them).
+
+- Staging rejects a malformed pattern, more than 20 patterns per list, a
+  pattern over 300 characters, and a seed URL the patterns would exclude, with
+  a 400. `process_crawler_batch.py` re-checks stored rows before `ecs:RunTask`
+  and fails the run instead of launching.
+- Python's `re` backtracks, so patterns whose matching time could explode are
+  rejected the same way: nested quantifiers (`(a+)+`, `(a*)*`), a repeated or
+  optional group containing `|` (`(a|aa)+`, `(?:www\.|m\.)?`), backreferences
+  and conditional groups, more than two open-ended repeats such as `.*` or
+  `\d+` (one when the pattern does not start with `^`), and more than 16
+  combinations of optional parts and alternatives. With patterns, URLs over
+  2048 characters are out of scope. A stored row that fails these checks fails
+  its next sync with the "patterns were rejected" message.
+- The Lambda passes the patterns as `CRAWL_INCLUDE_PATTERNS` and
+  `CRAWL_EXCLUDE_PATTERNS` (JSON arrays). Re-crawls go through the same launch.
+- In the container, the patterns apply to the seed (checked before anything is
+  fetched), to discovered links (not enqueued), to every navigation (refused in
+  the pre-navigation hook; page and frame navigations are also aborted in
+  `guard_route`), and to the URL a page ended on after redirects (nothing is
+  stored and no links are followed from it).
+- URLs are compared in three spellings: as given; canonical (lowercase host,
+  default port and fragment dropped, percent-escapes decoded until stable, at
+  most three rounds, `\`, `%2F` and `%5C` read as `/`, `.`/`..` and repeated
+  slashes removed, then reserved and non-ASCII characters re-encoded as
+  uppercase `%XX`); and fully decoded. An exclude pattern that matches any
+  spelling excludes the URL, so `/a/%70rivate/`, `/a/b/..%2Fprivate/` and
+  `/a/b/%252E%252E/private/` cannot slip past an exclude written for
+  `/a/private/`. Include patterns must match the canonical spelling, so write
+  non-ASCII or reserved characters in an include pattern percent-encoded.
+  URLs with userinfo (`https://example.com@other.host/`) are never in scope,
+  and with patterns, neither are URLs whose encoding has not settled after
+  three rounds. The path is case-sensitive; use `(?i)` to ignore case.
+
+Limit: a redirect hop is not routed, so an in-scope URL that redirects to an
+excluded one is loaded by the browser; its content is discarded.
+
+Nothing removes pages that were ingested before their patterns were enforced:
+a re-crawl only adds and refreshes pages, it never deletes one it skipped.
+Patterns cannot be edited on an existing website, so to apply or change them,
+delete the website (the pages it alone owns are deleted with their chunks and
+vectors, see `helpers/web_sources.py`) and add it again with the patterns. A
+page another website also crawled is kept while that website still owns it.
+
+---
+
 ## Docker Container Requirements
 
 The ECS Fargate container needs:
@@ -139,5 +219,5 @@ The ECS Fargate container needs:
 - Playwright chromium (`playwright install chromium`)
 - The RDS CA bundle fetched at build/runtime (`global-bundle.pem`), with
   `DB_SSL_ROOT_CERT` pointing at it — not a committed cert
-- Config via environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_AUTH=iam`, ...)
-- IAM task role with: `bedrock:InvokeModel` (Cohere embed), `rds-db:connect` (IAM auth to RDS)
+- Config via environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, ...). In ECS, `process_crawler_batch.py` sets `DB_AUTH=secret` and `DB_SECRET_NAME` on every `RunTask`, because RDS Proxy does not accept IAM tokens
+- IAM task role (`cdk/lib/ingestion-stack.ts`) with: `bedrock:InvokeModel` on the embedding models the spaces can use, and read access to the database secret. No `rds-db:connect`

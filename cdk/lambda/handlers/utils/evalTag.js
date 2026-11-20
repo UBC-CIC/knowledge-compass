@@ -9,8 +9,9 @@
  *
  * userId is the caller's id from the verified token, so a tag signed for one
  * anonymous user cannot be replayed by another. The signing key lives in
- * Secrets Manager (EVAL_SIGNING_SECRET_NAME, JSON {"signingKey": "..."}),
- * created by the optional EvalStack.
+ * Secrets Manager (EVAL_SIGNING_SECRET_NAME, JSON {"signingKey": "...",
+ * "previousSigningKey": "..."}), created by the optional EvalStack and rotated
+ * by appSecretRotation; tags verify against either key.
  *
  * Fails closed: a missing env var, an unreadable secret, or any invalid field
  * means "no tag" and the session is created as a normal one. Callers never
@@ -30,7 +31,7 @@ const MAX_TAG_LIFETIME_SECONDS = 24 * 60 * 60;
 const SECRET_TTL_MS = 5 * 60 * 1000;
 
 let secretsClient;
-let cachedKey = null;
+let cachedKeys = [];
 let cachedAt = 0;
 
 /** Signing payload; shared with evals/harness/signing.py. */
@@ -74,27 +75,32 @@ function hasTagShape(tag) {
   );
 }
 
-/** Signing key from Secrets Manager, cached per container. null = not configured. */
-async function getSigningKey() {
+/**
+ * Current and previous signing keys from Secrets Manager, cached per
+ * container. appSecretRotation keeps the outgoing key as previousSigningKey,
+ * so tags signed just before a rotation still verify. [] = not configured.
+ */
+async function getSigningKeys() {
   const secretName = process.env.EVAL_SIGNING_SECRET_NAME;
-  if (!secretName) return null;
+  if (!secretName) return [];
   // Gate on the fetch time, not the value, so "no usable key" is cached too;
   // otherwise every request with an eval field would hit Secrets Manager.
-  if (cachedAt && Date.now() - cachedAt < SECRET_TTL_MS) return cachedKey;
+  if (cachedAt && Date.now() - cachedAt < SECRET_TTL_MS) return cachedKeys;
   try {
     secretsClient = secretsClient || new SecretsManagerClient();
     const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
     const parsed = JSON.parse(result.SecretString || "{}");
-    const key = typeof parsed.signingKey === "string" && parsed.signingKey.length >= 32 ? parsed.signingKey : null;
-    cachedKey = key;
+    cachedKeys = [parsed.signingKey, parsed.previousSigningKey].filter(
+      (key) => typeof key === "string" && key.length >= 32
+    );
     cachedAt = Date.now();
-    return key;
+    return cachedKeys;
   } catch (error) {
     // Expected when the EvalStack is not deployed. Name only; no secret detail.
     console.warn("Eval signing key unavailable:", error?.name || "Error");
-    cachedKey = null;
+    cachedKeys = [];
     cachedAt = Date.now();
-    return null;
+    return [];
   }
 }
 
@@ -108,16 +114,19 @@ async function resolveEvalTag(body, userId) {
   // Reject malformed tags before any secret lookup, so junk input costs nothing.
   if (!hasTagShape(tag)) return null;
   try {
-    const key = await getSigningKey();
-    return verifyEvalTag(tag, userId, key);
+    for (const key of await getSigningKeys()) {
+      const verified = verifyEvalTag(tag, userId, key);
+      if (verified) return verified;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Test hook: clear the cached key. */
+/** Test hook: clear the cached keys. */
 function resetEvalTagCache() {
-  cachedKey = null;
+  cachedKeys = [];
   cachedAt = 0;
   secretsClient = undefined;
 }

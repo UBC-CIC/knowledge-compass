@@ -62,10 +62,9 @@ def build_messages(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 class ParentSimulator:
-    def __init__(self, client, model_id: str, temperature: float = 0.6):
+    def __init__(self, client, model_id: str):
         self.client = client
         self.model_id = model_id
-        self.temperature = temperature
 
     def reply(self, scenario: Scenario, turns: List[Dict[str, Any]]) -> str:
         """Next parent message given the turns so far (each {user, response})."""
@@ -73,6 +72,6 @@ class ParentSimulator:
             return scenario.opening_message
         text = converse_text(
             self.client, self.model_id, build_system(scenario), build_messages(turns),
-            max_tokens=300, temperature=self.temperature,
+            max_tokens=300, disable_thinking=True,
         )
         return " ".join(text.split()).strip().strip('"')[:MAX_MESSAGE_CHARS]

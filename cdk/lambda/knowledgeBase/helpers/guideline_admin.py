@@ -21,10 +21,13 @@ import uuid
 import boto3
 from botocore.config import Config
 
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit, with_actor
 from helpers.admin_user import normalize_email
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
 from helpers.guideline_document import guideline_source_url
 from helpers.guideline_extract import file_kind
+from helpers.ingestion_lock import reject_if_locked
+from helpers.worker_envelope import worker_payload
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -131,7 +134,7 @@ def _invoke(payload: dict) -> None:
     _lambda_client().invoke(
         FunctionName=LAMBDA_FUNCTION_NAME,
         InvocationType="Event",
-        Payload=json.dumps(payload).encode("utf-8"),
+        Payload=worker_payload(payload),
     )
 
 
@@ -197,7 +200,8 @@ def get_guideline_state(connection) -> dict:
 
         cur.execute(
             """
-            SELECT id::text, file_name, status, error, section_count, uploaded_by, created_at, updated_at
+            SELECT id::text, file_name, status, error, section_count, uploaded_by,
+                   created_at, updated_at, journey_id::text
             FROM guideline_documents
             ORDER BY created_at, id
             """
@@ -206,7 +210,8 @@ def get_guideline_state(connection) -> dict:
             {
                 "id": r[0], "file_name": r[1], "status": r[2], "error": r[3],
                 "section_count": r[4], "uploaded_by": r[5],
-                "created_at": r[6], "updated_at": r[7], "sections": [],
+                "created_at": r[6], "updated_at": r[7], "journey_id": r[8],
+                "sections": [],
             }
             for r in cur.fetchall()
         ]
@@ -283,6 +288,7 @@ def register_document(event, body, connection):
     s3_key = str(body.get("s3_key") or "")
     file_name = _clean_file_name(body.get("file_name"))
     replace_id = body.get("replace_document_id")
+    journey_id = body.get("journey_id")
 
     if not _KEY_RE.match(s3_key):
         return _response(event, 400, {"error": "Invalid upload key."})
@@ -292,6 +298,8 @@ def register_document(event, body, connection):
         return _response(event, 400, {"error": _UNSUPPORTED})
     if replace_id is not None and not _is_uuid(replace_id):
         return _response(event, 400, {"error": "Invalid document id."})
+    if journey_id is not None and not _is_uuid(journey_id):
+        return _response(event, 400, {"error": "Invalid journey id."})
 
     max_bytes = _FILE_TYPES[key_kind][3]
     try:
@@ -307,9 +315,21 @@ def register_document(event, body, connection):
         _delete_object_quietly(s3_key)
         return _response(event, 400, {"error": "This file is empty. Please check it and upload it again."})
 
+    # Held until the commit below: a cutover either answers 409 here or waits for the
+    # 'processing' row, which its wait_idle step then counts.
+    locked = reject_if_locked(event, connection, hold=True)
+    if locked:
+        connection.rollback()
+        return locked
+
     admin = _admin_email(event)
     old_key = None
     with connection.cursor() as cur:
+        if journey_id is not None:
+            cur.execute("SELECT 1 FROM journeys WHERE id = %s::uuid", (journey_id,))
+            if not cur.fetchone():
+                connection.rollback()
+                return _response(event, 404, {"error": "Journey not found."})
         if replace_id:
             cur.execute(
                 "SELECT s3_key FROM guideline_documents WHERE id = %s::uuid",
@@ -317,26 +337,28 @@ def register_document(event, body, connection):
             )
             existing = cur.fetchone()
             if not existing:
+                connection.rollback()
                 return _response(event, 404, {"error": "Guide not found."})
             old_key = existing[0]
             cur.execute(
                 """
                 UPDATE guideline_documents
                    SET file_name = %s, s3_key = %s, uploaded_by = %s,
+                       journey_id = COALESCE(%s::uuid, journey_id),
                        status = 'processing', error = NULL, updated_at = now()
                  WHERE id = %s::uuid
                 RETURNING id::text
                 """,
-                (file_name, s3_key, admin, replace_id),
+                (file_name, s3_key, admin, journey_id, replace_id),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO guideline_documents (file_name, s3_key, uploaded_by, status)
-                VALUES (%s, %s, %s, 'processing')
+                INSERT INTO guideline_documents (file_name, s3_key, uploaded_by, status, journey_id)
+                VALUES (%s, %s, %s, 'processing', %s)
                 RETURNING id::text
                 """,
-                (file_name, s3_key, admin),
+                (file_name, s3_key, admin, journey_id),
             )
         document_id = cur.fetchone()[0]
     connection.commit()
@@ -345,7 +367,7 @@ def register_document(event, body, connection):
         _delete_object_quietly(old_key)
 
     try:
-        _invoke({"task": "process_guideline_document", "document_id": document_id})
+        _invoke(with_actor({"task": "process_guideline_document", "document_id": document_id}, event))
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to start guideline ingestion: %s", type(e).__name__)
         with connection.cursor() as cur:
@@ -366,6 +388,12 @@ def register_document(event, body, connection):
 def delete_document(event, connection, document_id):
     if not _is_uuid(document_id):
         return _response(event, 400, {"error": "Invalid document id."})
+    # Destroys a guide and its chunks and vectors: audited in the same
+    # transaction, never run without a verified admin (finding f-c47d6990).
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
+    audit_target = {"document_id": document_id}
     with connection.cursor() as cur:
         cur.execute(
             "SELECT s3_key FROM guideline_documents WHERE id = %s::uuid",
@@ -377,7 +405,9 @@ def delete_document(event, connection, document_id):
         # chunks cascade from sources; guideline_sections cascade from the document.
         cur.execute("DELETE FROM sources WHERE url = %s", (guideline_source_url(document_id),))
         cur.execute("DELETE FROM guideline_documents WHERE id = %s::uuid", (document_id,))
+        insert_admin_audit(cur, actor, "guideline_document.delete", audit_target)
     connection.commit()
+    log_admin_audit(actor, "guideline_document.delete", audit_target)
     _delete_object_quietly(row[0])
     return _response(event, 200, {"id": document_id, "deleted": True})
 
@@ -391,6 +421,11 @@ def rename_section(event, body, connection, section_id):
     label = re.sub(r"\s+", " ", raw or "").strip()
     if len(label) > MAX_LABEL_CHARS:
         return _response(event, 400, {"error": f"Please keep the name under {MAX_LABEL_CHARS} characters."})
+
+    # The rename re-embeds its chunks, so it is ingestion and waits out a cutover.
+    locked = reject_if_locked(event, connection)
+    if locked:
+        return locked
 
     with connection.cursor() as cur:
         cur.execute(
@@ -409,7 +444,7 @@ def rename_section(event, body, connection, section_id):
     connection.commit()
 
     try:
-        _invoke({"task": "reembed_guideline_sections", "section_ids": [section_id]})
+        _invoke(with_actor({"task": "reembed_guideline_sections", "section_ids": [section_id]}, event))
     except Exception as e:  # noqa: BLE001
         # The rename is saved; search picks up the new name on the next upload.
         logger.error("Failed to start guideline re-embed: %s", type(e).__name__)
@@ -425,6 +460,10 @@ def set_mode(event, body, connection):
     mode = (body or {}).get("mode")
     if mode not in MODES:
         return _response(event, 400, {"error": "Mode must be 'standard' or 'guideline'."})
+    # Switches prompting for every conversation: audited (finding f-c47d6990).
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     admin = _admin_email(event)
     with connection.cursor() as cur:
         cur.execute(
@@ -438,6 +477,7 @@ def set_mode(event, body, connection):
             """,
             (mode, admin),
         )
+        insert_admin_audit(cur, actor, "guideline.mode_set", {"mode": mode})
     connection.commit()
-    logger.info("Guideline prompt_mode set to %s", mode)
+    log_admin_audit(actor, "guideline.mode_set", {"mode": mode})
     return _response(event, 200, {"mode": mode})

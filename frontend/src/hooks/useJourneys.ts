@@ -116,6 +116,7 @@ function demoFeedback(journeys: Journey[]): JourneyFeedback {
         key: c.key, name: c.name, journey_key: j.key, is_archived: c.is_archived, ...sample(c.key, i),
       }))
     ),
+    sections: [],
     untagged: { up: 1, down: 1, sessions: 3 },
   };
 }

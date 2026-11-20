@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { CalendarRange } from "lucide-react";
 import { AuthService } from "@/functions/authService";
 import { ChartCard, CustomTooltip } from "@/components/Admin/analyticsCharts";
 import FeedbackSection, {
@@ -22,6 +23,8 @@ import {
   isDemoMode,
 } from "@/lib/demo";
 import { API_ENDPOINT } from "@/lib/api";
+import { buildRangeQuery, daysBefore } from "@/lib/analyticsRange";
+import DateRangeCalendar from "@/components/Admin/DateRangeCalendar";
 
 type TimeSeriesData = {
   date: string;
@@ -54,19 +57,18 @@ const clampDays = (val: number, min: number) =>
 export default function Analytics() {
   const [rangeMode, setRangeMode] = useState<"last" | "between">("last");
   const [lastDays, setLastDays] = useState(90);
-  const [fromDaysAgo, setFromDaysAgo] = useState(10);
-  const [toDaysAgo, setToDaysAgo] = useState(4);
+  const [rangeStart, setRangeStart] = useState(() => daysBefore(new Date(), 10));
+  const [rangeEnd, setRangeEnd] = useState<Date | null>(() => daysBefore(new Date(), 4));
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData>({
     timeSeries: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const rangeInvalid = rangeMode === "between" && toDaysAgo >= fromDaysAgo;
+  const builtRange = buildRangeQuery(rangeStart, rangeEnd);
+  const rangeInvalid = rangeMode === "between" && !builtRange.ok;
   const query =
-    rangeMode === "last"
-      ? `timeRange=${lastDays}d`
-      : `timeRange=${fromDaysAgo}d&endDaysAgo=${toDaysAgo}`;
+    rangeMode === "last" ? `timeRange=${lastDays}d` : builtRange.ok ? builtRange.query : "";
 
   const fetchAnalytics = useCallback(async () => {
     if (isDemoMode) {
@@ -118,18 +120,18 @@ export default function Analytics() {
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="font-serif text-[30px] font-semibold leading-tight tracking-[-0.015em]">
             Analytics
           </h1>
-          <p className="mt-2 text-[15.5px] leading-relaxed text-foreground/80">
+          <p className="mt-2 max-w-[540px] text-[15.5px] leading-relaxed text-foreground/80">
             Volume and feedback over time. Select a comment to review the
             reply it was left on.
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 sm:items-end">
-          <div className="flex rounded-[10px] border border-foreground/14 bg-white p-1 text-[13px] font-semibold">
+        <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+          <div className="flex rounded-[13px] border border-foreground/12 bg-white p-1 text-[13px] font-semibold shadow-sm">
             {(
               [
                 ["last", "Last N days"],
@@ -140,67 +142,45 @@ export default function Analytics() {
                 key={mode}
                 type="button"
                 onClick={() => setRangeMode(mode)}
-                className={`rounded-md px-3 py-1 transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors ${
                   rangeMode === mode
-                    ? "bg-primary text-primary-foreground"
-                    : "text-foreground/70 hover:text-foreground"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-foreground/70 hover:bg-secondary hover:text-foreground"
                 }`}
               >
+                {mode === "between" && <CalendarRange className="size-3.5" />}
                 {label}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2 rounded-[10px] border border-foreground/14 bg-white px-3 py-1.5">
-            {rangeMode === "last" ? (
-              <>
-                <span className="text-[13.5px] font-semibold">Last</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={MAX_DAYS}
-                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
-                  defaultValue={lastDays}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val) && val > 0) setLastDays(clampDays(val, 1));
-                  }}
-                />
-                <span className="text-[13.5px] font-semibold">days</span>
-              </>
-            ) : (
-              <>
-                <span className="text-[13.5px] font-semibold">From</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={MAX_DAYS}
-                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
-                  defaultValue={fromDaysAgo}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val) && val > 0) setFromDaysAgo(clampDays(val, 1));
-                  }}
-                />
-                <span className="text-[13.5px] font-semibold">to</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={MAX_DAYS}
-                  className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
-                  defaultValue={toDaysAgo}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val) && val >= 0) setToDaysAgo(clampDays(val, 0));
-                  }}
-                />
-                <span className="text-[13.5px] font-semibold">days ago</span>
-              </>
-            )}
-          </div>
-          {rangeInvalid && (
-            <p className="text-[12.5px] text-red-700">
-              "From" must be further back than "to".
-            </p>
+          {rangeMode === "last" ? (
+            <div className="flex items-center gap-2 rounded-[10px] border border-foreground/14 bg-white px-3 py-1.5">
+              <span className="text-[13.5px] font-semibold">Last</span>
+              <Input
+                type="number"
+                min={1}
+                max={MAX_DAYS}
+                className="h-[38px] w-[72px] rounded-lg border-[1.5px] border-foreground/20 text-center"
+                defaultValue={lastDays}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  if (!isNaN(val) && val > 0) setLastDays(clampDays(val, 1));
+                }}
+              />
+              <span className="text-[13.5px] font-semibold">days</span>
+            </div>
+          ) : (
+            <DateRangeCalendar
+              start={rangeStart}
+              end={rangeEnd}
+              onChange={(start, end) => {
+                setRangeStart(start);
+                setRangeEnd(end);
+              }}
+            />
+          )}
+          {rangeInvalid && builtRange.ok === false && builtRange.reason !== "Choose an end date." && (
+            <p className="text-[12.5px] text-red-700">{builtRange.reason}</p>
           )}
         </div>
       </div>

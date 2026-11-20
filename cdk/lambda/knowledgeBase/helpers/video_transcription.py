@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import boto3
 
+from helpers.ingestion_lock import is_locked
 from helpers.process_crawler_batch import launch_transcriber_for_run
 
 logger = logging.getLogger()
@@ -45,6 +46,8 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
             "Unsupported video/audio type. Use mp4, webm, mp3, wav, flac, ogg, m4a, or amr."
         )
 
+    # transcribeRelay forwards completion events only for names of exactly this
+    # shape (TRANSCRIBE_JOB_NAME_RE); change both together.
     job_name = f"kc-video-{uuid4().hex}"
     output_key = f"{TRANSCRIBE_OUTPUT_PREFIX}/{job_name}.json"
     params = {
@@ -73,11 +76,23 @@ def start_transcription_job(*, bucket: str, key: str, file_name: str) -> dict:
 
 
 def handle_transcribe_complete(event, connection):
+    # main.handler accepts the event only with the invoke token that
+    # transcribeRelay adds. As defence in depth only the job name is taken from
+    # it; status and failure reason come from Transcribe itself.
     detail = event.get("detail") or {}
     job_name = detail.get("TranscriptionJobName")
-    status = (detail.get("TranscriptionJobStatus") or "").upper()
+    if not isinstance(job_name, str) or not job_name:
+        logger.info("Ignoring Transcribe event without a job name")
+        return {"ignored": True}
 
-    if not job_name or status not in {"COMPLETED", "FAILED"}:
+    try:
+        job = transcribe_client.get_transcription_job(TranscriptionJobName=job_name).get("TranscriptionJob", {})
+    except Exception:
+        logger.exception("Could not load Transcribe job %s", job_name)
+        return {"error": "transcription job not found", "job_name": job_name}
+    status = (job.get("TranscriptionJobStatus") or "").upper()
+
+    if status not in {"COMPLETED", "FAILED"}:
         logger.info("Ignoring Transcribe event: %s %s", job_name, status)
         return {"ignored": True}
 
@@ -115,17 +130,7 @@ def handle_transcribe_complete(event, connection):
     metadata = dict(metadata)
 
     if status == "FAILED":
-        failure = detail.get("FailureReason") or "Amazon Transcribe job failed"
-        try:
-            failure = (
-                transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
-                .get("TranscriptionJob", {})
-                .get("FailureReason")
-                or failure
-            )
-        except Exception:
-            logger.exception("Could not load Transcribe failure reason for %s", job_name)
-
+        failure = job.get("FailureReason") or "Amazon Transcribe job failed"
         metadata["transcribe_status"] = "FAILED"
         metadata["transcribe_error"] = failure[:1000]
         with connection.cursor() as cursor:
@@ -167,7 +172,32 @@ def handle_transcribe_complete(event, connection):
             """,
             (json.dumps(metadata), data_source_id),
         )
-        if run_status in ("pending", "queued"):
+    connection.commit()
+
+    if run_status in ("pending", "queued"):
+        # Held until launch_transcriber_for_run commits the run as 'running' (or the
+        # rollback below): a cutover either sees the lock here or waits for that commit
+        # and then counts the run in wait_idle.
+        if is_locked(connection, hold=True):
+            # Keep the transcript: the run stays pending and the next sync launches it.
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE ingestion_runs
+                    SET status = 'pending'::ingestion_status,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s::uuid
+                    """,
+                    (
+                        json.dumps({"source": "transcribe_complete", "deferred_by_cutover": True}),
+                        ingestion_run_id,
+                    ),
+                )
+            connection.commit()
+            logger.info("Cutover in progress; deferred transcriber launch for run %s", ingestion_run_id)
+            return {"job_name": job_name, "status": "deferred", "ingestion_run_id": ingestion_run_id}
+
+        with connection.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE ingestion_runs
@@ -177,9 +207,6 @@ def handle_transcribe_complete(event, connection):
                 """,
                 (json.dumps({"source": "transcribe_complete"}), ingestion_run_id),
             )
-    connection.commit()
-
-    if run_status in ("pending", "queued"):
         try:
             launched = launch_transcriber_for_run(
                 connection,

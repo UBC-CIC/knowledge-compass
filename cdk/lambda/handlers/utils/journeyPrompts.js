@@ -21,6 +21,8 @@
  */
 
 const { validateUUID } = require("./validation.js");
+const { resolveAdminUser } = require("./adminIdentity.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./adminAudit.js");
 
 const KEY_PATTERN = /^[A-Z0-9_]{1,16}$/;
 const RESERVED_KEYS = new Set(["BOTH", "UNCLEAR", "UNKNOWN", "NONE"]);
@@ -154,7 +156,7 @@ function validateField(field) {
 function validateId(value, label) {
   const check = validateUUID(value, label);
   if (!check.valid) throw new InputError(check.error);
-  return value.trim();
+  return check.value;
 }
 
 /** "30d" | "6m" | "1y" -> days (default 30, capped at 365). "all" -> null. */
@@ -237,7 +239,7 @@ function shapeTree(journeyRows, clusterRows, versionRows) {
  * but missing from the catalog are listed with their key as the name.
  */
 function shapeFeedback(countRows, journeyRows, clusterRows, days) {
-  const counts = { journey: new Map(), cluster: new Map() };
+  const counts = { journey: new Map(), cluster: new Map(), section: new Map() };
   let untagged = { up: 0, down: 0, sessions: 0 };
   for (const r of countRows) {
     const value = { up: Number(r.up) || 0, down: Number(r.down) || 0, sessions: Number(r.sessions) || 0 };
@@ -261,20 +263,25 @@ function shapeFeedback(countRows, journeyRows, clusterRows, days) {
   for (const [key, value] of counts.cluster) {
     if (!known.cluster.has(key)) clusters.push({ key, name: key, journey_key: null, is_archived: true, ...value });
   }
-  return { days, journeys, clusters, untagged };
+  const sections = [...counts.section].map(([raw, value]) => {
+    const text = String(raw ?? "");
+    const splitAt = text.indexOf("\u001f");
+    const journey_key = splitAt === -1 ? null : text.slice(0, splitAt) || null;
+    const key = splitAt === -1 ? text : text.slice(splitAt + 1);
+    return { key, journey_key, ...value };
+  });
+  return { days, journeys, clusters, sections, untagged };
 }
 
 // ------------------------------------------------------------------
 // Database access
 // ------------------------------------------------------------------
 
+// Keyed on the Cognito sub, never users.email (see adminIdentity.js).
 async function resolveAdmin(sql, event) {
-  const email = event.requestContext?.authorizer?.email;
-  if (!email) throw new InputError("Unauthorized", 401);
-  const rows = await sql`SELECT id, role FROM users WHERE email = ${email} LIMIT 1`;
-  if (rows.length === 0) throw new InputError("Admin user not found", 404);
-  if (rows[0].role !== "admin") throw new InputError("User is not an admin", 403);
-  return rows[0].id;
+  const admin = await resolveAdminUser(sql, event);
+  if (admin.error) throw new InputError(admin.error, admin.statusCode);
+  return admin.id;
 }
 
 async function fetchTree(sql) {
@@ -300,6 +307,23 @@ async function fetchTree(sql) {
 }
 
 const ownerColumn = (field) => (JOURNEY_FIELDS.includes(field) ? "journey_id" : "cluster_id");
+
+function situationName(heading, sectionKey) {
+  let text = String(heading || sectionKey || "").trim();
+  const parts = text.split(" > ");
+  if (parts.length > 1) text = parts[parts.length - 1];
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function readySituationNames(tx, journeyId) {
+  const rows = await tx`
+    SELECT s.heading_path, s.section_key
+      FROM guideline_sections s
+      JOIN guideline_documents d ON d.id = s.document_id
+     WHERE d.journey_id = ${journeyId} AND d.status = 'ready'
+  `;
+  return new Set(rows.map((r) => situationName(r.heading_path, r.section_key)).filter(Boolean));
+}
 
 async function insertVersion(tx, field, ownerId, content, adminId) {
   const column = ownerColumn(field);
@@ -371,7 +395,7 @@ async function feedbackCounts(sql, days) {
          AND cs.eval_run_id IS NULL
     ),
     tagged AS (
-      SELECT rating,
+      SELECT rating, r,
         CASE
           WHEN jsonb_typeof(r->'journeys_seen') = 'array' AND jsonb_array_length(r->'journeys_seen') > 0
             THEN r->'journeys_seen'
@@ -403,6 +427,15 @@ async function feedbackCounts(sql, days) {
            COUNT(*)::int
       FROM tagged, jsonb_array_elements_text(clusters) AS k
      GROUP BY k
+    UNION ALL
+    SELECT 'section',
+           COALESCE(r->'route'->>'journey', '') || chr(31) || (r->'guide_section'->>'section_key'),
+           COUNT(*) FILTER (WHERE rating = 'up')::int,
+           COUNT(*) FILTER (WHERE rating = 'down')::int,
+           COUNT(*)::int
+      FROM tagged
+     WHERE COALESCE(r->'guide_section'->>'section_key', '') <> ''
+     GROUP BY COALESCE(r->'route'->>'journey', ''), r->'guide_section'->>'section_key'
     UNION ALL
     SELECT 'untagged', NULL,
            COUNT(*) FILTER (WHERE rating = 'up')::int,
@@ -441,6 +474,21 @@ function parseJson(body) {
 
 async function route(sql, event, routeKey) {
   const params = event.pathParameters ?? {};
+  // Every mutation writes its admin_audit row in the same transaction as the
+  // change (these rows are the live LLM prompt); lines are logged after commit
+  // (finding f-c47d6990). Targets hold ids and field names, never content.
+  const committed = [];
+  const audit = async (tx, action, target) => {
+    const entry = auditEntry(event, action, target);
+    await insertAdminAudit(tx, entry);
+    committed.push(entry);
+  };
+  const result = await dispatch(sql, event, routeKey, params, audit);
+  committed.forEach(logAdminAudit);
+  return result;
+}
+
+async function dispatch(sql, event, routeKey, params, audit) {
 
   switch (routeKey) {
     case "GET /admin/journeys":
@@ -474,6 +522,7 @@ async function route(sql, event, routeKey) {
         `;
         if (questions) await insertVersion(tx, "detective_questions", row.id, questions, adminId);
         if (guidance) await insertVersion(tx, "guidance", row.id, guidance, adminId);
+        await audit(tx, "journey.create", { id: row.id, key: input.key });
         return row.id;
       });
       return { statusCode: 201, body: { id } };
@@ -497,6 +546,7 @@ async function route(sql, event, routeKey) {
           UPDATE journeys SET ${tx(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
            WHERE id = ${id}
         `;
+        await audit(tx, "journey.update", { id, fields: columns });
       });
       return { statusCode: 200, body: { id } };
     }
@@ -519,6 +569,7 @@ async function route(sql, event, routeKey) {
           RETURNING id
         `;
         if (pattern) await insertVersion(tx, "response_pattern", row.id, pattern, adminId);
+        await audit(tx, "journey_cluster.create", { id: row.id, journey_id: journeyId, key: input.key });
         return row.id;
       });
       return { statusCode: 201, body: { id } };
@@ -529,12 +580,15 @@ async function route(sql, event, routeKey) {
       const patch = validateClusterInput(parseJson(event.body), { partial: true });
       const adminId = await resolveAdmin(sql, event);
       const columns = Object.keys(patch);
-      const updated = await sql`
-        UPDATE journey_clusters SET ${sql(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
-         WHERE id = ${id}
-        RETURNING id
-      `;
-      if (updated.length === 0) throw new InputError("Situation not found", 404);
+      await sql.begin(async (tx) => {
+        const updated = await tx`
+          UPDATE journey_clusters SET ${tx(patch, ...columns)}, updated_at = now(), updated_by = ${adminId}
+           WHERE id = ${id}
+          RETURNING id
+        `;
+        if (updated.length === 0) throw new InputError("Situation not found", 404);
+        await audit(tx, "journey_cluster.update", { id, fields: columns });
+      });
       return { statusCode: 200, body: { id } };
     }
 
@@ -551,7 +605,27 @@ async function route(sql, event, routeKey) {
           ? await tx`SELECT id FROM journeys WHERE id = ${ownerId} FOR UPDATE`
           : await tx`SELECT id FROM journey_clusters WHERE id = ${ownerId} FOR UPDATE`;
         if (owner.length === 0) throw new InputError("Journey or situation not found", 404);
-        return insertVersion(tx, field, ownerId, content, adminId);
+        if (JOURNEY_FIELDS.includes(field)) {
+          const covered = await readySituationNames(tx, ownerId);
+          if (covered.size > 0) {
+            throw new InputError(
+              "This journey's questions and guidance come from its uploaded documents. Replace a document to change them.",
+              409
+            );
+          }
+        } else {
+          const cluster = await tx`SELECT journey_id, name FROM journey_clusters WHERE id = ${ownerId}`;
+          const covered = cluster[0] ? await readySituationNames(tx, cluster[0].journey_id) : new Set();
+          if (covered.has(situationName(cluster[0]?.name))) {
+            throw new InputError(
+              "This situation is covered by an uploaded document. Replace that document to change its steps.",
+              409
+            );
+          }
+        }
+        const versionId = await insertVersion(tx, field, ownerId, content, adminId);
+        await audit(tx, "journey_prompt.create", { id: versionId, field, owner_id: ownerId });
+        return versionId;
       });
       return { statusCode: 200, body: await fetchVersion(sql, id) };
     }
@@ -566,6 +640,7 @@ async function route(sql, event, routeKey) {
         if (rows.length === 0) throw new InputError("Prompt version not found", 404);
         if (rows[0].is_active) throw new InputError("Cannot delete the active version");
         await tx`DELETE FROM journey_prompt_versions WHERE id = ${id}`;
+        await audit(tx, "journey_prompt.delete", { id, field: rows[0].field, version: rows[0].version });
         return rows[0];
       });
       return {
@@ -592,6 +667,7 @@ async function route(sql, event, routeKey) {
            WHERE field = ${target.field} AND ${tx(column)} = ${ownerId} AND is_active = true
         `;
         await tx`UPDATE journey_prompt_versions SET is_active = true WHERE id = ${id}`;
+        await audit(tx, "journey_prompt.activate", { id, field: target.field });
         return "activated";
       });
       return { statusCode: 200, body: { success: true, status, activated: await fetchVersion(sql, id) } };

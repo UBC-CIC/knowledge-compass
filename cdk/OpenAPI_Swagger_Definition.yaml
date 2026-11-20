@@ -20,31 +20,34 @@ x-amazon-apigateway-gateway-responses:
   UNAUTHORIZED:
     statusCode: "401"
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
-      gatewayresponse.header.Access-Control-Allow-Methods: "'*'"
-      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
+      gatewayresponse.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
     responseTemplates:
-      application/json: |
-        {"message":$context.error.messageString}
+      application/json: '{"message":"Unauthorized"}'
   WAF_FILTERED:
     statusCode: "429"
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
       gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
       gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
     responseTemplates:
       application/json: '{"error":"Rate limit exceeded. Please wait a few minutes before chatting again."}'
   DEFAULT_4XX:
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
       gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
       gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
   DEFAULT_5XX:
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      gatewayresponse.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
       gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
       gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT,POST,DELETE'"
-x-common-options: &commonOptions
+# OPTIONS preflight is a mock integration, so its CORS headers cannot read the request
+# origin. Access-Control-Allow-Origin is the stage variable allowedOrigin (the deployed
+# SPA origin). Access-Control-Allow-Methods lists only the methods that path serves;
+# YAML merge cannot override a nested key, so each method set has its own anchor.
+x-common-options-delete: &commonOptionsDELETE
   options:
     summary: CORS support
     description: |
@@ -64,44 +67,233 @@ x-common-options: &commonOptions
           statusCode: "200"
           responseParameters:
             method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-            method.response.header.Access-Control-Allow-Methods: "'*'"
-            method.response.header.Access-Control-Allow-Origin: "'*'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,DELETE'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-get: &commonOptionsGET
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,GET'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-getpost: &commonOptionsGETPOST
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,GET,POST'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-getput: &commonOptionsGETPUT
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,GET,PUT'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-patch: &commonOptionsPATCH
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,PATCH'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-post: &commonOptionsPOST
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-put: &commonOptionsPUT
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,PUT'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
+          responseTemplates:
+            application/json: |
+              {}
+
+x-common-options-putdelete: &commonOptionsPUTDELETE
+  options:
+    summary: CORS support
+    description: |
+      Enable CORS by returning correct headers
+    responses:
+      200:
+        $ref: "#/components/responses/Success"
+    x-amazon-apigateway-integration:
+      type: mock
+      requestTemplates:
+        application/json: |
+          {
+            "statusCode" : 200
+          }
+      responses:
+        default:
+          statusCode: "200"
+          responseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            method.response.header.Access-Control-Allow-Methods: "'OPTIONS,PUT,DELETE'"
+            method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
           responseTemplates:
             application/json: |
               {}
 
 paths:
   /admin/promote_user:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
-      summary: Upsert the signed-in admin into the users table
+      summary: Ensure the signed-in admin's users row (by Cognito sub)
+      description: >
+        Finds, links or creates the caller's own users row, keyed on the
+        Cognito sub from the admin authorizer, and sets its role to admin.
+        Acts only on the caller; every request body field is ignored.
       operationId: admin_update_user
       security:
         - adminAuthorizer: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [email, role]
               properties:
                 user_id:
                   type: string
-                  description: Deprecated. Admins are upserted by email.
+                  description: Deprecated and ignored.
                 email:
                   type: string
+                  description: Deprecated and ignored (the authorizer's Cognito email is used).
                 role:
                   type: string
                   enum: [student, admin]
+                  description: Deprecated and ignored (always admin).
       responses:
         "200":
           description: Updated user
         "400":
-          description: Bad Request
+          description: Bad Request (invalid JSON body)
         "401":
-          description: Unauthorized
+          description: Unauthorized (no Cognito sub in the authorizer context)
+        "403":
+          description: Admin access required
         "404":
           description: User not found
       x-amazon-apigateway-integration:
@@ -112,7 +304,7 @@ paths:
         type: aws_proxy
 
   /admin/users:
-    <<: *commonOptions
+    <<: *commonOptionsGETPOST
     get:
       tags:
         - Admin
@@ -149,7 +341,13 @@ paths:
     post:
       tags:
         - Admin
-      summary: Create a new admin user
+      summary: Create an administrator
+      description: >
+        Creates the Cognito user (Cognito emails a temporary password), adds it
+        to the "admin" group and writes its admin users row. An email that
+        already has a Cognito account is added to the admin group and its row
+        elevated (200). Served by adminProvisioningFunction, the only request
+        handler allowed to call Cognito admin APIs.
       operationId: create_admin_user
       security:
         - adminAuthorizer: []
@@ -170,15 +368,12 @@ paths:
                   type: string
                   format: email
                   maxLength: 255
-                institution_id:
-                  type: string
-                  maxLength: 255
       responses:
         "201":
-          description: Admin user created
+          description: Admin user created and invited
           content:
             application/json:
-              schema:
+              schema: &adminUserProvisioned
                 type: object
                 properties:
                   id:
@@ -191,20 +386,32 @@ paths:
                   role:
                     type: string
                     example: "admin"
-        "409":
-          description: Email already exists
+                  cognito:
+                    type: string
+                    enum: [created, existing]
+        "200":
+          description: Existing Cognito account added to the admin group
+          content:
+            application/json:
+              schema: *adminUserProvisioned
+        "400":
+          description: Invalid display_name or email, or email domain not allowed
+        "401":
+          description: Unauthorized
+        "403":
+          description: Admin access required
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminFunction.Arn}/invocations
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${adminProvisioningFunction.Arn}/invocations
         passthroughBehavior: "when_no_match"
         httpMethod: POST
         type: aws_proxy
       x-amazon-apigateway-request-validator: all
 
   /admin/users/{userId}/chat_sessions:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - Admin
@@ -246,7 +453,7 @@ paths:
         type: aws_proxy
 
   /admin/chat_sessions/{sessionId}/messages:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - Admin
@@ -288,7 +495,7 @@ paths:
         type: aws_proxy
 
   /admin/feedback/{chat_session_id}/message:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - Admin
@@ -326,7 +533,7 @@ paths:
         type: aws_proxy
 
   /admin/feedback/{chat_session_id}:
-    <<: *commonOptions
+    <<: *commonOptionsPUT
     put:
       tags:
         - Admin
@@ -376,7 +583,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources:
-    <<: *commonOptions
+    <<: *commonOptionsGETPOST
     get:
       tags: [Admin]
       summary: List data sources with latest ingestion run
@@ -469,15 +676,31 @@ paths:
                   example: example@email.com
                 name:
                   type: string
+                  description: >-
+                    For type website: the crawl seed. Must be a public http(s) URL (no
+                    embedded credentials, ports 80/443/8080/8443, host must resolve only
+                    to public addresses); stored normalized.
                   example: https://example.com
                 include_patterns:
                   type: array
+                  maxItems: 20
+                  description: >-
+                    For type website: Python regular expressions matched (re.search)
+                    against each page URL. When present, only matching URLs are crawled.
                   items:
                     type: string
+                    minLength: 1
+                    maxLength: 300
                 exclude_patterns:
                   type: array
+                  maxItems: 20
+                  description: >-
+                    For type website: Python regular expressions matched (re.search)
+                    against each page URL. Matching URLs are never fetched or stored.
                   items:
                     type: string
+                    minLength: 1
+                    maxLength: 300
                 csv_file_name:
                   type: string
                   example: alumni_data_final.csv
@@ -535,6 +758,9 @@ paths:
                   example: uploads/video/1712345678_family-rights-webinar.mp4
                 video_url:
                   type: string
+                  description: >-
+                    Required when type is video. Public http(s) URL used for citations and
+                    deep-links; must not point to a private or reserved address.
                   example: https://www.youtube.com/watch?v=example
                 document_file_name:
                   type: string
@@ -549,7 +775,8 @@ paths:
                   type: string
                   description: >-
                     Required when type is document. Public http(s) URL where users can
-                    open the document; shown as its citation link.
+                    open the document; shown as its citation link. Must not point to a
+                    private or reserved address.
                   example: https://example.com/family-rights-handbook.pdf
       responses:
         "200":
@@ -584,7 +811,10 @@ paths:
                       http(s) URLs. A hint for setting url_column; nothing is crawled
                       unless url_column is set.
         "400":
-          description: Invalid request
+          description: >-
+            Invalid request, including a website name, video_url or document_url
+            that is not a public http(s) URL, an include/exclude pattern that is not
+            a valid regular expression, or patterns that exclude the website name itself
         "404":
           description: Route not found
         "409":
@@ -602,7 +832,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources/sync:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Queue pending data sources and begin syncing
@@ -658,7 +888,7 @@ paths:
         type: aws_proxy
 
   /admin/generate-presigned-url:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - Admin
@@ -710,7 +940,7 @@ paths:
         type: aws_proxy
 
   /admin/generate-presigned-urls/batch:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - Admin
@@ -768,7 +998,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources/batch:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Stage multiple CSV/Markdown + metadata JSON pairs in one request
@@ -861,7 +1091,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources/{id}/retry:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Re-queue a data source whose latest ingestion run failed
@@ -916,7 +1146,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources/{id}/links:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [Admin]
       summary: Per-row crawl status of the links in a CSV data source's url_column
@@ -1017,7 +1247,7 @@ paths:
         type: aws_proxy
 
   /admin/data_sources/{id}:
-    <<: *commonOptions
+    <<: *commonOptionsDELETE
     delete:
       tags: [Admin]
       summary: Permanently delete an uploaded data source (file, video, or website)
@@ -1048,6 +1278,8 @@ paths:
                   warnings:
                     type: array
                     items: { type: string }
+                  deleted_page_count: { type: integer }
+                  retained_shared_page_count: { type: integer }
         "400":
           description: Invalid request
         "404":
@@ -1061,11 +1293,11 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  # Guideline mode (migration 031; lambda/knowledgeBase/helpers/guideline_admin.py).
-  # Runs alongside the standard prompt system; PUT /admin/guideline/mode picks
-  # which one the public chat uses.
+  # Journey documents (migrations 031 and 042; lambda/knowledgeBase/helpers/guideline_admin.py).
+  # Chat always uses the journey path. A document's journey_id attaches it to
+  # that journey. PUT /admin/guideline/mode no longer changes which pipeline runs.
   /admin/guideline:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [Admin]
       summary: Guideline mode, uploaded guides and their detected situations
@@ -1094,6 +1326,8 @@ paths:
                           { type: string, enum: [processing, ready, failed] }
                         error: { type: string, nullable: true }
                         section_count: { type: integer }
+                        journey_id:
+                          { type: string, format: uuid, nullable: true }
                         sections:
                           type: array
                           items:
@@ -1118,7 +1352,7 @@ paths:
         type: aws_proxy
 
   /admin/guideline/upload-url:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Presigned PUT URL for a guide file (.md up to 1 MB, .docx or .pdf up to 10 MB)
@@ -1159,7 +1393,7 @@ paths:
         type: aws_proxy
 
   /admin/guideline/documents:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Register an uploaded guide (new or replacing an existing one) and start reading it
@@ -1177,6 +1411,7 @@ paths:
                 s3_key: { type: string }
                 file_name: { type: string }
                 replace_document_id: { type: string, format: uuid }
+                journey_id: { type: string, format: uuid }
       responses:
         "202":
           description: Guide accepted; status is processing
@@ -1184,6 +1419,10 @@ paths:
           description: Invalid key, file type or size
         "404":
           description: Guide to replace not found
+        "409":
+          description: >-
+            A search-index cutover is in progress (body {"error": "...", "code":
+            "CUTOVER_LOCKED"}). Try again in a few minutes.
         "500":
           description: Internal Server Error
         "502":
@@ -1196,7 +1435,7 @@ paths:
         type: aws_proxy
 
   /admin/guideline/documents/{id}:
-    <<: *commonOptions
+    <<: *commonOptionsDELETE
     delete:
       tags: [Admin]
       summary: Remove a guide, its detected situations and its search chunks
@@ -1227,7 +1466,7 @@ paths:
         type: aws_proxy
 
   /admin/guideline/sections/{id}:
-    <<: *commonOptions
+    <<: *commonOptionsPATCH
     patch:
       tags: [Admin]
       summary: Rename a detected situation (empty label resets to the detected name)
@@ -1256,6 +1495,10 @@ paths:
           description: Invalid id or label
         "404":
           description: Situation not found
+        "409":
+          description: >-
+            A search-index cutover is in progress (body {"error": "...", "code":
+            "CUTOVER_LOCKED"}). The label is not saved; try again in a few minutes.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -1266,7 +1509,7 @@ paths:
         type: aws_proxy
 
   /admin/guideline/mode:
-    <<: *commonOptions
+    <<: *commonOptionsPUT
     put:
       tags: [Admin]
       summary: Choose which prompt system the public chat uses
@@ -1301,8 +1544,61 @@ paths:
   # live one by async jobs, validated, then activated by moving a single pointer.
   # Every POST that does work returns 202 and a job id; poll GET /admin/embedding-jobs/{id}.
   # Responses carry ids, counts and metrics only, never chunk text.
+  /admin/embedding-models:
+    <<: *commonOptionsGET
+    get:
+      tags: [Admin]
+      summary: List the embedding models this app can call, with the id and call target from Amazon Bedrock
+      operationId: get_embedding_models
+      security:
+        - adminAuthorizer: []
+      responses:
+        "200":
+          description: One entry per supported embedding model
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          {
+                            type: string,
+                            enum: [cohere_v3, titan_v2, cohere_v4],
+                          }
+                        label: { type: string }
+                        dimensions:
+                          type: array
+                          items: { type: integer }
+                        available: { type: boolean }
+                        model_id: { type: string, nullable: true }
+                        invoke_target:
+                          type: string
+                          nullable: true
+                          description: Bedrock model id, or an inference profile ARN when the model is not on demand in this region
+                        cross_region:
+                          type: boolean
+                          description: True when calling the model may process text outside this region
+                        unavailable_reason: { type: string, nullable: true }
+        "401":
+          description: Unauthorized
+        "503":
+          description: Amazon Bedrock could not be asked which models are available
+        "500":
+          description: Internal Server Error
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaKnowledgeBase.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+        httpMethod: POST
+        type: aws_proxy
+
   /admin/embedding-spaces:
-    <<: *commonOptions
+    <<: *commonOptionsGETPOST
     get:
       tags: [Admin]
       summary: List embedding spaces with coverage, cutover lock state and the latest job of each
@@ -1317,7 +1613,8 @@ paths:
               schema:
                 type: object
                 properties:
-                  active_space_id: { type: string, format: uuid, nullable: true }
+                  active_space_id:
+                    { type: string, format: uuid, nullable: true }
                   total_chunks: { type: integer }
                   retention_days:
                     type: integer
@@ -1329,7 +1626,8 @@ paths:
                     type: object
                     properties:
                       locked: { type: boolean }
-                      locked_at: { type: string, format: date-time, nullable: true }
+                      locked_at:
+                        { type: string, format: date-time, nullable: true }
                       job_id: { type: string, nullable: true }
                   spaces:
                     type: array
@@ -1338,12 +1636,21 @@ paths:
                       properties:
                         id: { type: string, format: uuid }
                         name: { type: string }
-                        provider: { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
+                        provider:
+                          {
+                            type: string,
+                            enum: [cohere_v3, titan_v2, cohere_v4],
+                          }
                         model_id: { type: string }
                         invoke_target: { type: string }
                         dimensions: { type: integer }
                         version: { type: string }
-                        status: { type: string, enum: [building, validated, active, retired, purged] }
+                        status:
+                          {
+                            type: string,
+                            enum:
+                              [building, validated, active, retired, purged],
+                          }
                         is_active: { type: boolean }
                         min_score: { type: number, nullable: true }
                         split_threshold: { type: number, nullable: true }
@@ -1352,8 +1659,10 @@ paths:
                         settings: { type: object }
                         created_by: { type: string, nullable: true }
                         created_at: { type: string, format: date-time }
-                        activated_at: { type: string, format: date-time, nullable: true }
-                        retired_at: { type: string, format: date-time, nullable: true }
+                        activated_at:
+                          { type: string, format: date-time, nullable: true }
+                        retired_at:
+                          { type: string, format: date-time, nullable: true }
                         purge_eligible_at:
                           type: string
                           format: date-time
@@ -1377,7 +1686,12 @@ paths:
                             current_step: { type: string, nullable: true }
                             last_error: { type: string, nullable: true }
                             created_at: { type: string, format: date-time }
-                            finished_at: { type: string, format: date-time, nullable: true }
+                            finished_at:
+                              {
+                                type: string,
+                                format: date-time,
+                                nullable: true,
+                              }
         "401":
           description: Unauthorized
         "500":
@@ -1400,26 +1714,28 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, provider, model_id, invoke_target, dimensions]
+              description: >
+                model_id and invoke_target are not accepted. The server looks
+                them up in Amazon Bedrock for the chosen provider.
+              required: [name, provider, dimensions]
               properties:
                 name:
                   type: string
                   pattern: "^[a-z0-9][a-z0-9_-]{2,62}$"
                   example: titan-v2-1024
-                provider: { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
-                model_id: { type: string, maxLength: 512 }
-                invoke_target:
-                  type: string
-                  maxLength: 2048
-                  description: Bedrock model id or inference profile ARN (configuration, not a claim of regional availability)
+                provider:
+                  { type: string, enum: [cohere_v3, titan_v2, cohere_v4] }
                 dimensions:
                   type: integer
                   description: Must be one of the provider's supported dimensions
                 version: { type: string, maxLength: 32, default: "1" }
-                price_per_1m_tokens: { type: number, minimum: 0, nullable: true }
+                price_per_1m_tokens:
+                  { type: number, minimum: 0, nullable: true }
                 eol_date: { type: string, format: date, nullable: true }
-                min_score: { type: number, minimum: 0, maximum: 1, nullable: true }
-                split_threshold: { type: number, minimum: 0, maximum: 1, nullable: true }
+                min_score:
+                  { type: number, minimum: 0, maximum: 1, nullable: true }
+                split_threshold:
+                  { type: number, minimum: 0, maximum: 1, nullable: true }
                 settings:
                   type: object
                   additionalProperties: false
@@ -1456,7 +1772,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-spaces/{id}/jobs:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Start a dry run (estimate only), rebuild or delta job that embeds the stored chunks into a space
@@ -1513,7 +1829,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-spaces/{id}/validate:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Validate a space (coverage, per-source-type counts, golden-set quality) so it can be activated
@@ -1565,7 +1881,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-spaces/{id}/activate:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Make a validated space the live one (syncing pauses for a few minutes; chat keeps working)
@@ -1614,7 +1930,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-spaces/{id}/rollback:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Switch back to a retired space (it is brought up to date first)
@@ -1653,7 +1969,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-spaces/{id}/purge:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Permanently delete a retired space's vectors and search index (manual only, after 30 days)
@@ -1717,7 +2033,7 @@ paths:
         type: aws_proxy
 
   /admin/embedding-jobs/{id}:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [Admin]
       summary: Progress of an embedding job (rebuild, dry run, validation, activation or rollback)
@@ -1741,8 +2057,17 @@ paths:
                 properties:
                   id: { type: string, format: uuid }
                   space_id: { type: string, format: uuid }
-                  mode: { type: string, enum: [dry_run, rebuild, delta, validate, activate, rollback] }
-                  status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+                  mode:
+                    {
+                      type: string,
+                      enum:
+                        [dry_run, rebuild, delta, validate, activate, rollback],
+                    }
+                  status:
+                    {
+                      type: string,
+                      enum: [queued, running, succeeded, failed, cancelled],
+                    }
                   total_chunks: { type: integer, nullable: true }
                   processed: { type: integer }
                   failed: { type: integer }
@@ -1761,8 +2086,25 @@ paths:
                     items:
                       type: object
                       properties:
-                        name: { type: string, enum: [lock, wait_idle, delta, revalidate, flip, post_flip_check, unlock] }
-                        status: { type: string, enum: [pending, running, done, failed] }
+                        name:
+                          {
+                            type: string,
+                            enum:
+                              [
+                                lock,
+                                wait_idle,
+                                delta,
+                                revalidate,
+                                flip,
+                                post_flip_check,
+                                unlock,
+                              ],
+                          }
+                        status:
+                          {
+                            type: string,
+                            enum: [pending, running, done, failed],
+                          }
                         started_at: { type: string, nullable: true }
                         finished_at: { type: string, nullable: true }
                         detail: { type: string, nullable: true }
@@ -1770,8 +2112,10 @@ paths:
                   last_error: { type: string, nullable: true }
                   requested_by: { type: string, nullable: true }
                   created_at: { type: string, format: date-time }
-                  started_at: { type: string, format: date-time, nullable: true }
-                  finished_at: { type: string, format: date-time, nullable: true }
+                  started_at:
+                    { type: string, format: date-time, nullable: true }
+                  finished_at:
+                    { type: string, format: date-time, nullable: true }
         "400":
           description: Invalid id
         "404":
@@ -1786,7 +2130,7 @@ paths:
         type: aws_proxy
 
   /admin/system-settings:
-    <<: *commonOptions
+    <<: *commonOptionsGETPUT
     get:
       tags: [Admin]
       summary: Get latest system settings
@@ -1810,13 +2154,12 @@ paths:
                   max_characters_per_day: { type: integer }
                   max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
-                  temperature: { type: number }
-                  top_p: { type: number }
                   support_score_threshold: { type: number }
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }
                   partially_grounded_threshold: { type: number }
-                  service_status: { type: string, enum: [normal, banner, read_only] }
+                  service_status:
+                    { type: string, enum: [normal, banner, read_only] }
                   service_message: { type: string, nullable: true }
                   updated_by: { type: string, nullable: true }
                   updated_at: { type: string }
@@ -1842,7 +2185,8 @@ paths:
             schema:
               type: object
               properties:
-                max_messages_per_day: { type: integer }
+                max_messages_per_day:
+                  { type: integer, minimum: 1, maximum: 100 }
                 min_messages_before_suggest:
                   type: integer
                   description: Fixed mode - exchange that switches to guidance. Dynamic mode - guidance by this exchange at the latest.
@@ -1853,18 +2197,18 @@ paths:
                 min_exchanges_before_answer:
                   type: integer
                   description: Dynamic mode floor (questions before guidance, urgent turns bypass it). Must be <= min_messages_before_suggest.
-                max_characters_per_user_message: { type: integer }
+                max_characters_per_user_message: { type: integer, minimum: 1, maximum: 4000 }
                 max_characters_per_day:
                   type: integer
+                  minimum: 1
+                  maximum: 20000
                   description: Characters a user can send per UTC day
                 max_messages_per_day_global:
                   type: integer
                   minimum: 1
-                  maximum: 1000000
+                  maximum: 20000
                   description: Messages all public users together can send per UTC day
-                max_characters_per_ai_message: { type: integer }
-                temperature: { type: number }
-                top_p: { type: number }
+                max_characters_per_ai_message: { type: integer, minimum: 1, maximum: 10000 }
                 support_score_threshold: { type: number }
                 scope_alignment_score_threshold: { type: number }
                 grounded_threshold: { type: number }
@@ -1895,13 +2239,12 @@ paths:
                   max_characters_per_day: { type: integer }
                   max_messages_per_day_global: { type: integer }
                   max_characters_per_ai_message: { type: integer }
-                  temperature: { type: number }
-                  top_p: { type: number }
                   support_score_threshold: { type: number }
                   scope_alignment_score_threshold: { type: number }
                   grounded_threshold: { type: number }
                   partially_grounded_threshold: { type: number }
-                  service_status: { type: string, enum: [normal, banner, read_only] }
+                  service_status:
+                    { type: string, enum: [normal, banner, read_only] }
                   service_message: { type: string, nullable: true }
                   updated_by: { type: string, nullable: true }
                   updated_at: { type: string }
@@ -1916,7 +2259,7 @@ paths:
         type: aws_proxy
 
   /admin/system-messages:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - Admin
@@ -2040,7 +2383,7 @@ paths:
         type: aws_proxy
 
   /admin/system-messages/{system_message_type}:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - Admin
@@ -2140,6 +2483,10 @@ paths:
           description: Forbidden - Not an admin
         "404":
           description: Admin user not found for email
+        "409":
+          description: >-
+            Another change to this message type was saved at the same time (only one
+            version per type can be active). Reload and try again.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -2150,7 +2497,7 @@ paths:
         type: aws_proxy
 
   /admin/system-messages/{system_message_type}/{version_id}:
-    <<: *commonOptions
+    <<: *commonOptionsDELETE
     delete:
       tags:
         - Admin
@@ -2263,7 +2610,7 @@ paths:
         type: aws_proxy
 
   /admin/system-messages/{system_message_type}/{version_id}/activate:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - Admin
@@ -2433,6 +2780,10 @@ paths:
           description: Forbidden - Not an admin
         "404":
           description: Admin user not found or system message version not found
+        "409":
+          description: >-
+            Another change to this message type was saved at the same time (only one
+            version per type can be active). Reload and try again.
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:
@@ -2444,7 +2795,7 @@ paths:
 
   # Journeys and situation clusters (handlers/utils/journeyPrompts.js, migration 024).
   /admin/journeys:
-    <<: *commonOptions
+    <<: *commonOptionsGETPOST
     get:
       tags: [Admin]
       summary: List journeys with their situation clusters and prompt versions (archived included)
@@ -2538,7 +2889,7 @@ paths:
         type: aws_proxy
 
   /admin/journeys/feedback:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [Admin]
       summary: Thumbs up/down counts per journey and situation cluster (counts only, no message text)
@@ -2584,7 +2935,7 @@ paths:
         type: aws_proxy
 
   /admin/journeys/{journey_id}:
-    <<: *commonOptions
+    <<: *commonOptionsPUT
     put:
       tags: [Admin]
       summary: Update journey metadata or archive/restore it
@@ -2630,7 +2981,7 @@ paths:
         type: aws_proxy
 
   /admin/journeys/{journey_id}/clusters:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Add a situation cluster to a journey (optionally with its first response pattern version)
@@ -2682,7 +3033,7 @@ paths:
         type: aws_proxy
 
   /admin/clusters/{cluster_id}:
-    <<: *commonOptions
+    <<: *commonOptionsPUT
     put:
       tags: [Admin]
       summary: Update situation cluster metadata or archive/restore it
@@ -2726,7 +3077,7 @@ paths:
         type: aws_proxy
 
   /admin/journey-prompts:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Save a new active version of a journey or situation prompt field
@@ -2770,7 +3121,7 @@ paths:
         type: aws_proxy
 
   /admin/journey-prompts/{version_id}:
-    <<: *commonOptions
+    <<: *commonOptionsDELETE
     delete:
       tags: [Admin]
       summary: Delete a non-active journey or situation prompt version
@@ -2799,7 +3150,7 @@ paths:
         type: aws_proxy
 
   /admin/journey-prompts/{version_id}/activate:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags: [Admin]
       summary: Activate a journey or situation prompt version (deactivates the previous one)
@@ -2826,7 +3177,7 @@ paths:
         type: aws_proxy
 
   /admin/analytics:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [Admin]
       summary: Get analytics time series
@@ -2898,7 +3249,7 @@ paths:
         type: aws_proxy
 
   /system_message/{message_type}:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - SystemMessages
@@ -2952,7 +3303,7 @@ paths:
         type: aws_proxy
 
   /system-settings/max-characters-per-user-message:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [System]
       summary: Get max characters allowed per user message
@@ -2986,7 +3337,7 @@ paths:
   # practice any visitor can read this. It deliberately returns ONLY service_status and
   # service_message (operator-written, shown to families anyway). Do not add other fields.
   /system-settings/service-status:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags: [System]
       summary: Maintenance banner / read-only flag for the chat UI (status and message only)
@@ -3028,7 +3379,7 @@ paths:
         httpMethod: POST
         type: aws_proxy
   /chat_sessions/{chat_session_id}:
-    <<: *commonOptions
+    <<: *commonOptionsPUTDELETE
     put:
       tags:
         - ChatSessions
@@ -3125,7 +3476,7 @@ paths:
         type: aws_proxy
 
   /chat_sessions/{chat_session_id}/feedback:
-    <<: *commonOptions
+    <<: *commonOptionsGETPUT
     get:
       tags:
         - ChatSessions
@@ -3246,7 +3597,7 @@ paths:
         type: aws_proxy
 
   /chat_sessions/{chat_session_id}/text_generation:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - User
@@ -3325,7 +3676,7 @@ paths:
             responseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
               method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Origin: "stageVariables.allowedOrigin"
             responseTemplates:
               application/json: |
                 {}
@@ -3375,7 +3726,7 @@ paths:
         type: aws_proxy
 
   /user:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - User
@@ -3393,16 +3744,11 @@ paths:
                 role:
                   type: string
                   enum: ["student", "admin"]
-                  description: Role of the user (defaults to 'student' if not provided)
-                email:
-                  type: string
-                  description: Optional email (admins will use Cognito; guests can be null)
+                  description: Ignored; new users are always 'student' guests
                 display_name:
                   type: string
-                  description: Optional display name
-                metadata:
-                  type: object
-                  additionalProperties: true
+                  maxLength: 64
+                  description: Optional display name; trimmed and cut to 64 characters
       responses:
         "200":
           description: User created successfully
@@ -3426,6 +3772,7 @@ paths:
                   email:
                     type: string
                     nullable: true
+                    description: Always null; guests are created without an address
                   display_name:
                     type: string
                     nullable: true
@@ -3447,7 +3794,7 @@ paths:
         type: aws_proxy
 
   /user/{user_id}:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - User
@@ -3477,55 +3824,9 @@ paths:
         passthroughBehavior: "when_no_match"
         httpMethod: POST
         type: aws_proxy
-    put:
-      tags:
-        - User
-      summary: Update user email
-      operationId: update_user_email
-      security:
-        - userAuthorizer: []
-      parameters:
-        - name: user_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - email
-              properties:
-                email:
-                  type: string
-                  format: email
-                  example: student@example.com
-      responses:
-        "200":
-          description: User updated successfully
-        "400":
-          description: Invalid request
-        "401":
-          description: Unauthorized
-        "404":
-          description: User not found
-        "409":
-          description: Email already in use
-        "500":
-          description: Internal Server Error
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${userFunction.Arn}/invocations
-        passthroughBehavior: "when_no_match"
-        httpMethod: POST
-        type: aws_proxy
 
   /user/{user_id}/chat_sessions/{chat_session_id}/chat_history:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - User
@@ -3634,7 +3935,7 @@ paths:
         type: aws_proxy
 
   /chat_sessions/user/{user_id}:
-    <<: *commonOptions
+    <<: *commonOptionsGET
     get:
       tags:
         - ChatSessions
@@ -3667,7 +3968,7 @@ paths:
         type: aws_proxy
 
   /chat_sessions:
-    <<: *commonOptions
+    <<: *commonOptionsPOST
     post:
       tags:
         - ChatSessions
@@ -3695,7 +3996,13 @@ paths:
                 metadata:
                   type: object
                   nullable: true
-                  additionalProperties: true
+                  additionalProperties: false
+                  maxProperties: 0
+                  description: >-
+                    No client-settable keys are currently accepted. Server-managed
+                    keys (journey_state, guide_state, routing) and unknown keys are
+                    rejected with 400; null or omitted stores an empty object. The
+                    serialised size limit is 2048 bytes.
                 eval:
                   type: object
                   nullable: true
@@ -3746,11 +4053,34 @@ paths:
                     type: object
                     nullable: true
         "400":
-          description: Invalid request
+          description: Invalid request (malformed JSON or invalid metadata)
         "404":
           description: User not found
         "401":
           description: Unauthorized
+        "429":
+          description: >-
+            The user already created 20 chat sessions this UTC day
+            (DAILY_SESSION_LIMIT_EXCEEDED). Deleting a session does not free a
+            slot; existing sessions can still be used.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [DAILY_SESSION_LIMIT_EXCEEDED]
+                  message:
+                    type: string
+                  session_usage:
+                    type: object
+                    properties:
+                      limit:
+                        type: integer
+                      reset_at:
+                        type: string
+                        format: date-time
         "500":
           description: Internal Server Error
       x-amazon-apigateway-integration:

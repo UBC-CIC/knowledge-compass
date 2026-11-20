@@ -9,10 +9,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { USER, accessToken, loadConnect, withEnv, quietly, captureConsole } = require("./_loadWebsocket.js");
+const { USER, SOURCE_IP, accessToken, loadConnect, withEnv, quietly, captureConsole } = require("./_loadWebsocket.js");
 
 const connectEvent = ({ headers, queryStringParameters, body } = {}) => ({
-  requestContext: { connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$connect" },
+  requestContext: {
+    connectionId: "conn-1", domainName: "ws.example", stage: "prod", routeKey: "$connect",
+    identity: { sourceIp: SOURCE_IP },
+  },
   headers,
   queryStringParameters,
   body,
@@ -108,12 +111,13 @@ test("a connection-store failure refuses the handshake with 500", async () => {
 });
 
 test("misconfiguration and Secrets Manager faults are 500, not 401", async () => {
+  // The per-IP counter runs first, so only the binding write is checked here.
   const restore = withEnv({ JWT_ISSUER: undefined });
   try {
     const { handler, dynamoCalls } = loadConnect();
     const res = await quietly(() => handler(viaSubprotocol(accessToken())));
     assert.equal(res.statusCode, 500);
-    assert.equal(dynamoCalls.length, 0);
+    assert.equal(puts(dynamoCalls).length, 0);
   } finally {
     restore();
   }
@@ -121,7 +125,7 @@ test("misconfiguration and Secrets Manager faults are 500, not 401", async () =>
   const failing = loadConnect({ secretError: new Error("sm down") });
   const res = await quietly(() => failing.handler(viaSubprotocol(accessToken())));
   assert.equal(res.statusCode, 500);
-  assert.equal(failing.dynamoCalls.length, 0);
+  assert.equal(puts(failing.dynamoCalls).length, 0);
 
   const restoreTable = withEnv({ CONNECTIONS_TABLE_NAME: undefined });
   try {

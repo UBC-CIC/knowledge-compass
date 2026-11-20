@@ -10,8 +10,9 @@ Public chat API client used by the harness, mirroring the frontend:
   GET  /chat_sessions/user/{user_id}         routing readback (metadata)
   DELETE /chat_sessions/{id}?user_id=        cleanup
 
-Never sends session feedback and never sets is_intro_message (which would
-skip the guardrail). Message text is never logged.
+Never sends session feedback. The is_intro_message frame field is always
+False and the server ignores it; the guardrail always runs. Message text is
+never logged.
 """
 
 from __future__ import annotations
@@ -199,6 +200,7 @@ class ApiClient:
             "clusters_seen": list(routing.get("clusters_seen") or []),
             "last_phase": routing.get("last_phase"),
             "journey_state": metadata.get("journey_state"),
+            "guide_section": routing.get("guide_section") if isinstance(routing.get("guide_section"), dict) else None,
         }
 
     def delete_session(self, user: EvalUser, session_id: str) -> None:

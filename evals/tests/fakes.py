@@ -40,7 +40,8 @@ class FakeBackend:
             if phase == "SUGGESTION" else [],
             "routing": {"route": {"journey": "J1", "situation": "A", "secondary_situation": "NONE",
                                   "confidence": "HIGH", "mode": "ANSWER"},
-                        "journeys_seen": ["J1"], "clusters_seen": ["A"], "last_phase": phase},
+                        "journeys_seen": ["J1"], "clusters_seen": ["A"], "last_phase": phase,
+                        "guide_section": {"document_id": "doc-1", "section_key": "sent-home"}},
         }
 
     # -- HTTP ----------------------------------------------------------

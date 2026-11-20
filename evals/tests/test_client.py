@@ -108,6 +108,7 @@ class SessionTest(unittest.TestCase):
         routing = self.client.routing_snapshot(self.user, sid)
         self.assertEqual((routing["journey"], routing["situation"], routing["confidence"]), ("J1", "A", "HIGH"))
         self.assertEqual(routing["clusters_seen"], ["A"])
+        self.assertEqual(routing["guide_section"], {"document_id": "doc-1", "section_key": "sent-home"})
         self.assertEqual(self.user.messages_sent, 2)
         self.assertEqual(self.user.chars_sent, len("hello") + len("more"))
 

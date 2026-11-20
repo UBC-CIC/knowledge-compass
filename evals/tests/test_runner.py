@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from evals import schema
+from evals.guardrail_cases import GuardrailCase
 from evals.harness.runner import RunConfig, Runner, is_guidance
 from evals.harness.client import TurnResult
 from evals.harness.signing import SigningKeyProvider
@@ -139,9 +140,9 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(files, ["X01_guideline.json", "X01_standard.json"])
         self.assertEqual(manifest["sessions_created"], manifest["sessions_deleted"])
         self.assertEqual(manifest["errors"], [])
-        # Guideline transcripts carry no routing readback.
+        # One chat path, so both modes record the journey key and any cited section.
         g = json.loads((self.root / "run_test" / "journeys" / "X01_guideline.json").read_text(encoding="utf-8"))
-        self.assertTrue(all(turn["routing"] == {} for turn in g["turns"]))
+        self.assertTrue(all(turn["routing"]["journey"] == "J1" for turn in g["turns"]))
 
     def test_probes_only_and_journeys_only(self):
         backend = FakeBackend()
@@ -152,6 +153,24 @@ class RunnerTest(unittest.TestCase):
         r.out = self.root / "run_j"
         r.run([self.scenario])
         self.assertFalse((self.root / "run_j" / "probes").exists())
+
+    def test_guardrail_case_uses_fresh_user_records_reply_and_cleans_up(self):
+        backend = FakeBackend(reply=lambda s, m, n: {"response": "I can only help with a child's schooling.",
+                                                     "phase": "DETECTIVE"})
+        r = self.runner(backend)
+        case = GuardrailCase(id="O3", category="off_topic", expected="decline",
+                             message="What's a good recipe for banana bread?", expectations=["kindly declines"])
+        first = r.run_guardrail_case(case)
+        r.run_guardrail_case(case)
+        self.assertEqual(len(backend.users), 2)
+        self.assertEqual(first["response"], "I can only help with a child's schooling.")
+        self.assertEqual(first["user"], case.message)
+        self.assertEqual((first["case_id"], first["expected"], first["mode"]), ("O3", "decline", "standard"))
+        self.assertTrue(first["cleaned_up"])
+        self.assertEqual(backend.sessions, {})
+        saved = json.loads((self.root / "run_test" / "guardrails" / "O3.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["expectations"], ["kindly declines"])
+        self.assertTrue(saved["cleaned_up"])
 
 
 if __name__ == "__main__":

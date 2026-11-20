@@ -4,12 +4,19 @@
  * $disconnect deletes it. Items expire through TTL (expiresAt) a little after
  * API Gateway's 2-hour connection limit, so a live connection's record is
  * never missing. Fails closed when the table name is not configured.
+ *
+ * The same item carries a fixed-window generate_text frame counter for
+ * $default (rlWindow = window number, rlCount = frames in it); see
+ * consumeGenerateAllowance. WAFv2 cannot attach to WebSocket APIs, so this
+ * table also holds the per-user and per-IP counters (consumeKeyedAllowance,
+ * ipLimit.js).
  */
 
 const {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  UpdateItemCommand,
   DeleteItemCommand,
 } = require("@aws-sdk/client-dynamodb");
 
@@ -67,4 +74,138 @@ async function deleteConnection(connectionId) {
   );
 }
 
-module.exports = { putConnection, getConnectionUserId, deleteConnection, RECORD_TTL_SECONDS };
+/** Default generate_text frames allowed per connection per window. */
+const RATE_LIMIT_DEFAULTS = Object.freeze({ limit: 10, windowSeconds: 60 });
+
+/** Positive integer from `value`, else `fallback` (never "unlimited"). */
+function positiveInt(value, fallback) {
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : fallback;
+}
+
+/** Limiter config from WS_GENERATE_RATE_LIMIT / WS_GENERATE_RATE_WINDOW_SECONDS. */
+function rateLimitConfig(env = process.env) {
+  return {
+    limit: positiveInt(env.WS_GENERATE_RATE_LIMIT, RATE_LIMIT_DEFAULTS.limit),
+    windowSeconds: positiveInt(env.WS_GENERATE_RATE_WINDOW_SECONDS, RATE_LIMIT_DEFAULTS.windowSeconds),
+  };
+}
+
+const isConditionalCheckFailed = (err) => err?.name === "ConditionalCheckFailedException";
+
+/**
+ * Count one generate_text frame against `connectionId`'s fixed window. Returns
+ * true when allowed, false when the window is full or the record is gone, and
+ * throws on any other DynamoDB error. Every update is conditioned on
+ * attribute_exists(connectionId), so it never creates a record.
+ */
+async function consumeGenerateAllowance(connectionId, { limit, windowSeconds }, nowMs = Date.now()) {
+  const TableName = tableName();
+  const Key = { connectionId: { S: connectionId } };
+  const window = String(Math.floor(nowMs / 1000 / windowSeconds));
+
+  const increment = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "ADD rlCount :one",
+        ConditionExpression: "attribute_exists(connectionId) AND rlWindow = :w AND rlCount < :max",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window }, ":max": { N: String(limit) } },
+      })
+    );
+  const startWindow = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "SET rlWindow = :w, rlCount = :one",
+        ConditionExpression: "attribute_exists(connectionId) AND (attribute_not_exists(rlWindow) OR rlWindow < :w)",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window } },
+      })
+    );
+
+  // Retry the increment once: a concurrent frame may have just started this window.
+  for (const attempt of [increment, startWindow, increment]) {
+    try {
+      await attempt();
+      return true;
+    } catch (err) {
+      if (!isConditionalCheckFailed(err)) throw err;
+    }
+  }
+  return false;
+}
+
+/**
+ * Count one generate_text frame against the bound guest's own window, shared by
+ * every socket that guest holds (finding f-177af79e: the per-connection window
+ * alone let one token open N sockets for N x the allowance). Kept on a
+ * `user#<userId>` item (see consumeKeyedAllowance). Returns true when allowed,
+ * false when the window is full; throws on any other DynamoDB error.
+ */
+async function consumeUserGenerateAllowance(userId, limits, nowMs = Date.now()) {
+  if (typeof userId !== "string" || !UUID_REGEX.test(userId)) return false;
+  return consumeKeyedAllowance(`user#${userId}`, limits, nowMs);
+}
+
+/**
+ * Count one event against the fixed window on the counter item `key`
+ * ("<kind>#<id>" in the same table; connection ids never contain "#"), created
+ * on first use and removed by TTL after its window. Used for the per-user
+ * window above and the per-IP windows in ipLimit.js. Returns true when
+ * allowed, false when the window is full; throws on any other DynamoDB error.
+ */
+async function consumeKeyedAllowance(key, { limit, windowSeconds }, nowMs = Date.now()) {
+  if (typeof key !== "string" || !/^[a-z]+#./.test(key)) throw new Error("invalid counter key");
+  const TableName = tableName();
+  const Key = { connectionId: { S: key } };
+  const windowIndex = Math.floor(nowMs / 1000 / windowSeconds);
+  const window = String(windowIndex);
+  const expiresAt = String((windowIndex + 2) * windowSeconds);
+
+  const increment = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "ADD rlCount :one",
+        ConditionExpression: "rlWindow = :w AND rlCount < :max",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window }, ":max": { N: String(limit) } },
+      })
+    );
+  const startWindow = () =>
+    dynamo.send(
+      new UpdateItemCommand({
+        TableName,
+        Key,
+        UpdateExpression: "SET rlWindow = :w, rlCount = :one, expiresAt = :exp",
+        ConditionExpression: "attribute_not_exists(rlWindow) OR rlWindow < :w",
+        ExpressionAttributeValues: { ":one": { N: "1" }, ":w": { N: window }, ":exp": { N: expiresAt } },
+      })
+    );
+
+  for (const attempt of [increment, startWindow, increment]) {
+    try {
+      await attempt();
+      return true;
+    } catch (err) {
+      if (!isConditionalCheckFailed(err)) throw err;
+    }
+  }
+  return false;
+}
+
+module.exports = {
+  consumeUserGenerateAllowance,
+  consumeKeyedAllowance,
+  positiveInt,
+  putConnection,
+  getConnectionUserId,
+  deleteConnection,
+  consumeGenerateAllowance,
+  rateLimitConfig,
+  RATE_LIMIT_DEFAULTS,
+  RECORD_TTL_SECONDS,
+};

@@ -1,11 +1,14 @@
 import os
 import json
+import secrets
 import time
 import logging
 import boto3
 from botocore.config import Config
-from helpers.cors import get_cors_headers
+from helpers.admin_user import admin_sub_from_request
+from kc_shared.cors import get_cors_headers
 from helpers.upload_identity import sanitize_file_name
+from helpers.upload_issuance import record_issued_uploads
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -57,7 +60,13 @@ def _infer_upload_prefix(file_name: str, content_type: str) -> str:
     return "uploads/files"
 
 
-def generate_presigned_urls_batch(event, body):
+def generate_presigned_urls_batch(event, body, connection):
+    # Keys are recorded against this sub; staging only accepts them from the
+    # same admin (helpers/upload_issuance.py).
+    admin_sub = admin_sub_from_request(event)
+    if not admin_sub:
+        return _response(event, 401, {"error": "Unauthorized"})
+
     files = body.get("files")
 
     if not isinstance(files, list) or len(files) == 0:
@@ -68,7 +77,6 @@ def generate_presigned_urls_batch(event, body):
 
     timestamp = int(time.time())
     results = []
-    issued_keys = set()
 
     for i, entry in enumerate(files):
         file_name = entry.get("file_name", "")
@@ -88,12 +96,11 @@ def generate_presigned_urls_batch(event, body):
             )
 
         prefix = _infer_upload_prefix(file_name, content_type)
-        key = f"{prefix}/{timestamp}_{sanitize_file_name(file_name)}"
-        # Names that sanitize alike ("a b.csv", "a_b.csv") must not overwrite
-        # each other's object; staging then rejects the second as a duplicate.
-        if key in issued_keys:
-            key = f"{prefix}/{timestamp}_{i}_{sanitize_file_name(file_name)}"
-        issued_keys.add(key)
+        # The random part keeps names that sanitize alike ("a b.csv",
+        # "a_b.csv") from overwriting each other's object, and two admins'
+        # uploads from sharing a key; staging then rejects the second of a
+        # same-named pair as a duplicate.
+        key = f"{prefix}/{timestamp}_{secrets.token_hex(8)}_{sanitize_file_name(file_name)}"
 
         try:
             presigned_url = s3.generate_presigned_url(
@@ -112,5 +119,15 @@ def generate_presigned_urls_batch(event, body):
             "key": key,
             "bucket": BUCKET,
         })
+
+    try:
+        record_issued_uploads(
+            connection, issued_to=admin_sub, bucket=BUCKET, keys=[entry["key"] for entry in results]
+        )
+        connection.commit()
+    except Exception as e:
+        connection.rollback()
+        logger.error("Failed to record issued upload keys: %s", e, exc_info=True)
+        return _response(event, 500, {"error": "Failed to generate presigned URLs"})
 
     return _response(event, 200, {"presigned_urls": results})

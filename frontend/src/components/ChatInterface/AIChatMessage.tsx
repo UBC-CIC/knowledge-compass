@@ -87,6 +87,30 @@ const markdownComponents = {
       // aren't clickable; the source is listed under "More resources" instead.
       <span className="font-semibold">{children}</span>
     ),
+  // Never load images from a reply: the URL is model/retrieval-controlled, so
+  // fetching it could leak conversation data to a third-party host. Show the
+  // alt text instead.
+  img: ({ alt }: ComponentProps<"img"> & ExtraProps) =>
+    alt ? <span>{alt}</span> : null,
+  // Wide tables and code blocks scroll sideways inside the reply instead of
+  // pushing it past the edge of a phone screen.
+  table: ({ ...props }) => (
+    <div className="mb-3.5 max-w-full overflow-x-auto last:mb-0">
+      <table className="w-max min-w-full border-collapse text-[14.5px]" {...props} />
+    </div>
+  ),
+  th: ({ ...props }) => (
+    <th className="border border-foreground/14 px-2.5 py-1.5 text-left font-semibold" {...props} />
+  ),
+  td: ({ ...props }) => (
+    <td className="border border-foreground/14 px-2.5 py-1.5 align-top" {...props} />
+  ),
+  pre: ({ ...props }) => (
+    <pre
+      className="mb-3.5 max-w-full overflow-x-auto rounded-[9px] bg-white/70 p-3 text-[13px] leading-normal last:mb-0"
+      {...props}
+    />
+  ),
   blockquote: ({ ...props }) => (
     <blockquote
       className="my-3 rounded-[9px] bg-muted px-3.5 py-3 font-serif text-[15.5px] leading-relaxed"
@@ -223,12 +247,12 @@ export default function AIChatMessage({
 
   if (suggestion && !isTyping) {
     return (
-      <div className="overflow-hidden rounded-[12px] border border-foreground/14">
-        <div className="px-[22px] py-[22px] text-[16.5px] leading-[1.65] text-pretty">
+      <div className="min-w-0 overflow-hidden rounded-[12px] border border-foreground/14">
+        <div className="px-4 py-4 text-base leading-[1.65] text-pretty [overflow-wrap:anywhere] md:px-[22px] md:py-[22px] md:text-[16.5px]">
           {content}
         </div>
         {showFooter ? (
-          <div className="border-t border-foreground/10 px-[22px] py-1.5">
+          <div className="border-t border-foreground/10 px-4 py-1.5 md:px-[22px]">
             {footer}
           </div>
         ) : null}
@@ -238,7 +262,7 @@ export default function AIChatMessage({
 
   return (
     <div className="flex justify-start">
-      <div className="max-w-[94%] rounded-[12px] rounded-bl-[3px] bg-muted px-[17px] py-3.5 text-base leading-[1.68] text-foreground text-pretty">
+      <div className="min-w-0 max-w-[94%] rounded-[12px] rounded-bl-[3px] bg-muted px-[17px] py-3.5 text-base leading-[1.68] text-foreground text-pretty [overflow-wrap:anywhere]">
         {content}
         {showFooter ? (
           <div className="-mb-1.5 mt-3 border-t border-foreground/10 pt-1.5">

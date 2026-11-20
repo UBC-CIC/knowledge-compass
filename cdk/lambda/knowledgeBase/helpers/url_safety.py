@@ -15,6 +15,11 @@ internal address:
 - the fetcher connects to the address vetted here, not to a second DNS lookup,
   so a DNS answer cannot change between the check and the connection; every
   redirect hop is normalized and vetted again.
+
+check_public_url() also guards admin-entered website crawl seeds (staging and
+again before the crawler ECS task is launched) and video/document citation
+links at staging. The crawler container keeps a mirror of this module in
+cdk/containers/common/url_safety.py; keep the two in sync.
 """
 
 import ipaddress
@@ -158,3 +163,22 @@ def resolve_public_addresses(host: str, port: int, resolver=socket.getaddrinfo) 
     if blocked:
         raise BlockedURL(f"{host} resolves to a non-public address ({blocked[0]})")
     return addresses
+
+
+def check_public_url(raw: str, *, resolver=None) -> str:
+    """
+    normalize_url(raw), then require every address its host resolves to be
+    public. Returns the normalized URL. Raises InvalidURL, BlockedURL, or
+    OSError (socket.gaierror) when the host does not resolve.
+
+    BlockedURL messages contain the resolved address: log them if needed, never
+    return them to clients. `resolver` defaults to socket.getaddrinfo looked up
+    at call time (so tests can patch it).
+    """
+    if not isinstance(raw, str):
+        raise InvalidURL("URL must be a string")
+    url = normalize_url(raw)
+    parts = urlsplit(url)
+    port = parts.port or _DEFAULT_PORTS[parts.scheme]
+    resolve_public_addresses(parts.hostname, port, resolver or socket.getaddrinfo)
+    return url

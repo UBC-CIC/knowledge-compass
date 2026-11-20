@@ -34,9 +34,10 @@ const historyEvent = (overrides = {}) => ({
 
 // Rows for the history route keyed on the SQL text.
 function historySql({ userExists = true, owner = USER, messages = [] } = {}) {
-  return fakeSql((text) => {
+  return fakeSql((text, values) => {
     if (text.startsWith("SELECT id FROM users")) return userExists ? [{ id: USER }] : [];
-    if (text.includes("FROM chat_sessions")) return owner ? [{ id: SESSION, user_id: owner }] : [];
+    // The ownership check filters on the caller (AND user_id = ?).
+    if (text.includes("FROM chat_sessions")) return owner && values.at(-1) === owner ? [{ id: SESSION }] : [];
     if (text.includes("FROM chat_messages")) return messages;
     return [];
   });
@@ -60,7 +61,9 @@ test("chat history returns 404 for unknown user or session", async () => {
 test("chat history refuses sessions owned by another user without reading messages", async () => {
   const sql = historySql({ owner: OTHER_USER });
   const res = await invoke(sql, historyEvent());
-  assert.equal(res.statusCode, 403);
+  assert.equal(res.statusCode, 404);
+  // A foreign session answers exactly like a missing one (no existence oracle).
+  assert.deepEqual(res, await invoke(historySql({ owner: null }), historyEvent()));
   assert.ok(!sql.queries().some((q) => q.text.includes("FROM chat_messages")));
 });
 
@@ -88,43 +91,61 @@ test("chat history caps the page size at 1000", async () => {
   assert.ok(query.values.includes(1000));
 });
 
-test("PUT /user validates and normalizes email", async () => {
-  const sql = fakeSql((text, values) => {
-    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
-    if (text.startsWith("UPDATE users")) return [{ id: USER, email: values[0] }];
-    return [];
+test("POST /user never binds a caller-supplied email and creates a guest row", async () => {
+  const sql = fakeSql((text, values) =>
+    text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student", credential_version: 0 }] : [],
+  );
+  const res = await invoke(sql, {
+    httpMethod: "POST",
+    resource: "/user",
+    requestContext: as(""),
+    body: JSON.stringify({ email: "admin@staff.example", display_name: "Guest", metadata: { injected: "x" } }),
   });
-  const put = (body) =>
-    invoke(sql, { httpMethod: "PUT", resource: "/user/{user_id}", pathParameters: { user_id: USER }, body });
-
-  assert.equal((await put("{not json")).statusCode, 400);
-  assert.equal((await put(JSON.stringify({ email: 42 }))).statusCode, 400);
-  assert.equal((await put(JSON.stringify({ email: "not-an-email" }))).statusCode, 400);
-
-  const ok = await put(JSON.stringify({ email: "  Parent@Example.COM " }));
-  assert.equal(ok.statusCode, 200);
-  assert.equal(ok.body.email, "parent@example.com");
+  assert.equal(res.statusCode, 200);
+  assert.ok(!("email" in res.body) || res.body.email == null);
+  const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO users"));
+  assert.ok(insert.text.includes("'guest'"));
+  const columns = insert.text.split("RETURNING")[0];
+  assert.ok(!/\bemail\b/.test(columns), "email is not inserted");
+  assert.ok(!/\bmetadata\b/.test(columns), "metadata is not inserted");
+  for (const q of sql.queries()) {
+    assert.ok(!JSON.stringify(q.values).includes("admin@staff.example"));
+    assert.ok(!JSON.stringify(q.values).includes("injected"));
+  }
 });
 
-test("PUT /user maps a unique violation to 409", async () => {
-  const sql = fakeSql((text) => {
-    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
-    if (text.startsWith("UPDATE users")) throw Object.assign(new Error("duplicate"), { code: "23505" });
-    return [];
-  });
+test("POST /user trims display_name and cuts it to 64 characters", async () => {
+  const insertedName = async (body) => {
+    const sql = fakeSql((text, values) =>
+      text.startsWith("INSERT INTO users") ? [{ id: values[0], role: "student", credential_version: 0 }] : [],
+    );
+    const res = await invoke(sql, { httpMethod: "POST", resource: "/user", requestContext: as(""), body: JSON.stringify(body) });
+    assert.equal(res.statusCode, 200);
+    return sql.queries().find((q) => q.text.startsWith("INSERT INTO users")).values[1];
+  };
+  assert.equal(await insertedName({ display_name: "  Sam  " }), "Sam");
+  assert.equal(await insertedName({ displayName: "x".repeat(500) }), "x".repeat(64));
+  assert.equal(await insertedName({ display_name: "   " }), null);
+  assert.equal(await insertedName({ display_name: { not: "a string" } }), null);
+  assert.equal(await insertedName({}), null);
+});
+
+test("PUT /user/{user_id} is no longer served and writes nothing", async () => {
+  const sql = fakeSql(() => [{ id: USER }]);
   const res = await invoke(sql, {
     httpMethod: "PUT",
     resource: "/user/{user_id}",
     pathParameters: { user_id: USER },
-    body: JSON.stringify({ email: "taken@example.com" }),
+    body: JSON.stringify({ email: "parent@example.com" }),
   });
-  assert.equal(res.statusCode, 409);
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(res.body, { error: "Internal server error" });
+  assert.ok(!sql.queries().some((q) => q.text.startsWith("UPDATE users")));
 });
 
 test("user routes require the token's own user", async () => {
   const routes = [
     { httpMethod: "GET", resource: "/user/{user_id}", pathParameters: { user_id: USER } },
-    { httpMethod: "PUT", resource: "/user/{user_id}", pathParameters: { user_id: USER }, body: JSON.stringify({ email: "a@example.com" }) },
     historyEvent(),
   ];
   for (const route of routes) {
@@ -189,10 +210,61 @@ test("responses are not logged", async () => {
   assert.ok(!logged.some((line) => line.includes("signed:")), "credential must not be logged");
 });
 
+test("database connection verifies the RDS Proxy TLS certificate", async () => {
+  const sql = historySql();
+  await invoke(sql, historyEvent());
+  assert.equal(sql.connectionConfig?.ssl?.rejectUnauthorized, true);
+});
+
 test("removed and unknown routes fail without leaking details", async () => {
   for (const resource of ["/user/exampleEndpoint", "/user/nope"]) {
     const res = await invoke(fakeSql(), { httpMethod: "GET", resource });
     assert.equal(res.statusCode, 500);
     assert.deepEqual(res.body, { error: "Internal server error" });
+  }
+});
+
+test("validateUUID returns the trimmed id it checked, case unchanged (f-83933690)", () => {
+  const { validateUUID } = require("../utils/validation.js");
+  assert.deepEqual(validateUUID(` ${SESSION}\n`, "chat_session_id"), { valid: true, value: SESSION });
+  const upper = SESSION.toUpperCase();
+  assert.deepEqual(validateUUID(upper), { valid: true, value: upper });
+  assert.equal(validateUUID(`${SESSION}x`).valid, false);
+  assert.equal(validateUUID("   ").valid, false);
+  assert.equal(validateUUID(undefined).value, undefined);
+});
+
+test("user routes bind the trimmed ids that passed validation (f-83933690)", async () => {
+  const padded = (id) => ` ${id}\t`;
+  const bound = (sql) => sql.queries().flatMap((q) => q.values).filter((v) => typeof v === "string");
+
+  const userSql = fakeSql((text) => (text.includes("FROM users") ? [{ id: USER }] : []));
+  const user = await invoke(userSql, {
+    httpMethod: "GET", resource: "/user/{user_id}", pathParameters: { user_id: padded(USER) },
+  });
+  assert.equal(user.statusCode, 200);
+  assert.deepEqual(bound(userSql), [USER, USER]);
+
+  for (const pathParameters of [
+    { user_id: USER, chat_session_id: padded(SESSION) },
+    { user_id: padded(USER), chat_session_id: padded(SESSION) },
+  ]) {
+    const sql = historySql();
+    const res = await invoke(sql, historyEvent({ pathParameters }));
+    assert.equal(res.statusCode, 200, JSON.stringify(pathParameters));
+    assert.equal(res.body.user_id, USER);
+    assert.equal(res.body.chat_session_id, SESSION);
+    assert.ok(bound(sql).includes(SESSION));
+    assert.ok(bound(sql).every((v) => v === USER || v === SESSION), JSON.stringify(bound(sql)));
+  }
+});
+
+test("chat history ignores negative or junk pagination instead of failing (f-5290289f)", async () => {
+  for (const qs of [{ limit: "-1" }, { offset: "-5" }, { limit: "abc", offset: "x" }]) {
+    const sql = historySql();
+    const res = await invoke(sql, historyEvent({ queryStringParameters: qs }));
+    assert.equal(res.statusCode, 200, JSON.stringify(qs));
+    const page = sql.queries().find((q) => q.text.includes("FROM chat_messages"));
+    assert.ok(page.values.every((v) => typeof v !== "number" || v >= 0), JSON.stringify(page.values));
   }
 });

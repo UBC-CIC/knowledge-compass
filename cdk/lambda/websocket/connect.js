@@ -7,11 +7,13 @@
  * and access logs. A valid user-bound access token's `sub` is stored as
  * connectionId -> userId (connections.js); $default enforces that binding on
  * every frame. The route has no API Gateway authorizer by design (see the
- * comment on the $connect route in cdk/lib/api-stack.ts).
+ * comment on the $connect route in cdk/lib/api-stack.ts). Handshakes are
+ * rate limited per client IP first (ipLimit.js); over the limit is 429.
  */
 
 const { verifyAccessToken } = require("./accessToken.js");
 const { putConnection } = require("./connections.js");
+const { consumeIpAllowance, ipRateLimitConfig } = require("./ipLimit.js");
 
 const SUBPROTOCOL = "kc.v1";
 
@@ -24,6 +26,20 @@ exports.handler = async (event) => {
     console.warn("WebSocket connect rejected", { connectionId, stage, timestamp, reason });
     return { statusCode: 401, body: "Unauthorized" };
   };
+
+  // Count every handshake against the caller's IP (ipLimit.js) before any other
+  // work, so floods of bad or missing tokens are counted too. Fails closed.
+  let allowed;
+  try {
+    allowed = await consumeIpAllowance(event, "connect", ipRateLimitConfig().connect);
+  } catch (err) {
+    console.error("WebSocket connect failed: IP rate limit check", { connectionId, error: err?.name });
+    return { statusCode: 500, body: "Internal server error" };
+  }
+  if (!allowed) {
+    console.warn("WebSocket connect rejected", { connectionId, stage, timestamp, reason: "ip_rate_limited" });
+    return { statusCode: 429, body: "Too Many Requests" };
+  }
 
   const extracted = extractToken(event);
   if (extracted.error) return reject(extracted.error);

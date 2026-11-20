@@ -19,6 +19,8 @@
  */
 
 const { validateUUID } = require("./validation.js");
+const { errorSummary } = require("./logging.js");
+const { auditEntry, insertAdminAudit, logAdminAudit } = require("./adminAudit.js");
 
 const TRIAGE_ROUTE = "PUT /admin/feedback/{chat_session_id}";
 const RATED_MESSAGE_ROUTE = "GET /admin/feedback/{chat_session_id}/message";
@@ -159,15 +161,15 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
   };
 
   try {
-    const chatSessionId = event.pathParameters?.chat_session_id;
-    const idCheck = validateUUID(chatSessionId, "chat_session_id");
+    const idCheck = validateUUID(event.pathParameters?.chat_session_id, "chat_session_id");
     if (!idCheck.valid) {
       send(400, { error: idCheck.error });
       return true;
     }
+    const chatSessionId = idCheck.value;
 
     if (pathData === RATED_MESSAGE_ROUTE) {
-      const result = await fetchRatedMessage(sql, chatSessionId.trim());
+      const result = await fetchRatedMessage(sql, chatSessionId);
       if (!result.found) {
         send(404, { error: "Feedback not found" });
       } else {
@@ -177,18 +179,30 @@ async function handleFeedbackTriageRequest(sql, event, pathData, response) {
     }
 
     const changes = validateTriageBody(parseJsonBody(event.body));
-    const saved = await updateTriage(sql, chatSessionId.trim(), changes);
+    // Triage and its admin_audit row commit together (finding f-c47d6990).
+    let audit;
+    const saved = await sql.begin(async (tx) => {
+      const row = await updateTriage(tx, chatSessionId, changes);
+      if (row) {
+        audit = auditEntry(event, "feedback.triage", {
+          chat_session_id: row.chat_session_id, starred: row.starred, dismissed: row.dismissed,
+        });
+        await insertAdminAudit(tx, audit);
+      }
+      return row;
+    });
     if (!saved) {
       send(404, { error: "Feedback not found" });
       return true;
     }
+    logAdminAudit(audit);
     send(200, saved);
   } catch (err) {
     if (err instanceof InputError) {
       send(400, { error: err.message });
     } else {
-      // Error only; never the request body.
-      console.error(`${pathData} error:`, err?.message ?? err);
+      // Error summary only; never the request body or DB error detail.
+      console.error(`${pathData} error:`, errorSummary(err));
       send(500, { error: "Internal server error" });
     }
   }

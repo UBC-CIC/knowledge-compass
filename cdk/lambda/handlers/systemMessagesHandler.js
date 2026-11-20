@@ -1,10 +1,20 @@
 const postgres = require("postgres");
 const { getCorsHeaders } = require("./utils/cors.js");
+const { logResponse, errorSummary } = require("./utils/logging.js");
 const {
     SecretsManagerClient,
     GetSecretValueCommand,
 } = require("@aws-sdk/client-secrets-manager");
 const crypto = require("crypto");
+
+// Missed-load default. Must match textGeneration/helpers/config.py
+// MAX_CHARACTERS_PER_USER_MESSAGE. A missing row must not publish a higher
+// cap than that runtime fallback will enforce.
+const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = 2000;
+// Code-level ceiling (textGeneration/helpers/config.py LIMIT_CEILINGS). A
+// stored value above it is published as the ceiling, which is what the
+// runtime enforces.
+const MAX_CHARACTERS_PER_USER_MESSAGE_CEILING = 4000;
 
 let sqlConnection;
 const secretsManager = new SecretsManagerClient();
@@ -31,15 +41,18 @@ const initConnection = async () => {
             await sqlConnection`SELECT 1`;
             console.log("Database connection initialized successfully");
         } catch (error) {
-            console.error("Error initializing database connection:", error);
+            console.error("Error initializing database connection:", errorSummary(error));
             throw error;
         }
     }
 };
 
+// HTTP methods this function serves (OpenAPI_Swagger_Definition.yaml).
+const SERVED_METHODS = "GET";
+
 const createResponse = async (event) => ({
     statusCode: 200,
-    headers: await getCorsHeaders(event),
+    headers: await getCorsHeaders(event, SERVED_METHODS),
     body: "",
 });
 
@@ -53,7 +66,7 @@ const parseBody = (body) => {
 
 const handleError = (error, response) => {
     response.statusCode = 500;
-    console.error("Internal server error:", error);
+    console.error("Internal server error:", errorSummary(error));
     response.body = JSON.stringify({ error: "Internal server error" });
 };
 
@@ -129,12 +142,14 @@ exports.handler = async (event) => {
                 LIMIT 1
                 `;
 
-                const fallback = {
-                max_characters_per_user_message: 50000,
-                };
+                const stored = rows[0]?.max_characters_per_user_message;
+                const cap =
+                Number.isInteger(stored) && stored >= 1
+                    ? Math.min(stored, MAX_CHARACTERS_PER_USER_MESSAGE_CEILING)
+                    : DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE;
 
                 response.statusCode = 200;
-                response.body = JSON.stringify(rows[0] ?? fallback);
+                response.body = JSON.stringify({ max_characters_per_user_message: cap });
                 break;
             }
 
@@ -172,6 +187,7 @@ exports.handler = async (event) => {
         handleError(error, response);
     }
 
-    console.log(response);
+    // Log status only, never the body.
+    logResponse(event, response);
     return response;
 };

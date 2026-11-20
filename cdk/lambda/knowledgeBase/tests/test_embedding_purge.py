@@ -33,7 +33,7 @@ def purge_event(email="admin@example.org"):
         "path": PATH,
         "resource": RESOURCE,
         "pathParameters": {"id": SPACE_ID},
-        "requestContext": {"authorizer": {"email": email}} if email else {},
+        "requestContext": {"authorizer": {"email": email, "userId": "admin-sub"}} if email else {},
         "headers": {},
     }
 
@@ -45,12 +45,15 @@ def body_of(response):
 class PurgeConnection(fakes.ScriptedConnection):
     """ScriptedConnection whose DELETE reports a different row count per batch."""
 
-    def __init__(self, space_row, delete_counts=(0,), lock=UNLOCKED, running=None, purge_updates=1):
+    def __init__(self, space_row, delete_counts=(0,), lock=UNLOCKED, running=None, purge_updates=1, lock_taken=1):
         super().__init__({
             "FROM embedding_spaces s WHERE s.id": [space_row] if space_row else [],
             "SELECT cutover_locked": [lock],
             "SELECT id::text FROM embedding_jobs WHERE status IN": [(running,)] if running else [],
-        }, rowcounts={"UPDATE embedding_spaces SET status = 'purged'": purge_updates})
+        }, rowcounts={
+            "UPDATE embedding_spaces SET status = 'purged'": purge_updates,
+            "SET cutover_locked = true": lock_taken,
+        })
         self.delete_counts = list(delete_counts)
 
     def respond(self, text, params):
@@ -151,6 +154,29 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(body_of(response)["code"], "CUTOVER_LOCKED")
         self.assert_nothing_deleted(conn)
 
+    def test_refused_when_a_cutover_takes_the_lock_first(self):
+        # lock_state looked free, but the atomic take lost the race (finding f-71ff7846).
+        response, conn = self.purge(PurgeConnection(space_row(), lock_taken=0))
+        self.assertEqual(response["statusCode"], 409)
+        self.assertEqual(body_of(response)["code"], "CUTOVER_LOCKED")
+        self.assert_nothing_deleted(conn)
+
+    def test_the_cutover_lock_is_held_for_the_purge_and_released_after(self):
+        for crash in (False, True):
+            with self.subTest(crash=crash):
+                conn = PurgeConnection(space_row(), delete_counts=(5000, 0))
+                if crash:
+                    conn.fail_next("DELETE FROM chunk_embeddings", RuntimeError("connection lost"))
+                self.purge(conn)
+                statements = [sql for sql, _ in conn.executed]
+                take = next(i for i, sql in enumerate(statements) if "SET cutover_locked = true" in sql)
+                first_delete = next(i for i, sql in enumerate(statements) if "DELETE FROM chunk_embeddings" in sql)
+                release = max(i for i, sql in enumerate(statements) if "SET cutover_locked = false" in sql)
+                self.assertLess(take, first_delete)
+                self.assertGreater(release, first_delete)
+                lock_id = conn.executed[take][1][0]
+                self.assertEqual(conn.executed[release][1], (lock_id,))
+
     def test_refused_while_a_job_is_running_for_the_space(self):
         conn = PurgeConnection(space_row(), running=JOB_ID)
         response, conn = self.purge(conn)
@@ -205,6 +231,17 @@ class PurgeTest(unittest.TestCase):
         status = next(i for i, s in enumerate(statements) if "SET status = 'purged'" in s)
         self.assertLess(last_delete, drop)
         self.assertLess(drop, status)
+
+    def test_the_purge_is_audited_before_the_first_vector_is_deleted(self):
+        # The deletes commit batch by batch and cannot be undone (finding f-c47d6990).
+        conn = PurgeConnection(space_row(), delete_counts=(5000, 0))
+        response, conn = self.purge(conn)
+        self.assertEqual(response["statusCode"], 200)
+        statements = [sql for sql, _ in conn.executed]
+        audit_at = next(i for i, sql in enumerate(statements) if "INSERT INTO admin_audit" in sql)
+        delete_at = next(i for i, sql in enumerate(statements) if "DELETE FROM chunk_embeddings" in sql)
+        self.assertLess(audit_at, delete_at)
+        self.assertEqual(conn.sql_with("INSERT INTO admin_audit")[0][1][2], "embedding_space.purge")
 
     def test_commits_after_every_batch(self):
         conn = PurgeConnection(space_row(), delete_counts=(5000, 5000, 0))
@@ -263,7 +300,7 @@ class PurgedSpaceCannotComeBackTest(unittest.TestCase):
                     "path": f"/admin/embedding-spaces/{SPACE_ID}/{action}",
                     "resource": f"/admin/embedding-spaces/{{id}}/{action}",
                     "pathParameters": {"id": SPACE_ID},
-                    "requestContext": {"authorizer": {"email": "admin@example.org"}},
+                    "requestContext": {"authorizer": {"email": "admin@example.org", "userId": "admin-sub"}},
                     "headers": {},
                 }
                 response = ea.handle_embedding_request(event, body, conn)

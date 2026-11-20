@@ -1,14 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation, Link } from "react-router";
 import { confirmSignIn, type SignInOutput } from "aws-amplify/auth";
+import { QRCodeSVG } from "qrcode.react";
 import { AuthService } from "@/functions/authService";
 import BrandMark from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/demo";
 import { API_ENDPOINT } from "@/lib/api";
 import {
   type AdminSignInStep,
+  MFA_TYPE_LABELS,
+  NOT_ADMIN_MESSAGE,
   TOTP_ISSUER,
+  adminSetupErrorMessage,
   adminStepFor,
+  isAdminTokenPayload,
   cleanTotpCode,
   formatTotpSecret,
   totpCodeError,
@@ -31,6 +36,18 @@ const STEP_COPY: Record<AdminSignInStep, { title: string; intro: string }> = {
     title: "Enter your code",
     intro: "Open your authenticator app and enter the 6-digit code for Knowledge Compass.",
   },
+  mfaSelection: {
+    title: "Choose how to get your code",
+    intro: "Pick the way you want to receive your 6-digit sign-in code.",
+  },
+  emailSetup: {
+    title: "Setting up email codes",
+    intro: "Registering your email address for sign-in codes.",
+  },
+  emailCode: {
+    title: "Check your email",
+    intro: "We sent a 6-digit code to your email address. It can take a minute to arrive.",
+  },
 };
 
 export default function AdminLogin() {
@@ -49,6 +66,10 @@ export default function AdminLogin() {
   const [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
+  const [mfaOptions, setMfaOptions] = useState<string[]>([]);
+  // Set when the admin asks for an email code from the authenticator-app step;
+  // the next sign-in then picks email automatically if Cognito offers it.
+  const preferEmail = useRef(false);
   const navigate = useNavigate();
   const location = useLocation();
   const from =
@@ -61,8 +82,14 @@ export default function AdminLogin() {
     const checkAuthStatus = async () => {
       try {
         const session = await AuthService.getAuthSession(true);
-        if (session?.tokens?.accessToken) {
+        if (!session?.tokens?.accessToken) return;
+        // A kept session outside the admin group would reach the dashboard
+        // only to have every admin API call refused, so end it here.
+        if (isAdminTokenPayload(session.tokens.idToken?.payload)) {
           navigate(from, { replace: true });
+        } else {
+          await AuthService.signOut();
+          setError(NOT_ADMIN_MESSAGE);
         }
       } catch {
         console.log("Not authenticated");
@@ -72,32 +99,47 @@ export default function AdminLogin() {
     checkAuthStatus();
   }, [navigate, from]);
 
-  const updateAdminUser = async (adminEmail: string) => {
-    const token = await AuthService.getAdminIdToken(false);
-
+  // Records the signed-in admin in the users table. Returns the HTTP status
+  // of a failed call, or null on success.
+  const updateAdminUser = async (token: string): Promise<number | null> => {
     const res = await fetch(`${API_ENDPOINT}/admin/promote_user`, {
       method: "POST",
       headers: {
         Authorization: token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        email: adminEmail,
-        role: "admin",
-      }),
+      body: JSON.stringify({}),
     });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Failed to update admin user: ${res.status} ${text}`);
-    }
-
-    return res.json();
+    return res.ok ? null : res.status;
   };
 
+  // Cognito accepted the credentials; the account still has to be an admin.
+  // On any failure the Cognito session is ended, so a later visit to this
+  // page starts a clean sign-in instead of skipping straight to a dashboard
+  // that cannot load.
   const finishSignIn = async () => {
     AuthService.clearAuthCache();
-    await updateAdminUser(email);
+    let failure: string | null = null;
+    try {
+      const session = await AuthService.getAuthSession(false);
+      const token = AuthService.getTokenString(session?.tokens?.idToken);
+      if (!token || !isAdminTokenPayload(session?.tokens?.idToken?.payload)) {
+        failure = NOT_ADMIN_MESSAGE;
+      } else {
+        const status = await updateAdminUser(token);
+        if (status !== null) failure = adminSetupErrorMessage(status);
+      }
+    } catch {
+      failure = adminSetupErrorMessage(undefined);
+    }
+
+    if (failure) {
+      await AuthService.signOut();
+      startOver();
+      setError(failure);
+      return;
+    }
+
     setSignedIn(true);
     navigate(from, { replace: true });
   };
@@ -122,6 +164,38 @@ export default function AdminLogin() {
       return;
     }
 
+    if (next === "emailSetup") {
+      // The sign-in email is already verified, so register that address.
+      const result = await confirmSignIn({ challengeResponse: email.trim() });
+      await continueSignIn(result.isSignedIn, result.nextStep);
+      return;
+    }
+
+    if (
+      next === "mfaSelection" &&
+      (nextStep?.signInStep === "CONTINUE_SIGN_IN_WITH_MFA_SELECTION" ||
+        nextStep?.signInStep === "CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION")
+    ) {
+      const types: string[] = nextStep.allowedMFATypes ?? [];
+      const offered = types.filter((t) => t in MFA_TYPE_LABELS);
+      if (preferEmail.current && offered.includes("EMAIL")) {
+        preferEmail.current = false;
+        const result = await confirmSignIn({ challengeResponse: "EMAIL" });
+        await continueSignIn(result.isSignedIn, result.nextStep);
+        return;
+      }
+      setMfaOptions(offered);
+    }
+
+    if (next === "totpCode" && preferEmail.current) {
+      // Cognito went straight to the authenticator app, so email is not an option.
+      preferEmail.current = false;
+      setTotpCode("");
+      setStep(next);
+      setError("Email codes aren't available for this account. Enter the code from your authenticator app.");
+      return;
+    }
+
     if (next === "totpSetup" && nextStep?.signInStep === "CONTINUE_SIGN_IN_WITH_TOTP_SETUP") {
       const { totpSetupDetails } = nextStep;
       setTotpSetup({
@@ -136,6 +210,8 @@ export default function AdminLogin() {
   };
 
   const startOver = () => {
+    preferEmail.current = false;
+    setMfaOptions([]);
     setStep("credentials");
     setPassword("");
     setNewPassword("");
@@ -172,7 +248,7 @@ export default function AdminLogin() {
     }
 
     try {
-      const result = await AuthService.signIn(email, password);
+      const result = await AuthService.signIn(email, password, remember);
 
       if (!result.success) {
         setError(result.error || "Invalid email or password");
@@ -223,7 +299,7 @@ export default function AdminLogin() {
     setError("");
 
     const code = cleanTotpCode(totpCode);
-    const codeError = totpCodeError(code);
+    const codeError = totpCodeError(code, step === "emailCode" ? "email" : "authenticator app");
     if (codeError) {
       setError(codeError);
       return;
@@ -245,6 +321,40 @@ export default function AdminLogin() {
     }
   };
 
+  const handleMfaChoice = async (type: string) => {
+    setError("");
+    setIsLoading(true);
+    try {
+      const user = await confirmSignIn({ challengeResponse: type });
+      await continueSignIn(user.isSignedIn, user.nextStep);
+    } catch (err: unknown) {
+      setError((err instanceof Error && err.message) || "We couldn't use that option. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Restarts sign-in with the same credentials and asks for an email code.
+  const switchToEmail = async () => {
+    setError("");
+    setIsLoading(true);
+    preferEmail.current = true;
+    try {
+      const result = await AuthService.signIn(email, password, remember);
+      if (!result.success) {
+        startOver();
+        setError(result.error || "Please sign in again to get an email code.");
+        return;
+      }
+      await continueSignIn(result.isSignedIn, result.nextStep);
+    } catch (err: unknown) {
+      preferEmail.current = false;
+      setError((err instanceof Error && err.message) || "We couldn't send an email code. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const copySecret = async () => {
     if (!totpSetup) return;
     try {
@@ -259,7 +369,7 @@ export default function AdminLogin() {
   const newPasswordReady = Boolean(
     newPassword && confirmPassword && !isLoading
   );
-  const isCodeStep = step === "totpSetup" || step === "totpCode";
+  const isCodeStep = step === "totpSetup" || step === "totpCode" || step === "emailCode";
   const totpReady = Boolean(totpCode.trim() && !isLoading);
   const copy = STEP_COPY[step];
 
@@ -425,6 +535,28 @@ export default function AdminLogin() {
                   {isLoading ? "Setting Password..." : "Set New Password"}
                 </button>
               </form>
+            ) : step === "mfaSelection" || step === "emailSetup" ? (
+              <div className="mt-[22px] flex flex-col gap-3">
+                {mfaOptions.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => handleMfaChoice(type)}
+                    disabled={isLoading}
+                    className="min-h-12 w-full rounded-[9px] border-[1.5px] border-foreground/20 bg-white text-[15.5px] font-semibold text-foreground transition-colors hover:border-primary disabled:text-foreground/75"
+                  >
+                    {MFA_TYPE_LABELS[type]}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={startOver}
+                  disabled={isLoading}
+                  className="min-h-11 w-full rounded-[9px] text-[14px] font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                >
+                  Start over
+                </button>
+              </div>
             ) : (
               <form onSubmit={handleTotpSubmit} className="mt-[22px]" noValidate>
                 {step === "totpSetup" && totpSetup ? (
@@ -435,7 +567,18 @@ export default function AdminLogin() {
                       add a new account.
                     </li>
                     <li>
-                      Choose to enter a setup key, and type this key:
+                      Scan this QR code with the app:
+                      {/* Drawn in the browser as inline SVG: the setup key
+                          never leaves the page. */}
+                      <div className="mt-2 w-fit rounded-[9px] border-[1.5px] border-foreground/20 bg-white p-3">
+                        <QRCodeSVG
+                          value={totpSetup.uri}
+                          size={176}
+                          marginSize={2}
+                          title="QR code for setting up your authenticator app"
+                        />
+                      </div>
+                      <p className="mt-3">Can't scan it? Choose to enter a setup key, and type this key:</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <code
                           className="rounded-[9px] border-[1.5px] border-foreground/20 bg-muted px-3 py-2 font-mono text-[14px] tracking-[0.04em] break-all text-foreground select-all"
@@ -491,7 +634,9 @@ export default function AdminLogin() {
                     className="min-h-[46px] rounded-[9px] border-[1.5px] border-foreground/20 bg-white px-3.5 font-mono text-[18px] tracking-[0.2em] text-foreground outline-none focus:outline-2 focus:outline-offset-1 focus:outline-primary aria-invalid:border-[oklch(0.55_0.15_25)]"
                   />
                   <p id="kc-totp-hint" className="text-[13px] text-foreground/75">
-                    Codes change every 30 seconds.
+                    {step === "emailCode"
+                      ? "Codes expire after a few minutes. Check your spam folder if it doesn't arrive."
+                      : "Codes change every 30 seconds."}
                   </p>
                   {error ? (
                     <p
@@ -527,13 +672,28 @@ export default function AdminLogin() {
             )}
           </div>
 
-          <p className="mt-[18px] ml-1 text-[12.5px] leading-relaxed text-foreground/80">
-            This area is for Inclusion Canada staff. Users don't need an account — the assistant is open to everyone at{" "}
-            <Link to="/" className="font-semibold text-primary underline underline-offset-2">
-              knowledgecompass.ca
-            </Link>
-            .
-          </p>
+          {step === "totpCode" ? (
+            <p className="mt-[18px] ml-1 text-[12.5px] leading-relaxed text-foreground/80">
+              Can't use your authenticator app?{" "}
+              <button
+                type="button"
+                onClick={switchToEmail}
+                disabled={isLoading}
+                className="font-semibold text-primary underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+              >
+                Email me a code instead
+              </button>
+              .
+            </p>
+          ) : (
+            <p className="mt-[18px] ml-1 text-[12.5px] leading-relaxed text-foreground/80">
+              This area is for Inclusion Canada staff. Users don't need an account — the assistant is open to everyone at{" "}
+              <Link to="/" className="font-semibold text-primary underline underline-offset-2">
+                knowledgecompass.ca
+              </Link>
+              .
+            </p>
+          )}
         </div>
       </main>
     </div>

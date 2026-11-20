@@ -72,6 +72,9 @@ test("current, fresh credential: bound access token and no rotation", async () =
   assert.equal(decodeFakeToken(res.body.token).payload.sub, USER);
   assert.equal(res.body.credential, undefined);
   assert.equal(sql.state.row.credential_version, 0);
+  // Only guest rows can exchange a credential (staff rows never get a user token).
+  const select = sql.queries().find((q) => q.text.startsWith("SELECT credential_version"));
+  assert.ok(select.text.includes("identity_source = 'guest'"));
 });
 
 test("credential older than a day is rotated and a replacement returned", async () => {
@@ -136,19 +139,22 @@ test("deleted users and malformed, forged or wrong-type credentials are refused"
   }
 });
 
-test("tokens carry iss and aud and no jti", async () => {
+test("tokens carry iss and aud; access tokens carry a random jti, credentials none", async () => {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const anonymous = decodeFakeToken((await exchange(usersSql(), null)).body.token).payload;
   assert.equal(anonymous.iss, ISSUER);
   assert.equal(anonymous.aud, "kc-public-api");
-  assert.equal(anonymous.jti, undefined);
+  assert.match(anonymous.jti, uuid);
 
   const sql = usersSql();
   const res = await exchange(sql, credential({ iat: nowSeconds() - DAY - 5 }));
   const access = decodeFakeToken(res.body.token).payload;
   assert.deepEqual(
-    { typ: access.typ, role: access.role, sub: access.sub, iss: access.iss, aud: access.aud, jti: access.jti },
-    { typ: "access", role: "user", sub: USER, iss: ISSUER, aud: "kc-public-api", jti: undefined }
+    { typ: access.typ, role: access.role, sub: access.sub, iss: access.iss, aud: access.aud },
+    { typ: "access", role: "user", sub: USER, iss: ISSUER, aud: "kc-public-api" }
   );
+  assert.match(access.jti, uuid);
+  assert.notEqual(access.jti, anonymous.jti, "a fresh jti per token");
   const replacement = decodeFakeToken(res.body.credential).payload;
   assert.equal(replacement.typ, "credential");
   assert.equal(replacement.iss, ISSUER);
@@ -199,6 +205,28 @@ test("unset JWT_ISSUER is a 500, never 401 invalid_credential", async () => {
   }
 });
 
+test("after a JWT secret rotation, credentials signed with the previous key still exchange", async () => {
+  const saved = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = "test-jwt-secret-id";
+  try {
+    const rotated = JSON.stringify({ jwtSecret: "rotated-jwt-secret", previousJwtSecret: "test-jwt-secret" });
+    const { handler } = loadHandler("userHandler", usersSql(), { secrets: { "test-jwt-secret-id": rotated } });
+    const call = (token) =>
+      quietly(() => handler({ httpMethod: "GET", resource: "/user/publicToken", headers: { Authorization: `Bearer ${token}` } }));
+
+    const res = await call(credential());
+    assert.equal(res.statusCode, 200);
+    // New tokens are signed with the current key only.
+    assert.equal(decodeFakeToken(JSON.parse(res.body).token).secret, "rotated-jwt-secret");
+
+    const retired = await call(fakeToken(decodeFakeToken(credential()).payload, "retired-jwt-secret"));
+    assert.equal(retired.statusCode, 401);
+  } finally {
+    if (saved === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = saved;
+  }
+});
+
 test("a Secrets Manager failure during exchange is a 500, never 401", async () => {
   const saved = process.env.JWT_SECRET;
   process.env.JWT_SECRET = "test-jwt-secret-id";
@@ -233,4 +261,86 @@ test("a credential from a newer version than stored is refused without revoking"
   const res = await exchange(sql, credential({ ver: 5 }));
   assert.equal(res.statusCode, 401);
   assert.equal(sql.state.row.credential_version, 0);
+});
+
+// ---------- issuance audit log (finding f-0d57a9d0) ----------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function exchangeLogged(sql, token) {
+  const { handler } = loadHandler("userHandler", sql);
+  const event = {
+    httpMethod: "GET",
+    resource: "/user/publicToken",
+    headers: { "User-Agent": "TestAgent/1.0 " + "x".repeat(300) },
+    requestContext: { requestId: "req-9", identity: { sourceIp: "203.0.113.7" } },
+  };
+  if (token) event.headers.Authorization = `Bearer ${token}`;
+  const lines = [];
+  const saved = { log: console.log, error: console.error, warn: console.warn };
+  console.log = (...args) => lines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  console.error = console.warn = () => {};
+  let res;
+  try {
+    res = await handler(event);
+  } finally {
+    Object.assign(console, saved);
+  }
+  const issued = lines
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter((l) => l && l.audit === "access_token_issued");
+  return { statusCode: res.statusCode, body: JSON.parse(res.body), lines, issued };
+}
+
+test("anonymous issuance: token has a UUID jti, body is { token }, one issuance log line", async () => {
+  const res = await exchangeLogged(usersSql(), null);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(Object.keys(res.body), ["token"]);
+  const { jti, sub } = decodeFakeToken(res.body.token).payload;
+  assert.match(jti, UUID_RE);
+  assert.equal(sub, undefined, "anonymous tokens get no sub");
+  assert.equal(res.issued.length, 1);
+  const [line] = res.issued;
+  assert.equal(line.tokenId, jti);
+  assert.equal(line.bound, false);
+  assert.equal(line.userId, null);
+  assert.equal(line.requestId, "req-9");
+  assert.equal(line.sourceIp, "203.0.113.7");
+  assert.equal(line.userAgent.length, 200);
+  assert.ok(line.userAgent.startsWith("TestAgent/1.0"));
+  for (const l of res.lines) assert.ok(!l.includes(res.body.token), "the token is never logged");
+});
+
+test("bound issuance: body keeps { token, credential? } and the log never holds either", async () => {
+  const cred = credential({ iat: nowSeconds() - DAY - 5 });
+  const res = await exchangeLogged(usersSql(), cred);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(Object.keys(res.body).sort(), ["credential", "token"]);
+  const { jti, sub } = decodeFakeToken(res.body.token).payload;
+  assert.match(jti, UUID_RE);
+  assert.equal(sub, USER);
+  assert.equal(res.issued.length, 1);
+  assert.equal(res.issued[0].tokenId, jti);
+  assert.equal(res.issued[0].bound, true);
+  assert.equal(res.issued[0].userId, USER);
+  assert.equal(res.issued[0].credentialRotated, true);
+  for (const l of res.lines) {
+    assert.ok(!l.includes(res.body.token) && !l.includes(res.body.credential) && !l.includes(cred), l);
+  }
+
+  const fresh = await exchangeLogged(usersSql(), credential());
+  assert.deepEqual(Object.keys(fresh.body), ["token"]);
+  assert.equal(fresh.issued[0].credentialRotated, false);
+});
+
+test("a refused credential logs no issuance", async () => {
+  const res = await exchangeLogged(usersSql(null), credential());
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.issued.length, 0);
 });

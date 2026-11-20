@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthService } from "@/functions/authService";
 import { isDemoMode } from "@/lib/demo";
 import {
+  DEMO_EMBEDDING_MODELS,
   EMPTY_SPACES_STATE,
   JOB_POLL_MS,
   hasActiveJob,
   isJobActive,
   type EmbeddingJob,
+  type EmbeddingModelOption,
   type EmbeddingSpace,
   type RegisterPayload,
   type SpacesState,
@@ -123,6 +125,12 @@ export function useEmbeddingSpaces() {
     return () => window.clearInterval(timer);
   }, [polling, load]);
 
+  const loadModels = useCallback(async (): Promise<EmbeddingModelOption[]> => {
+    if (isDemoMode) return DEMO_EMBEDDING_MODELS;
+    const data = await adminFetch<{ models: EmbeddingModelOption[] }>("/admin/embedding-models");
+    return data.models ?? [];
+  }, []);
+
   const register = useCallback(
     async (payload: RegisterPayload) => {
       refuseInDemo();
@@ -146,12 +154,13 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
+  /** `skipQuality` skips the golden-set comparison with the live index; coverage is still checked. */
   const validate = useCallback(
-    async (spaceId: string): Promise<string> => {
+    async (spaceId: string, opts: { skipQuality?: boolean } = {}): Promise<string> => {
       refuseInDemo();
       const res = await adminFetch<{ id: string }>(`/admin/embedding-spaces/${encodeURIComponent(spaceId)}/validate`, {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify(opts.skipQuality ? { skip_quality: true } : {}),
       });
       await load(true);
       return res.id;
@@ -159,12 +168,13 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
+  /** `skipQuality` applies to activation only (the server accepts it only there). */
   const cutover = useCallback(
-    async (spaceId: string, action: "activate" | "rollback"): Promise<string> => {
+    async (spaceId: string, action: "activate" | "rollback", opts: { skipQuality?: boolean } = {}): Promise<string> => {
       refuseInDemo();
       const res = await adminFetch<{ id: string }>(`/admin/embedding-spaces/${encodeURIComponent(spaceId)}/${action}`, {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify(action === "activate" && opts.skipQuality ? { skip_quality: true } : {}),
       });
       await load(true);
       return res.id;
@@ -185,7 +195,7 @@ export function useEmbeddingSpaces() {
     [load]
   );
 
-  return { state, loading, error, reload: load, register, startJob, validate, cutover, purge };
+  return { state, loading, error, reload: load, loadModels, register, startJob, validate, cutover, purge };
 }
 
 /** Follows one job: polls until it finishes, then calls `onFinished` once. */

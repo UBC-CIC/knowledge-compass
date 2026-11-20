@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from helpers.embedding_space import get_active_space
 from helpers.retrieval import EMBED_MODEL_ID, _rollback_quietly, _space_spec, _vector_literal, embed_query
-from helpers.retrieval_core import space_literals
+from kc_shared.retrieval_core import space_literals
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,15 +36,20 @@ DEFAULT_MAX_WORDS = 2500
 CANDIDATE_LIMIT = 40
 _WINDOW_RE = re.compile(r"^window-(\d+)$")
 
-def build_candidate_sql(space) -> str:
+def build_candidate_sql(space, restrict_documents: bool = False) -> str:
     """
     Candidate query over the guideline chunks' vectors in `space`. The space id
     is inlined as a validated literal and the dimension cast matches the space's
     index expression (see retrieval_core.build_standard_sql). A vector only
     counts when its embed_hash matches the chunk's current embed_text.
-    Parameters: query vector (score), query vector (ORDER BY), LIMIT.
+
+    Named parameters (pass candidate_params): vector, limit, and document_ids
+    when restrict_documents is set. Named placeholders keep the binding
+    independent of where the document filter lands in the text (finding
+    f-50122d26: positional binding put the vector in the uuid[] slot).
     """
     space_uuid, dims = space_literals(space)
+    document_filter = "\n          AND d.id = ANY(%(document_ids)s::uuid[])" if restrict_documents else ""
     return f"""
     WITH g AS MATERIALIZED (
         SELECT s.metadata->>'guideline_document_id' AS document_id,
@@ -58,13 +63,25 @@ def build_candidate_sql(space) -> str:
         JOIN sources s ON s.id = c.source_id
         JOIN guideline_documents d ON d.id::text = s.metadata->>'guideline_document_id'
         WHERE s.metadata->>'kb_role' = 'guideline'
-          AND d.status = 'ready'
+          AND d.status = 'ready'{document_filter}
     )
-    SELECT document_id, section_key, 1 - (embedding <=> %s::vector) AS score
+    SELECT document_id, section_key, 1 - (embedding <=> %(vector)s::vector) AS score
     FROM g
-    ORDER BY embedding <=> %s::vector
-    LIMIT %s
+    ORDER BY embedding <=> %(vector)s::vector
+    LIMIT %(limit)s
 """
+
+
+def candidate_params(vector: str, document_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Parameters for build_candidate_sql(space, restrict_documents=document_ids is not None)."""
+    params: Dict[str, Any] = {"vector": vector, "limit": CANDIDATE_LIMIT}
+    if document_ids is not None:
+        params["document_ids"] = list(document_ids)
+    return params
+
+
+class GuidelineRetrievalError(RuntimeError):
+    """Guide sections could not be retrieved. The message is fixed text, safe to log."""
 
 
 _SECTION_SQL = """
@@ -157,16 +174,25 @@ def retrieve_guideline_sections(
     max_sections: int = DEFAULT_MAX_SECTIONS,
     max_words: int = DEFAULT_MAX_WORDS,
     embed_model_id: str = EMBED_MODEL_ID,
+    document_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Up to `max_sections` full guideline sections most relevant to `query`,
     capped at `max_words` words in total. The previous turn's section is kept
     (first) while it still exists, so follow-ups like "what next?" stay on it.
 
-    Returns [] on a transient failure so the model falls back to asking a
-    clarifying question instead of the turn failing. A missing or inconsistent
-    embedding space raises EmbeddingSpaceError instead; it is not swallowed.
+    [] means no guide section matched. A failed embedding or query raises
+    GuidelineRetrievalError instead (finding f-50122d26): callers must not
+    read a failure as "no guidance applies" and answer from unreviewed
+    sources. A missing or inconsistent embedding space raises
+    EmbeddingSpaceError; neither is swallowed. Logs carry the exception class
+    only, never query text.
+
+    document_ids limits the search to those guides. None searches every ready
+    guide. An empty list searches nothing.
     """
+    if document_ids is not None and len(document_ids) == 0:
+        return []
     space = get_active_space(db_connection, region=region)
     try:
         embedding = embed_query(
@@ -175,12 +201,16 @@ def retrieve_guideline_sections(
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Guideline query embedding failed: %s", type(e).__name__)
-        return []
+        raise GuidelineRetrievalError("guideline query embedding failed") from None
 
     vector = _vector_literal(embedding)
+    restricted = document_ids is not None
     try:
         with db_connection.cursor() as cur:
-            cur.execute(build_candidate_sql(space), (vector, vector, CANDIDATE_LIMIT))
+            cur.execute(
+                build_candidate_sql(space, restrict_documents=restricted),
+                candidate_params(vector, document_ids),
+            )
             candidates = cur.fetchall()
 
             top = _rank_sections(candidates, previous_section, max_sections)
@@ -192,9 +222,12 @@ def retrieve_guideline_sections(
             cur.execute(_SECTION_SQL, (document_ids, wanted_keys))
             rows = cur.fetchall()
     except Exception as e:  # noqa: BLE001
-        logger.error("Guideline retrieval query failed: %s", type(e).__name__)
+        logger.error(
+            "Guideline retrieval query failed: %s restricted=%s",
+            type(e).__name__, restricted,
+        )
         _rollback_quietly(db_connection)
-        return []
+        raise GuidelineRetrievalError("guideline retrieval query failed") from None
 
     # (document_id, section_key) -> {"bodies": [(chunk_index, body)], label, heading_path, file_name}
     by_section: Dict[Tuple[str, str], Dict[str, Any]] = {}

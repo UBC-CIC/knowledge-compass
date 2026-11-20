@@ -9,7 +9,8 @@ connects to a database or to AWS.
 Input (stdin, JSON):
   {"mode": "kb" | "tg" | "containers", "source_id": ..., "space_id": ..., "dims": N,
    "text": ..., "index": N, "vector": [floats]}
-Output (stdout, JSON): [{"name": ..., "sql": ..., "params": [...]}, ...]
+Output (stdout, JSON): [{"name": ..., "sql": ..., "params": [...] or {...}}, ...]
+(a dict for SQL with named %(name)s placeholders, a list for %s)
 """
 
 import importlib.util
@@ -22,6 +23,10 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAMBDA = os.path.abspath(os.path.join(HERE, "..", ".."))
 CONTAINERS = os.path.abspath(os.path.join(LAMBDA, "..", "containers"))
+# The kc_shared layer source, on sys.path the way Lambda mounts it at /opt/python.
+SHARED_LAYER = os.path.abspath(os.path.join(LAMBDA, "..", "layers", "shared_python", "python"))
+if SHARED_LAYER not in sys.path:
+    sys.path.append(SHARED_LAYER)
 
 
 class Cursor:
@@ -87,13 +92,19 @@ def run_kb(req):
 
 def run_tg(req):
     sys.path.insert(0, os.path.join(LAMBDA, "textGeneration"))
-    from helpers import guideline_retrieval, retrieval_core
+    from helpers import guideline_retrieval
+    from kc_shared import retrieval_core
 
     space = {"id": req["space_id"], "dimensions": req["dims"]}
     vec = vector_literal(req["vector"])
+    # The guideline query uses named placeholders; its params are a dict.
+    document_ids = req.get("document_ids") or ["00000000-0000-0000-0000-000000000000"]
     return [
         {"name": "tg_standard", "sql": retrieval_core.build_standard_sql(space), "params": [vec, vec, 5, 0]},
-        {"name": "tg_guideline", "sql": guideline_retrieval.build_candidate_sql(space), "params": [vec, vec, 40]},
+        {"name": "tg_guideline", "sql": guideline_retrieval.build_candidate_sql(space),
+         "params": guideline_retrieval.candidate_params(vec)},
+        {"name": "tg_guideline_restricted", "sql": guideline_retrieval.build_candidate_sql(space, restrict_documents=True),
+         "params": guideline_retrieval.candidate_params(vec, document_ids)},
     ]
 
 

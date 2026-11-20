@@ -31,7 +31,9 @@ import os
 
 import boto3
 
-from helpers.cors import get_cors_headers
+from kc_shared.cors import get_cors_headers
+from helpers.url_safety import BlockedURL, InvalidURL, check_public_url
+from helpers import crawl_scope
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -50,6 +52,37 @@ TRANSCRIBER_CONTAINER_NAME = os.environ.get("TRANSCRIBER_CONTAINER_NAME", "trans
 DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME") or os.environ.get("SM_DB_CREDENTIALS", "")
 
 ecs_client = boto3.client("ecs", region_name=REGION)
+
+# Shown to admins on the failed run; never includes the URL or resolved address.
+REJECTED_SEED_MESSAGE = (
+    "Website URL was rejected: it must be a public http(s) address. "
+    "Delete this website and add it again with a public URL."
+)
+
+
+REJECTED_PATTERNS_MESSAGE = (
+    "Website include/exclude patterns were rejected: a pattern is not a valid "
+    "regular expression, or the patterns exclude the website URL itself. "
+    "Delete this website and add it again with corrected patterns."
+)
+
+
+class LaunchRejected(Exception):
+    """The stored website cannot be crawled as configured; the run is failed, not retried."""
+
+    admin_message = REJECTED_SEED_MESSAGE
+    reason = "unsafe_seed_url"
+
+
+class SeedURLRejected(LaunchRejected):
+    """The stored website seed is not a public http(s) URL; the crawler must not be launched."""
+
+
+class CrawlPatternsRejected(LaunchRejected):
+    """The stored include/exclude patterns are malformed or exclude the seed."""
+
+    admin_message = REJECTED_PATTERNS_MESSAGE
+    reason = "invalid_crawl_patterns"
 
 
 def _response(event, status_code: int, body: dict):
@@ -134,6 +167,35 @@ def _mark_run_running(connection, *, ingestion_run_id: str, ecs_task_arn: str, s
         )
 
 
+def _mark_run_failed(
+    connection, *, ingestion_run_id: str, error_message: str, sync_session_id: str, rejected: str = "unsafe_seed_url"
+):
+    """Mark a queued run failed without launching a task (same shape as handle_ecs_task_stopped)."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE ingestion_runs
+            SET status = 'failed'::ingestion_status,
+                error_message = %s,
+                completed_at = now(),
+                finished_at = now(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+            WHERE id = %s::uuid
+            """,
+            (
+                error_message,
+                json.dumps(
+                    {
+                        "backend": "pgvector",
+                        "sync_session_id": sync_session_id,
+                        "rejected": rejected,
+                    }
+                ),
+                ingestion_run_id,
+            ),
+        )
+
+
 def _network_configuration() -> dict:
     return {
         "awsvpcConfiguration": {
@@ -180,13 +242,23 @@ def handle_ecs_task_stopped(event, connection) -> dict:
     Successful tasks finalize the row themselves (completed/failed) before exit;
     this only catches crashes that never reached the DB.
     """
-    detail = event.get("detail") or {}
+    # main.handler accepts the event only with the invoke token that
+    # transcribeRelay adds. As defence in depth only the task ARN is taken from
+    # it; the task's state is read back from ECS in this deployment's cluster.
+    task_arn = (event.get("detail") or {}).get("taskArn")
+    if not isinstance(task_arn, str) or not task_arn:
+        return {"ignored": True, "reason": "missing_task_arn"}
+
+    try:
+        described = ecs_client.describe_tasks(cluster=ECS_CLUSTER_ARN, tasks=[task_arn]).get("tasks") or []
+    except Exception:
+        logger.exception("Could not describe ECS task %s", task_arn)
+        return {"ignored": True, "reason": "describe_failed", "task_arn": task_arn}
+    if not described:
+        return {"ignored": True, "reason": "unknown_task", "task_arn": task_arn}
+    detail = described[0]
     if (detail.get("lastStatus") or "").upper() != "STOPPED":
         return {"ignored": True, "reason": "not_stopped"}
-
-    task_arn = detail.get("taskArn")
-    if not task_arn:
-        return {"ignored": True, "reason": "missing_task_arn"}
 
     stopped_reason = detail.get("stoppedReason") or "ECS task stopped"
     container_bits = []
@@ -229,10 +301,28 @@ def handle_ecs_task_stopped(event, connection) -> dict:
 def _run_crawler_task(run: dict) -> str:
     """Launch the crawler ECS task for a website source. Returns the ECS task ARN."""
     # For website sources, ds.name holds the seed URL (see stage_data_sources.py).
+    # Re-validate it here: rows may predate staging validation. DNS failures
+    # (OSError) propagate as an ordinary launch failure so the run is retried.
+    # SEED_URL stays byte-identical to ds.name: the crawler falls back to
+    # matching data_sources.name against it.
+    try:
+        check_public_url(run["name"])
+    except (InvalidURL, BlockedURL) as e:
+        raise SeedURLRejected(type(e).__name__) from e
+    # The crawler enforces the include/exclude patterns (crawl_scope.py). Rows
+    # staged before staging validated them are re-checked here so a pattern
+    # the crawler cannot compile never reaches it.
+    try:
+        scope = crawl_scope.CrawlScope.from_patterns(run["include_patterns"], run["exclude_patterns"])
+    except crawl_scope.InvalidPatterns as e:
+        raise CrawlPatternsRejected(str(e)) from e
+    if not scope.allows(run["name"]):
+        raise CrawlPatternsRejected("the patterns exclude the website URL")
     env = [
         {"name": "JOB_ID", "value": run["ingestion_run_id"]},
         {"name": "SEED_URL", "value": run["name"]},
         {"name": "WRITE_DB", "value": "true"},
+        *crawl_scope.to_env(scope.include_patterns, scope.exclude_patterns),
         *_container_db_overrides(),
     ]
     resp = ecs_client.run_task(
@@ -369,6 +459,33 @@ def process_crawler_batch(event, connection, sync_session_id: str, triggered_by_
             )
             connection.commit()
             launched.append({"ingestion_run_id": run["ingestion_run_id"], "type": run["type"], "ecs_task_arn": task_arn})
+        except LaunchRejected as e:
+            # Permanent: fail the run so it is not retried on every sync.
+            connection.rollback()
+            try:
+                _mark_run_failed(
+                    connection,
+                    ingestion_run_id=run["ingestion_run_id"],
+                    error_message=e.admin_message,
+                    sync_session_id=sync_session_id,
+                    rejected=e.reason,
+                )
+                connection.commit()
+            except Exception as exc:  # noqa: BLE001
+                connection.rollback()
+                logger.error(
+                    "Could not mark run %s failed after rejecting it (%s, %s)",
+                    run["ingestion_run_id"],
+                    e.reason,
+                    type(exc).__name__,
+                )
+            logger.warning(
+                "Refusing to launch crawler for run %s (%s: %s)",
+                run["ingestion_run_id"],
+                e.reason,
+                e,
+            )
+            failures.append({"ingestion_run_id": run["ingestion_run_id"], "error": e.admin_message})
         except Exception as e:  # noqa: BLE001
             connection.rollback()
             logger.error("Failed to launch ingestion task for run %s: %s", run["ingestion_run_id"], e, exc_info=True)

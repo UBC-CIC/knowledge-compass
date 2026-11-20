@@ -1,5 +1,7 @@
 # Evaluation harness
 
+Stakeholder overview (what is measured, how to read a report): [`Docs/EVALS.md`](../Docs/EVALS.md).
+
 Automated tests of Knowledge Compass journeys and situations against the live
 public chat API. It:
 
@@ -22,6 +24,7 @@ trends across runs rather than single numbers.
 ```
 evals/
   scenarios/            committed: one YAML per user story + label_map.yaml
+  guardrails/           committed: F13 topic-scope cases (f13_cases.yaml)
   harness/              API client, signed eval tags, parent simulator, runner
   judge/                routing metrics, LLM judge (+ rubrics/), Bedrock Evaluations
   extract.py            user-story Markdown -> draft scenarios
@@ -49,9 +52,9 @@ and `.env` files are already gitignored.
 | `KC_AWS_REGION` | signing secret | `ca-central-1` |
 | `KC_EVAL_SECRET_NAME` | signing secret | `KC/eval/signing-secret` |
 | `KC_BEDROCK_REGION` | simulator, judge, extract | `us-west-2` |
-| `KC_SIMULATOR_MODEL` | journeys | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `KC_SIMULATOR_MODEL` | journeys | `us.anthropic.claude-haiku-5-5` |
 | `KC_JUDGE_MODEL` | judge, Bedrock eval | `us.anthropic.claude-opus-4-6-v1` |
-| `KC_EXTRACT_MODEL` | extract | `us.anthropic.claude-sonnet-4-6` |
+| `KC_EXTRACT_MODEL` | extract | `us.anthropic.claude-haiku-5-5` |
 | `KC_EVAL_BUCKET`, `KC_EVAL_ROLE_ARN`, `KC_EVAL_JOB_REGION` | Bedrock eval | EvalStack outputs |
 | `KC_ADMIN_ID_TOKEN` | optional checks | – (Cognito admin ID token; enables the analytics/global-mode checks and `--catalog admin`) |
 | `KC_TURN_DELAY_SECONDS`, `KC_USER_DELAY_SECONDS` | pacing | `2`, `5` |
@@ -155,6 +158,18 @@ call, so `eval` fields from other clients cost nothing.
 
    Output goes to `results/<run_id>/`: `report.md`, `report.json`, `probes/`, `journeys/`,
    `judge/` and `bedrock/`.
+   **Guardrail cases (F13).** `guardrails/f13_cases.yaml` holds 20 one-message topic-scope cases:
+   10 sensitive questions the assistant must answer (keeping the location and age given), 6 off-topic
+   requests it must decline politely, 3 harmful requests it must refuse while offering support routes,
+   and 1 prompt injection it must refuse. Each case has an `id`, `category`, `expected`
+   (`help`, `decline` or `refuse`), `message` and `expectations` (checks for a reviewer). `validate`
+   checks the file and prints the case count. Run them with:
+   ```powershell
+   evals/.venv/Scripts/python -m evals --env-file evals/.env guardrails --yes
+   ```
+   Each case gets a fresh anonymous user and a tagged standard-mode session, which is deleted afterwards.
+   Output goes to `results/<run_id>/guardrails/<case_id>.json` and `guardrails.md`. Nothing is scored:
+   read each reply in `guardrails.md` against its expected behaviour and checks.
 7. You can re-score or rebuild an existing run:
    - `judge --run <id> [--force]`
    - `bedrock-eval --run <id> [--wait]` starts the Bedrock jobs. It refuses if the run already
@@ -222,10 +237,10 @@ after the run.
 Each turn in the app makes:
 
 - a Haiku router call
-- a Haiku or Sonnet answer
+- a Haiku answer
 - a Haiku grounding check on guidance turns
 - a title call on the first turn
-- a Cohere embedding and a guardrail check
+- an embedding call and a guardrail check
 
 A journey is usually about 5 turns, plus about 4 Haiku simulator calls and one Opus judge call
 (about 10k input tokens). A full run of all 71 stories in both modes is roughly:
@@ -250,7 +265,7 @@ Start small and check Bedrock pricing for current rates.
   `run.json → cleanup_failed`, and all of them carry the run's `eval_run_id`.
 - **Admin user list.** Harness users still appear in the admin user list.
 - **No feedback, no intro flag.** The harness never sends feedback and never sets
-  `is_intro_message`, which would skip the guardrail.
+  `is_intro_message`. The server ignores that flag; the guardrail always runs.
 - **Synthetic data only.** Personas are synthetic. Do not put real family details in scenarios.
 
 ## Signed tag and the future dual mode

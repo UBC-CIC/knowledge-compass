@@ -2,8 +2,10 @@
  * Assistant settings (GET/PUT /admin/system-settings) in plain language.
  *
  * RECOMMENDED matches the runtime fallbacks in
- * cdk/lambda/textGeneration/helpers/config.py and the GET fallback in
- * cdk/lambda/handlers/adminHandler.js. Keep the three in sync.
+ * cdk/lambda/textGeneration/helpers/config.py, the GET fallback in
+ * cdk/lambda/handlers/adminHandler.js, and the missed-load default for
+ * max_characters_per_user_message on the public read route, the WebSocket
+ * frame cap, and the chat composer. Keep them in sync.
  */
 
 export type RoutingMode = "fixed" | "dynamic";
@@ -17,8 +19,6 @@ export type AssistantSettings = {
   max_characters_per_day: number;
   max_messages_per_day_global: number;
   max_characters_per_ai_message: number;
-  temperature: number;
-  top_p: number;
   support_score_threshold: number;
   scope_alignment_score_threshold: number;
   grounded_threshold: number;
@@ -36,8 +36,6 @@ export const RECOMMENDED: AssistantSettings = {
   max_characters_per_day: 10000,
   max_messages_per_day_global: 5000,
   max_characters_per_ai_message: 5000,
-  temperature: 0.15,
-  top_p: 0.5,
   support_score_threshold: 0.25,
   scope_alignment_score_threshold: 0.25,
   grounded_threshold: 0.75,
@@ -49,8 +47,6 @@ export const SETTING_KEYS = Object.keys(RECOMMENDED) as SettingKey[];
 /** Settings a developer manages; "Reset to recommended" only touches these. */
 export const DEVELOPER_KEYS: SettingKey[] = [
   "max_characters_per_ai_message",
-  "temperature",
-  "top_p",
   "support_score_threshold",
   "scope_alignment_score_threshold",
   "grounded_threshold",
@@ -105,16 +101,26 @@ export function flowPresetFor(s: FlowValues): FlowPresetId | null {
 
 type Rule = { min: number; max: number; integer: boolean; label: string };
 
+/**
+ * Code-level ceilings on the usage limits. Must match LIMIT_CEILINGS in
+ * cdk/lambda/handlers/adminHandler.js and cdk/lambda/textGeneration/helpers/config.py.
+ */
+export const LIMIT_CEILINGS = {
+  max_messages_per_day: 100,
+  max_characters_per_user_message: 4000,
+  max_characters_per_day: 20000,
+  max_messages_per_day_global: 20000,
+  max_characters_per_ai_message: 10000,
+} as const;
+
 const RULES: Partial<Record<SettingKey, Rule>> = {
-  max_messages_per_day: { min: 1, max: 1000, integer: true, label: "Messages per day" },
+  max_messages_per_day: { min: 1, max: LIMIT_CEILINGS.max_messages_per_day, integer: true, label: "Messages per day" },
   min_messages_before_suggest: { min: 0, max: 500, integer: true, label: "Give guidance by message" },
   min_exchanges_before_answer: { min: 0, max: 500, integer: true, label: "Questions before guidance" },
-  max_characters_per_user_message: { min: 1, max: 200000, integer: true, label: "Longest message" },
-  max_characters_per_day: { min: 1, max: 1000000, integer: true, label: "Characters per day" },
-  max_messages_per_day_global: { min: 1, max: 1000000, integer: true, label: "Messages per day, everyone" },
-  max_characters_per_ai_message: { min: 1, max: 200000, integer: true, label: "Longest reply" },
-  temperature: { min: 0, max: 2, integer: false, label: "Temperature" },
-  top_p: { min: 0, max: 1, integer: false, label: "Top P" },
+  max_characters_per_user_message: { min: 1, max: LIMIT_CEILINGS.max_characters_per_user_message, integer: true, label: "Longest message" },
+  max_characters_per_day: { min: 1, max: LIMIT_CEILINGS.max_characters_per_day, integer: true, label: "Characters per day" },
+  max_messages_per_day_global: { min: 1, max: LIMIT_CEILINGS.max_messages_per_day_global, integer: true, label: "Messages per day, everyone" },
+  max_characters_per_ai_message: { min: 1, max: LIMIT_CEILINGS.max_characters_per_ai_message, integer: true, label: "Longest reply" },
   support_score_threshold: { min: 0, max: 1, integer: false, label: "Evidence match" },
   scope_alignment_score_threshold: { min: 0, max: 1, integer: false, label: "Topic match" },
   grounded_threshold: { min: 0, max: 1, integer: false, label: "Reliable answer" },

@@ -29,6 +29,14 @@ describe("EvalStack", () => {
     }
   });
 
+  test("signing secret rotates every 90 days, never on deploy", () => {
+    template.resourceCountIs("AWS::SecretsManager::RotationSchedule", 1);
+    template.hasResourceProperties("AWS::SecretsManager::RotationSchedule", {
+      RotationRules: Match.objectLike({ ScheduleExpression: "rate(90 days)" }),
+      RotateImmediatelyOnUpdate: false,
+    });
+  });
+
   test("results bucket is private, encrypted, SSL-only and expires objects", () => {
     template.hasResourceProperties("AWS::S3::Bucket", {
       PublicAccessBlockConfiguration: {
@@ -89,7 +97,10 @@ describe("EvalStack", () => {
   test("job resources can live in a separate Region stack", () => {
     const withoutJobs = synth(false);
     withoutJobs.resourceCountIs("AWS::S3::Bucket", 0);
-    withoutJobs.resourceCountIs("AWS::IAM::Role", 0);
+    // The only role left is the signing-secret rotation function's.
+    const roles = Object.values(withoutJobs.findResources("AWS::IAM::Role"));
+    expect(roles).toHaveLength(1);
+    expect(JSON.stringify(roles[0].Properties.AssumeRolePolicyDocument)).toContain("lambda.amazonaws.com");
 
     const app = new cdk.App();
     const jobs = new EvalJobsStack(app, "KC-EvalJobs", {

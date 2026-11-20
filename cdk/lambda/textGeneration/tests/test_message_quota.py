@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import _setup  # noqa: E402,F401  (puts kc_shared on sys.path)
 
 # psycopg2 / aws_lambda_powertools are not installed locally; main only needs
 # get_db_connection, which every test patches.

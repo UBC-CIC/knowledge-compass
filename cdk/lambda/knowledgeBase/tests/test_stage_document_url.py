@@ -8,6 +8,7 @@ Run from the knowledgeBase dir:
 """
 
 import json
+import socket
 import sys
 import types
 import unittest
@@ -40,13 +41,24 @@ class StageDocumentUrlTests(unittest.TestCase):
         cors = mock.patch.object(stage, "get_cors_headers", return_value={})
         cors.start()
         self.addCleanup(cors.stop)
+        env = mock.patch.dict("os.environ", {"KNOWLEDGE_BASE_BUCKET_NAME": "bucket"})
+        env.start()
+        self.addCleanup(env.stop)
+        issued = mock.patch.object(stage, "has_unclaimed_uploads", return_value=True)
+        issued.start()
+        self.addCleanup(issued.stop)
         head = mock.patch.object(stage, "head_etag", side_effect=AssertionError("S3 must not be called"))
         head.start()
         self.addCleanup(head.stop)
+        # These tests cover the link's shape. The crawled-page collision check
+        # is a separate query and is not what "reaches S3" means here.
+        occupant = mock.patch.object(stage, "_source_type_at_url", return_value=None)
+        occupant.start()
+        self.addCleanup(occupant.stop)
 
     def stage(self, request_body):
         return stage._stage_document(
-            {}, request_body, mock.Mock(), created_by="admin@example.org", created_by_user_id="u1"
+            {}, request_body, mock.Mock(), created_by="admin@example.org", created_by_user_id="u1", admin_sub="sub-1"
         )
 
     def assert_rejected(self, response):
@@ -63,11 +75,18 @@ class StageDocumentUrlTests(unittest.TestCase):
         self.assert_rejected(self.stage(body(document_url="s3://bucket/key.pdf")))
 
     def test_http_link_passes_validation(self):
-        # Gets past URL validation and reaches the S3 existence check.
-        with mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")):
+        # Gets past URL validation and reaches the S3 existence check (DNS faked; no network).
+        def public_dns(host, port, type=None):  # noqa: A002 - mirrors socket.getaddrinfo
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        with mock.patch("socket.getaddrinfo", public_dns), \
+                mock.patch.object(stage, "head_etag", side_effect=RuntimeError("missing")):
             response = self.stage(body(document_url="https://example.org/handbook.pdf"))
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("does not exist in S3", json.loads(response["body"])["error"])
+
+    def test_private_link_is_rejected(self):
+        self.assert_rejected(self.stage(body(document_url="http://169.254.170.2/x.pdf")))
 
 
 if __name__ == "__main__":

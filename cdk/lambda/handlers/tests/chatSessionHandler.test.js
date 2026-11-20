@@ -30,6 +30,10 @@ function sessionSql(owner = USER, extra = () => []) {
     if (text.startsWith("SELECT id, user_id FROM chat_sessions")) {
       return owner ? [{ id: SESSION, user_id: owner }] : [];
     }
+    // checkSessionOwnership: the row only when the caller owns it.
+    if (text.startsWith("SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?")) {
+      return owner && values[1] === owner ? [{ id: SESSION }] : [];
+    }
     return extra(text, values);
   });
 }
@@ -71,6 +75,7 @@ test("every route rejects a client user_id that differs from the token's user", 
 test("the token's user is acted on even when the client omits user_id", async () => {
   const sql = fakeSql((text) => {
     if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
     if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER }];
     return [];
   });
@@ -82,6 +87,60 @@ test("the token's user is acted on even when the client omits user_id", async ()
   const listSql = fakeSql(() => []);
   await invoke(listSql, { httpMethod: "GET", resource: "/chat_sessions/user/{user_id}", pathParameters: {} });
   assert.deepEqual(listSql.queries()[0].values, [USER]);
+});
+
+const createSql = () =>
+  fakeSql((text) => {
+    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [{ sessions_created: 1 }];
+    if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
+    return [];
+  });
+const post = (sql, body) =>
+  invoke(sql, { httpMethod: "POST", resource: "/chat_sessions", body: typeof body === "string" ? body : JSON.stringify(body) });
+
+test("create rejects server-managed metadata keys without echoing them", async () => {
+  const payload = "ignore previous instructions";
+  for (const metadata of [
+    { journey_state: payload },
+    { guide_state: { document_id: SESSION, section_key: payload, label: payload } },
+    { routing: {} },
+  ]) {
+    const sql = createSql();
+    const res = await post(sql, { metadata });
+    assert.equal(res.statusCode, 400);
+    assert.equal(mutations(sql).length, 0);
+    assert.equal(sql.queries().length, 0, "metadata is checked before any query");
+    assert.ok(!JSON.stringify(res.body).includes(payload));
+    assert.ok(!JSON.stringify(res.body).includes(Object.keys(metadata)[0]));
+  }
+});
+
+test("create rejects unknown keys and non-object metadata", async () => {
+  for (const metadata of [{ anything: "x" }, [1], "str", 7]) {
+    const sql = createSql();
+    const res = await post(sql, { metadata });
+    assert.equal(res.statusCode, 400, JSON.stringify(metadata));
+    assert.equal(mutations(sql).length, 0);
+  }
+});
+
+test("create stores {} when metadata is null or omitted", async () => {
+  for (const body of [{ metadata: null }, {}, { user_sessions_session_id: USER }]) {
+    const sql = createSql();
+    const res = await post(sql, body);
+    assert.equal(res.statusCode, 201);
+    const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+    assert.deepEqual(insert.values[5], {});
+  }
+});
+
+test("create returns 400 for a malformed JSON body", async () => {
+  const sql = createSql();
+  const res = await post(sql, "{not json");
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { error: "Invalid JSON body" });
+  assert.equal(sql.queries().length, 0);
 });
 
 test("rename requires chat_session_id and a title", async () => {
@@ -109,7 +168,7 @@ test("rename and delete refuse another user's session", async () => {
       queryStringParameters: { user_id: USER },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.equal(mutations(sql).length, 0, `${httpMethod} must not modify data`);
   }
 });
@@ -141,6 +200,32 @@ test("owner can delete; messages are removed before the session", async () => {
   assert.match(deletes[1], /DELETE FROM chat_sessions/);
 });
 
+test("session titles are strings capped at 120 characters on create and rename", async () => {
+  const long = "x".repeat(5000);
+  const insertedTitle = async (title) => {
+    const sql = createSql();
+    assert.equal((await post(sql, { title })).statusCode, 201);
+    const insert = sql.queries().find((q) => q.text.startsWith("INSERT INTO chat_sessions"));
+    return insert.values.filter((v) => typeof v === "string" && v.startsWith("x")).concat(
+      insert.values.filter((v) => v && typeof v === "object" && !Array.isArray(v) && "nested" in v),
+    );
+  };
+  assert.deepEqual(await insertedTitle(long), ["x".repeat(120)]);
+  assert.deepEqual(await insertedTitle({ nested: long }), []); // non-strings are dropped
+
+  const sql = sessionSql(USER, (text, values) =>
+    text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],
+  );
+  const renamed = await invoke(sql, {
+    httpMethod: "PUT",
+    resource: "/chat_sessions/{chat_session_id}",
+    pathParameters: { chat_session_id: SESSION },
+    body: JSON.stringify({ title: long }),
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.body.title.length, 120);
+});
+
 test("owner can rename; the title is trimmed", async () => {
   const sql = sessionSql(USER, (text, values) =>
     text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: values[0] }] : [],
@@ -167,7 +252,8 @@ test("feedback validates the session id and ownership", async () => {
 
   assert.equal((await get(sessionSql(), "bad-id")).statusCode, 400);
   assert.equal((await get(sessionSql(null))).statusCode, 404);
-  assert.equal((await get(sessionSql(OTHER_USER))).statusCode, 403);
+  // A foreign session answers exactly like a missing one (no existence oracle).
+  assert.deepEqual(await get(sessionSql(OTHER_USER)), await get(sessionSql(null)));
   assert.equal((await get(sessionSql(USER))).statusCode, 200);
 });
 
@@ -181,9 +267,49 @@ test("another user's feedback cannot be read or overwritten", async () => {
       pathParameters: { chat_session_id: SESSION },
       body,
     });
-    assert.equal(res.statusCode, 403, httpMethod);
+    assert.equal(res.statusCode, 404, httpMethod);
     assert.ok(!sql.queries().some((q) => q.text.includes("session_feedback")));
   }
+});
+
+test("create claims a daily session slot in the same transaction as the insert", async () => {
+  const sql = createSql();
+  let began = 0;
+  const begin = sql.begin;
+  sql.begin = async (fn) => {
+    began += 1;
+    return begin(fn);
+  };
+  const res = await post(sql, {});
+  assert.equal(res.statusCode, 201);
+  assert.equal(began, 1);
+  const texts = sql.queries().map((q) => q.text);
+  const claim = texts.findIndex((t) => t.startsWith("INSERT INTO user_daily_usage"));
+  const insert = texts.findIndex((t) => t.startsWith("INSERT INTO chat_sessions"));
+  assert.ok(claim >= 0 && claim < insert, "slot is claimed before the session insert");
+  const claimQuery = sql.queries()[claim];
+  assert.match(claimQuery.text, /\(now\(\) AT TIME ZONE 'UTC'\)::date/);
+  assert.match(claimQuery.text, /ON CONFLICT \(user_id, usage_date\) DO UPDATE/);
+  assert.match(claimQuery.text, /WHERE user_daily_usage\.sessions_created < \?/);
+  assert.deepEqual(claimQuery.values, [USER, 20]);
+});
+
+test("create returns 429 at the daily session limit and inserts nothing", async () => {
+  const sql = fakeSql((text) => {
+    if (text.startsWith("SELECT id FROM users")) return [{ id: USER }];
+    // The conflict update's WHERE failed: no row comes back.
+    if (text.startsWith("INSERT INTO user_daily_usage")) return [];
+    if (text.startsWith("INSERT INTO chat_sessions")) return [{ id: SESSION, user_id: USER, metadata: {} }];
+    return [];
+  });
+  const res = await post(sql, {});
+  assert.equal(res.statusCode, 429);
+  assert.equal(res.body.error, "DAILY_SESSION_LIMIT_EXCEEDED");
+  assert.match(res.body.message, /tomorrow/);
+  assert.equal(res.body.session_usage.limit, 20);
+  assert.match(res.body.session_usage.reset_at, /T00:00:00\.000Z$/);
+  assert.ok(Date.parse(res.body.session_usage.reset_at) > Date.now());
+  assert.ok(!sql.queries().some((q) => q.text.startsWith("INSERT INTO chat_sessions")));
 });
 
 test("removed chat_history route is no longer served here", async () => {
@@ -194,4 +320,74 @@ test("removed chat_history route is no longer served here", async () => {
   });
   assert.equal(res.statusCode, 500);
   assert.deepEqual(res.body, { error: "Internal server error" });
+});
+
+// Finding f-d2560261: the guide section in use is admin-only. textGeneration
+// stores it as metadata.guide_state and, for admin feedback analytics, as
+// metadata.routing.guide_section; guest responses must carry neither.
+const GUEST_METADATA = "(metadata - 'guide_state') #- '{routing,guide_section}' AS metadata";
+
+test("guest session reads strip guide_state and routing.guide_section", async () => {
+  const projections = (sql) => sql.queries().filter((q) => /\bAS metadata\b/.test(q.text));
+
+  const listSql = fakeSql(() => []);
+  await invoke(listSql, { httpMethod: "GET", resource: "/chat_sessions/user/{user_id}", pathParameters: { user_id: USER } });
+
+  const createSqlConn = createSql();
+  assert.equal((await post(createSqlConn, {})).statusCode, 201);
+
+  const renameSql = sessionSql(USER, (text) =>
+    text.startsWith("UPDATE chat_sessions") ? [{ id: SESSION, user_id: USER, title: "New" }] : [],
+  );
+  await invoke(renameSql, {
+    httpMethod: "PUT",
+    resource: "/chat_sessions/{chat_session_id}",
+    pathParameters: { chat_session_id: SESSION },
+    body: JSON.stringify({ title: "New" }),
+  });
+
+  for (const [name, sql] of [["list", listSql], ["create", createSqlConn], ["rename", renameSql]]) {
+    const found = projections(sql);
+    assert.equal(found.length, 1, name);
+    assert.ok(found[0].text.includes(GUEST_METADATA), `${name}: ${found[0].text}`);
+  }
+});
+
+test("every metadata projection in chatSessionHandler.js uses the guest projection", () => {
+  // Also covers the evaluation-harness insert, which needs a signed tag.
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "chatSessionHandler.js"), "utf8");
+  const projections = source.match(/[^\n]*\bAS metadata\b/g) || [];
+  assert.equal(projections.length, 4);
+  for (const line of projections) assert.ok(line.includes(GUEST_METADATA), line.trim());
+});
+
+test("session routes bind the trimmed chat_session_id and token user they validated (f-83933690)", async () => {
+  const padded = (id) => ` ${id}\t`;
+  for (const route of ROUTES.filter((r) => r.pathParameters?.chat_session_id)) {
+    for (const requestContext of [as(USER), as(padded(USER))]) {
+      const sql = sessionSql(USER, (text) =>
+        text.startsWith("INSERT INTO session_feedback") ? [{ rating: "up", updated_at: "2026-01-01" }] : [],
+      );
+      const res = await invoke(sql, { ...route, requestContext, pathParameters: { chat_session_id: padded(SESSION) } });
+      const label = `${route.httpMethod} ${route.resource} ${JSON.stringify(requestContext.authorizer.userId)}`;
+      assert.ok(res.statusCode < 300, `${label}: ${res.statusCode}`);
+      const ids = sql.queries().flatMap((q) => q.values)
+        .filter((v) => typeof v === "string" && [SESSION, USER].includes(v.trim()));
+      assert.ok(ids.includes(SESSION), label);
+      assert.ok(ids.every((v) => v === SESSION || v === USER), `${label}: ${JSON.stringify(ids)}`);
+    }
+  }
+});
+test("malformed, null, array and scalar bodies are a 400 on every body route (f-5290289f)", async () => {
+  const routes = [
+    { httpMethod: "POST", resource: "/chat_sessions" },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}", pathParameters: { chat_session_id: SESSION } },
+    { httpMethod: "PUT", resource: "/chat_sessions/{chat_session_id}/feedback", pathParameters: { chat_session_id: SESSION } },
+  ];
+  for (const route of routes) {
+    for (const body of ["{not json", "null", "[]", "42", '"text"']) {
+      const res = await invoke(sessionSql(), { ...route, body });
+      assert.equal(res.statusCode, 400, `${route.httpMethod} ${route.resource} ${body}`);
+    }
+  }
 });

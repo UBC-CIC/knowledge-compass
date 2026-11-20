@@ -2,8 +2,11 @@
 Admin API for embedding spaces and their jobs (migrations 032 and 033). Every route
 sits under /admin/ and is protected by the existing admin Cognito authorizer in API
 Gateway. Routes that change anything additionally need the authorizer's `requestContext`
-email (the audit identity); a body-supplied email is ignored.
+email (the audit identity); a body-supplied email is ignored. Activate, rollback and
+purge also need the authorizer's Cognito sub and write an admin_audit row
+(helpers/admin_audit.py) before any of their work starts.
 
+  GET  /admin/embedding-models                      models this app can call, with Bedrock ids
   GET  /admin/embedding-spaces                     spaces, coverage, lock state, latest job
   POST /admin/embedding-spaces                     register a space (status 'building')
   POST /admin/embedding-spaces/{id}/jobs           dry_run | rebuild | delta   (202)
@@ -43,12 +46,14 @@ import uuid
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
-from helpers import embeddings
-from helpers.cors import get_cors_headers
+from helpers import embedding_models
+from kc_shared import embeddings
+from kc_shared.cors import get_cors_headers
 from helpers.embedding_jobs import JOB_COLUMNS, invoke_self, load_job, row_to_job
 from helpers.embedding_space import index_name
 from helpers.ingestion_lock import LOCK_CODE, LOCK_MESSAGE, LOCK_TTL_SECONDS, lock_state
 from helpers.admin_user import normalize_email
+from helpers.admin_audit import actor_from_event, insert_admin_audit, log_admin_audit, with_actor
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -66,6 +71,7 @@ STALE_CUTOVER_SECONDS = LOCK_TTL_SECONDS
 MAX_TOLERANCE = 0.5
 # A retired space is kept this long before it may be purged (rollback window).
 RETENTION_DAYS = 30
+LOOKUP_ERROR = "Couldn't look up embedding models in Amazon Bedrock. Try again."
 PURGE_BATCH_SIZE = 5000
 # Safety stop for the delete loop (5000 x 10,000 = 50 million vectors).
 _PURGE_MAX_BATCHES = 10_000
@@ -137,6 +143,7 @@ def _locked_response(event):
 # ── Routing ───────────────────────────────────────────────────────────────────
 
 _ROUTES = (
+    ("GET", "/admin/embedding-models", re.compile(r"/admin/embedding-models$")),
     ("GET", "/admin/embedding-spaces", re.compile(r"/admin/embedding-spaces$")),
     ("POST", "/admin/embedding-spaces", re.compile(r"/admin/embedding-spaces$")),
     ("POST", "/admin/embedding-spaces/{id}/jobs", re.compile(r"/admin/embedding-spaces/[^/]+/jobs$")),
@@ -186,6 +193,8 @@ def handle_embedding_request(event, body, connection):
         return _response(event, 400, {"error": "Invalid id."})
     body = body if isinstance(body, dict) else {}
     try:
+        if resource == "/admin/embedding-models":
+            return list_models(event)
         if resource == "/admin/embedding-spaces" and method == "GET":
             return list_spaces(event, connection)
         if resource == "/admin/embedding-spaces":
@@ -236,19 +245,8 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
     if not _is_int(dimensions) or (allowed and dimensions not in allowed) or not 1 <= dimensions <= 2000:
         return None, f"dimensions for {provider} must be one of: {', '.join(str(d) for d in allowed) or '1 to 2000'}."
 
-    invoke_target = body.get("invoke_target")
-    if (
-        not isinstance(invoke_target, str)
-        or not invoke_target
-        or len(invoke_target) > MAX_INVOKE_TARGET
-        or re.search(r"\s", invoke_target)
-    ):
-        return None, f"invoke_target must be a model id or inference profile ARN of up to {MAX_INVOKE_TARGET} characters, without spaces."
-
-    model_id = body.get("model_id")
-    if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > MAX_MODEL_ID:
-        return None, "model_id must be a non-empty text value."
-
+    # model_id and invoke_target are filled from Bedrock in register_space.
+    # Anything the client sends for them is ignored.
     version = body.get("version", "1")
     if version is None:
         version = "1"
@@ -294,8 +292,6 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
     clean = {
         "name": name,
         "provider": provider,
-        "model_id": model_id.strip(),
-        "invoke_target": invoke_target,
         "dimensions": dimensions,
         "version": version.strip(),
         "min_score": thresholds["min_score"],
@@ -304,10 +300,6 @@ def validate_registration(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]
         "eol_date": eol_date,
         "settings": settings,
     }
-    try:  # adapter-specific limits, e.g. a batch size over the provider maximum
-        embeddings.spec_from_row(clean)
-    except (ValueError, KeyError, TypeError) as e:
-        return None, f"These settings do not fit {provider}: {e}"
     return clean, None
 
 
@@ -398,10 +390,58 @@ def list_spaces(event, connection):
     })
 
 
+def list_models(event):
+    """The embedding models this app can call, with the id and call target Bedrock returned."""
+    try:
+        models = embedding_models.list_embedding_models()
+    except Exception as e:  # noqa: BLE001 - the message must not include the Bedrock error text
+        logger.error("Embedding model lookup failed: %s", type(e).__name__)
+        return _response(event, 503, {"error": LOOKUP_ERROR})
+    return _response(event, 200, {"models": models})
+
+
+def _apply_bedrock_reference(clean: Dict[str, Any]):
+    """
+    Fill model_id and invoke_target from Bedrock. Returns (None, error, status)
+    or (clean, None, None). A client-sent id or ARN is never read.
+    """
+    try:
+        models = embedding_models.list_embedding_models()
+    except Exception as e:  # noqa: BLE001
+        logger.error("Embedding model lookup failed: %s", type(e).__name__)
+        return None, LOOKUP_ERROR, 503
+    chosen = embedding_models.reference_for(clean["provider"], models)
+    if not chosen or not chosen.get("available"):
+        reason = (chosen or {}).get("unavailable_reason") or embedding_models.NOT_LISTED
+        return None, reason, 400
+    model_id = chosen.get("model_id")
+    invoke_target = chosen.get("invoke_target")
+    if (
+        not isinstance(model_id, str)
+        or not isinstance(invoke_target, str)
+        or not model_id.strip()
+        or len(model_id) > MAX_MODEL_ID
+        or not invoke_target
+        or len(invoke_target) > MAX_INVOKE_TARGET
+        or re.search(r"\s", invoke_target)
+    ):
+        return None, "Amazon Bedrock returned a model reference this app cannot store.", 400
+    clean["model_id"] = model_id.strip()
+    clean["invoke_target"] = invoke_target
+    try:  # adapter-specific limits, e.g. a batch size over the provider maximum
+        embeddings.spec_from_row(clean)
+    except (ValueError, KeyError, TypeError) as e:
+        return None, f"These settings do not fit {clean['provider']}: {e}", 400
+    return clean, None, None
+
+
 def register_space(event, body, connection, admin):
     clean, problem = validate_registration(body)
     if problem:
         return _response(event, 400, {"error": problem})
+    clean, problem, status = _apply_bedrock_reference(clean)
+    if problem:
+        return _response(event, status, {"error": problem})
 
     with connection.cursor() as cur:
         cur.execute("SELECT 1 FROM embedding_spaces WHERE name = %s", (clean["name"],))
@@ -473,7 +513,12 @@ def _reap_stale_jobs(connection, modes: tuple, seconds: int, space_id: Optional[
     connection.commit()
 
 
-def _insert_job(connection, space_id: str, mode: str, admin: str, report: Optional[dict] = None) -> str:
+def _insert_job(connection, space_id: str, mode: str, admin: str, report: Optional[dict] = None,
+                audit: Optional[Tuple[dict, str, dict]] = None) -> str:
+    """
+    Record a queued job. `audit` = (actor, action, target): an admin_audit row for it,
+    with the job id added to the target, committed in the same transaction as the job.
+    """
     with connection.cursor() as cur:
         cur.execute(
             """
@@ -484,14 +529,20 @@ def _insert_job(connection, space_id: str, mode: str, admin: str, report: Option
             (space_id, mode, admin, None if report is None else json.dumps(report)),
         )
         job_id = cur.fetchone()[0]
+        if audit is not None:
+            actor, action, target = audit
+            target = {**target, "job_id": job_id}
+            insert_admin_audit(cur, actor, action, target)
     connection.commit()
+    if audit is not None:
+        log_admin_audit(actor, action, target)
     return job_id
 
 
 def _start_job(event, connection, job_id: str, mode: str):
     """Fire the worker. A failure to start fails the job so nothing is left queued forever."""
     try:
-        invoke_self({"task": _TASK_FOR_MODE[mode], "job_id": job_id, "continuation": 0})
+        invoke_self(with_actor({"task": _TASK_FOR_MODE[mode], "job_id": job_id, "continuation": 0}, event))
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to start %s job %s: %s", mode, job_id, type(e).__name__)
         with connection.cursor() as cur:
@@ -572,7 +623,14 @@ def create_validate_job(event, body, connection, space_id, admin):
 
 
 def create_cutover_job(event, body, connection, space_id, admin, mode: str):
-    """POST .../activate and .../rollback: check the preconditions, record the job, start it."""
+    """
+    POST .../activate and .../rollback: check the preconditions, record the job and its
+    admin_audit row in one transaction, start it. The cutover moves the single live
+    retrieval pointer, so it never runs without a verified admin (finding f-531c9569).
+    """
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     request: Dict[str, Any] = {}
     if mode == "activate":
         skip_quality = body.get("skip_quality")
@@ -612,8 +670,10 @@ def create_cutover_job(event, body, connection, space_id, admin, mode: str):
         return _locked_response(event)
 
     report = {"request": request, "old_space_id": old_space_id, "new_space_id": space["id"]}
+    audit_target = {"space_id": space["id"], "name": space["name"], "from_space_id": old_space_id}
     try:
-        job_id = _insert_job(connection, space_id, mode, admin, report)
+        job_id = _insert_job(connection, space_id, mode, admin, report,
+                             audit=(actor, f"embedding_space.{mode}", audit_target))
     except Exception as e:  # noqa: BLE001
         if _is_unique_violation(e):
             _rollback_quietly(connection)
@@ -629,6 +689,9 @@ def purge_space(event, body, connection, space_id, admin):
     active space, is 'retired', has been retired for RETENTION_DAYS, no cutover holds the
     lock, no job is queued or running for it, and the typed name matches exactly.
     """
+    actor = actor_from_event(event)
+    if actor is None:
+        return _response(event, 401, {"error": "Unauthorized"})
     confirm_name = body.get("confirm_name")
 
     with connection.cursor() as cur:
@@ -669,17 +732,79 @@ def purge_space(event, body, connection, space_id, admin):
         })
     if lock_state(connection)["locked"]:
         return _locked_response(event)
+    # Typed confirmation, compared exactly (case-sensitive) with the stored name.
+    if not isinstance(confirm_name, str) or confirm_name != name:
+        return _response(event, 400, {
+            "error": "Type the exact name of the space in confirm_name to purge it.",
+        })
+
+    # Hold the cutover lock for the whole purge (finding f-71ff7846). Rollback
+    # creation and the cutover worker refuse while it is held, so the space
+    # cannot be made live while its vectors are being deleted. Taken
+    # atomically; a crashed purge's lock expires after LOCK_TTL_SECONDS.
+    purge_lock_id = str(uuid.uuid4())
+    if not _take_purge_lock(connection, purge_lock_id):
+        return _locked_response(event)
+    try:
+        return _purge_holding_lock(event, connection, space_id, name, actor, purge_lock_id)
+    finally:
+        _release_purge_lock(connection, purge_lock_id)
+
+
+def _take_purge_lock(connection, lock_id: str) -> bool:
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE embedding_active_space
+               SET cutover_locked = true, cutover_locked_at = now(),
+                   cutover_job_id = %s::uuid, updated_at = now()
+             WHERE id = 1
+               AND (cutover_locked = false
+                    OR cutover_locked_at < now() - make_interval(secs => %s))
+            """,
+            (lock_id, LOCK_TTL_SECONDS),
+        )
+        taken = cur.rowcount == 1
+    connection.commit()
+    return taken
+
+
+def _release_purge_lock(connection, lock_id: str) -> None:
+    _rollback_quietly(connection)
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE embedding_active_space
+                   SET cutover_locked = false, cutover_locked_at = NULL,
+                       cutover_job_id = NULL, updated_at = now()
+                 WHERE id = 1 AND cutover_job_id = %s::uuid
+                """,
+                (lock_id,),
+            )
+        connection.commit()
+    except Exception as e:  # noqa: BLE001 - the lock expires by itself
+        _rollback_quietly(connection)
+        logger.error("Could not release the purge lock (%s); it expires after %s s",
+                     type(e).__name__, LOCK_TTL_SECONDS)
+
+
+def _purge_holding_lock(event, connection, space_id, name, actor, lock_id):
+    # Checked under the lock, so no job for this space can start after it.
     running = _active_job_exists(connection, tuple(_TASK_FOR_MODE), space_id)
     if running:
         return _response(event, 409, {
             "error": "A job is still running for this space. Wait for it to finish first.",
             "job_id": running,
         })
-    # Typed confirmation, compared exactly (case-sensitive) with the stored name.
-    if not isinstance(confirm_name, str) or confirm_name != name:
-        return _response(event, 400, {
-            "error": "Type the exact name of the space in confirm_name to purge it.",
-        })
+
+    # The deletes below commit batch by batch and cannot be undone, so the
+    # decision is recorded before the first one (finding f-c47d6990).
+    audit_target = {"space_id": space_id, "name": name}
+    with connection.cursor() as cur:
+        insert_admin_audit(cur, actor, "embedding_space.purge", audit_target)
+    connection.commit()
+    log_admin_audit(actor, "embedding_space.purge", audit_target)
 
     deleted = 0
     batches = 0
@@ -695,6 +820,11 @@ def purge_space(event, body, connection, space_id, admin):
                 (space_id, PURGE_BATCH_SIZE),
             )
             count = cur.rowcount or 0
+            cur.execute(   # keep the purge lock fresh while batches run
+                "UPDATE embedding_active_space SET cutover_locked_at = now() "
+                "WHERE id = 1 AND cutover_job_id = %s::uuid",
+                (lock_id,),
+            )
         connection.commit()   # one commit per batch: resumable, short locks
         if count <= 0:
             break

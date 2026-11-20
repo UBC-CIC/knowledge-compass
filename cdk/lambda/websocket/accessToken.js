@@ -15,20 +15,53 @@ const ACCESS_AUDIENCE = "kc-public-api";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const secretsManager = new SecretsManagerClient();
-let cachedSecret;
-let cacheExpiry = 0;
+// A signature that matches no cached key refetches the secret (it may have
+// just rotated), at most this often per container.
+const REFRESH_MIN_INTERVAL_MS = 30 * 1000;
 
-async function jwtSecret() {
-  if (!cachedSecret || Date.now() > cacheExpiry) {
+const secretsManager = new SecretsManagerClient();
+let cachedKeys;
+let cachedAt = 0;
+
+// Current and previous signing keys (appSecretRotation keeps the outgoing key
+// as previousJwtSecret), so a rotation does not invalidate live tokens.
+async function jwtKeys(refresh = false) {
+  const age = Date.now() - cachedAt;
+  if (!cachedKeys || age > CACHE_TTL_MS || (refresh && age > REFRESH_MIN_INTERVAL_MS)) {
     const response = await secretsManager.send(
       new GetSecretValueCommand({ SecretId: process.env.JWT_SECRET })
     );
-    cachedSecret = JSON.parse(response.SecretString).jwtSecret;
-    cacheExpiry = Date.now() + CACHE_TTL_MS;
+    const secret = JSON.parse(response.SecretString);
+    cachedKeys = [secret.jwtSecret, secret.previousJwtSecret].filter((k) => typeof k === "string" && k);
+    cachedAt = Date.now();
   }
-  if (!cachedSecret) throw new Error("JWT secret is not configured");
-  return cachedSecret;
+  if (cachedKeys.length === 0) throw new Error("JWT secret is not configured");
+  return cachedKeys;
+}
+
+const SIGNATURE_MISMATCH = Symbol("signature mismatch");
+
+/**
+ * Claims verified against the first key that signed `token`; null when the
+ * token is invalid for another reason (expired, malformed), which holds for
+ * every key; SIGNATURE_MISMATCH when no key signed it.
+ */
+function verifyWithKeys(token, keys) {
+  for (const key of keys) {
+    try {
+      return jwt.verify(token, key, { algorithms: ["HS256"] });
+    } catch (err) {
+      if (err?.message !== "invalid signature") return null;
+    }
+  }
+  return SIGNATURE_MISMATCH;
+}
+
+/** verifyWithKeys, refetching the keys once on a mismatch (they may have just rotated). */
+async function verifyJwt(token) {
+  let decoded = verifyWithKeys(token, await jwtKeys());
+  if (decoded === SIGNATURE_MISMATCH) decoded = verifyWithKeys(token, await jwtKeys(true));
+  return decoded === SIGNATURE_MISMATCH ? null : decoded;
 }
 
 /**
@@ -46,13 +79,7 @@ async function verifyAccessToken(token) {
   if (typeof token !== "string" || !token) return null;
   const issuer = process.env.JWT_ISSUER;
   if (!issuer) throw new Error("JWT_ISSUER is not configured");
-  const secret = await jwtSecret();
-  let decoded;
-  try {
-    decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
-  } catch {
-    return null;
-  }
+  const decoded = await verifyJwt(token);
   if (
     !decoded ||
     decoded.typ !== "access" ||

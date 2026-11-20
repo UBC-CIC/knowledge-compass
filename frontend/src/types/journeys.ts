@@ -77,10 +77,19 @@ export type FeedbackCount = {
   sessions: number;
 };
 
+export type SectionFeedback = {
+  key: string;
+  journey_key: string | null;
+  up: number;
+  down: number;
+  sessions: number;
+};
+
 export type JourneyFeedback = {
   days: number | null;
   journeys: FeedbackCount[];
   clusters: Array<FeedbackCount & { journey_key: string | null }>;
+  sections: SectionFeedback[];
   untagged: { up: number; down: number; sessions: number };
 };
 

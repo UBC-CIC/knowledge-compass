@@ -1,4 +1,4 @@
-import { useId, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useId, useState, type ChangeEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,8 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   EMPTY_REGISTER_FORM,
   PROVIDERS,
-  PROVIDER_IDS,
   parseRegisterForm,
+  type EmbeddingModelOption,
   type ProviderId,
   type RegisterErrors,
   type RegisterFormValues,
@@ -53,17 +53,26 @@ function Field({
 
 /**
  * Form for POST /admin/embedding-spaces. A new space starts in "building" and does not
- * change what families get until it is activated. Prices, end-of-life dates and model ids
- * are whatever the administrator enters: nothing here claims a model is available.
+ * change what families get until it is activated. The model id and the Bedrock call
+ * target come from Amazon Bedrock for the model you select. Prices and end-of-life
+ * dates are whatever the administrator enters.
  */
 export default function RegisterSpaceForm({
   busy,
   serverError,
+  models,
+  modelsLoading,
+  modelsError,
+  onReloadModels,
   onSubmit,
   onCancel,
 }: {
   busy: boolean;
   serverError: string | null;
+  models: EmbeddingModelOption[];
+  modelsLoading: boolean;
+  modelsError: string | null;
+  onReloadModels: () => void;
   onSubmit: (payload: RegisterPayload) => void;
   onCancel: () => void;
 }) {
@@ -71,15 +80,37 @@ export default function RegisterSpaceForm({
   const [submitted, setSubmitted] = useState(false);
   const result = parseRegisterForm(values);
   const errors: RegisterErrors = submitted && !result.ok ? result.errors : {};
+  const selected = models.find((model) => model.provider === values.provider) ?? null;
+  const dimensionChoices = selected?.dimensions.length ? selected.dimensions : PROVIDERS[values.provider].dimensions;
+  const canRegister = !modelsLoading && !modelsError && selected?.available === true;
 
   const set = <K extends keyof RegisterFormValues>(key: K, value: RegisterFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
 
+  const dimensionsFor = (provider: ProviderId) => {
+    const model = models.find((item) => item.provider === provider);
+    return model?.dimensions.length ? model.dimensions : PROVIDERS[provider].dimensions;
+  };
+
   const setProvider = (provider: ProviderId) =>
     setValues((v) => {
-      const dims = PROVIDERS[provider].dimensions;
+      const dims = dimensionsFor(provider);
       return { ...v, provider, dimensions: dims.includes(v.dimensions) ? v.dimensions : dims.includes(1024) ? 1024 : dims[0] };
     });
+
+  // Keep the selection on a model Amazon Bedrock can actually call.
+  useEffect(() => {
+    const available = models.filter((model) => model.available);
+    if (available.length === 0) return;
+    setValues((v) => {
+      const current = available.find((model) => model.provider === v.provider);
+      const next = current ?? available[0];
+      const dims = next.dimensions.length ? next.dimensions : PROVIDERS[next.provider].dimensions;
+      const dimensions = dims.includes(v.dimensions) ? v.dimensions : dims.includes(1024) ? 1024 : dims[0];
+      if (next.provider === v.provider && dimensions === v.dimensions) return v;
+      return { ...v, provider: next.provider, dimensions };
+    });
+  }, [models]);
 
   const text =
     (key: keyof RegisterFormValues) =>
@@ -93,7 +124,7 @@ export default function RegisterSpaceForm({
       onSubmit={(e) => {
         e.preventDefault();
         setSubmitted(true);
-        if (result.ok) onSubmit(result.payload);
+        if (result.ok && canRegister) onSubmit(result.payload);
       }}
     >
       <Field label="Name" required help="Lowercase letters, digits, '-' or '_'. For example titan-v2-1024." error={errors.name}>
@@ -102,57 +133,91 @@ export default function RegisterSpaceForm({
         )}
       </Field>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Provider" required error={errors.provider}>
-          {({ id, describedBy, invalid }) => (
-            <Select value={values.provider} onValueChange={(v) => setProvider(v as ProviderId)}>
-              <SelectTrigger id={id} className="w-full" aria-describedby={describedBy} aria-invalid={invalid}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PROVIDER_IDS.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {PROVIDERS[p].label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </Field>
-        <Field label="Dimensions" required help="The choices depend on the provider." error={errors.dimensions}>
-          {({ id, describedBy, invalid }) => (
-            <Select value={String(values.dimensions)} onValueChange={(v) => set("dimensions", Number(v))}>
-              <SelectTrigger id={id} className="w-full" aria-describedby={describedBy} aria-invalid={invalid}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PROVIDERS[values.provider].dimensions.map((d) => (
-                  <SelectItem key={d} value={String(d)}>
-                    {d}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </Field>
-      </div>
+      {modelsLoading ? (
+        <p role="status" className="text-sm text-foreground/75">
+          Loading models from Amazon Bedrock…
+        </p>
+      ) : modelsError ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-sm text-red-700">
+            {modelsError}
+          </p>
+          <Button type="button" variant="outline" onClick={onReloadModels}>
+            Try again
+          </Button>
+        </div>
+      ) : models.length === 0 ? (
+        <p role="status" className="text-sm text-foreground/75">
+          Amazon Bedrock did not return any embedding models this app can call.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Model"
+              required
+              help="Amazon Bedrock supplies the model id and the call target for the model you choose."
+              error={errors.provider}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Select value={values.provider} onValueChange={(v) => setProvider(v as ProviderId)}>
+                  <SelectTrigger id={id} className="w-full" aria-describedby={describedBy} aria-invalid={invalid}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((model) => (
+                      <SelectItem key={model.provider} value={model.provider} disabled={!model.available}>
+                        {model.available ? model.label : `${model.label} (not available)`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </Field>
+            <Field label="Dimensions" required help="The choices depend on the model." error={errors.dimensions}>
+              {({ id, describedBy, invalid }) => (
+                <Select value={String(values.dimensions)} onValueChange={(v) => set("dimensions", Number(v))}>
+                  <SelectTrigger id={id} className="w-full" aria-describedby={describedBy} aria-invalid={invalid}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {dimensionChoices.map((d) => (
+                      <SelectItem key={d} value={String(d)}>
+                        {d}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </Field>
+          </div>
 
-      <Field label="Model id" required help="For your records, for example amazon.titan-embed-text-v2:0." error={errors.model_id}>
-        {({ id, describedBy, invalid }) => (
-          <Input id={id} value={values.model_id} onChange={text("model_id")} aria-describedby={describedBy} aria-invalid={invalid} autoComplete="off" />
-        )}
-      </Field>
+          {models
+            .filter((model) => !model.available)
+            .map((model) => (
+              <p key={model.provider} className="text-xs leading-normal text-foreground/70">
+                {model.label}: {model.unavailable_reason ?? "Not available in Amazon Bedrock."}
+              </p>
+            ))}
 
-      <Field
-        label="Model id or inference profile ARN to call"
-        required
-        help="What the app sends to Amazon Bedrock. Check that it is available in your region and allowed by your data-residency policy before using it."
-        error={errors.invoke_target}
-      >
-        {({ id, describedBy, invalid }) => (
-          <Input id={id} value={values.invoke_target} onChange={text("invoke_target")} aria-describedby={describedBy} aria-invalid={invalid} autoComplete="off" />
-        )}
-      </Field>
+          {selected?.available ? (
+            <div className="space-y-2 rounded-lg border border-foreground/12 bg-muted/40 px-3 py-2 text-sm">
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
+                <dt className="text-foreground/70">Model id</dt>
+                <dd className="min-w-0 break-all font-semibold">{selected.model_id}</dd>
+                <dt className="text-foreground/70">Called as</dt>
+                <dd className="min-w-0 break-all font-semibold">{selected.invoke_target}</dd>
+              </dl>
+              {selected.cross_region ? (
+                <p className="text-xs leading-normal text-foreground/75">
+                  This model is called through a cross-region inference profile. The text of your content and of families'
+                  questions may be processed outside this region.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Version" help="Short label. Defaults to 1." error={errors.version}>
@@ -218,7 +283,7 @@ export default function RegisterSpaceForm({
         <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy || !canRegister}>
           {busy ? "Registering…" : "Register search index"}
         </Button>
       </div>

@@ -339,6 +339,13 @@ class FailurePathTest(CutoverBase):
         self.assertIn("after 30 s", self.job["last_error"])
         self.assertFalse(self.lock["locked"])
 
+    def test_wait_idle_also_counts_guideline_documents_being_read(self):
+        self.go()
+        idle = self.db.statements("FROM ingestion_runs")
+        self.assertTrue(idle)
+        self.assertIn("FROM guideline_documents", idle[0][1])
+        self.assertIn("status = 'processing'", idle[0][1])
+
     def test_an_unreleasable_lock_is_reported_and_left_to_the_ttl(self):
         original = self.db.handle
 
@@ -593,13 +600,19 @@ class SecretsTest(CutoverBase):
 
 # ── Routes: activate and rollback ─────────────────────────────────────────────
 
-def event(path_suffix, email="admin@example.org", space_id=NEW):
+ACTOR = {"sub": "admin-sub", "email": "admin@example.org", "request_id": "req-1"}
+
+
+def event(path_suffix, email="admin@example.org", space_id=NEW, sub="admin-sub"):
+    authorizer = {"email": email}
+    if sub:
+        authorizer["userId"] = sub
     return {
         "httpMethod": "POST",
         "path": f"/admin/embedding-spaces/{space_id}/{path_suffix}",
         "resource": f"/admin/embedding-spaces/{{id}}/{path_suffix}",
         "pathParameters": {"id": space_id},
-        "requestContext": {"authorizer": {"email": email}} if email else {},
+        "requestContext": {"authorizer": authorizer, "requestId": "req-1"} if email else {},
         "headers": {},
     }
 
@@ -625,7 +638,9 @@ class CutoverRouteTest(unittest.TestCase):
     def test_activate_accepts_a_validated_space(self):
         response, conn = self.post("activate", self.conn())
         self.assertEqual(response["statusCode"], 202)
-        self.invoke.assert_called_once_with({"task": "activate_space", "job_id": JOB_ID, "continuation": 0})
+        self.invoke.assert_called_once_with(
+            {"task": "activate_space", "job_id": JOB_ID, "continuation": 0, "actor": ACTOR}
+        )
         insert = conn.sql_with("INSERT INTO embedding_jobs")[0][1]
         self.assertEqual(insert[:3], (NEW, "activate", "admin@example.org"))
         self.assertEqual(json.loads(insert[3]), {"request": {}, "old_space_id": OLD, "new_space_id": NEW})
@@ -661,7 +676,9 @@ class CutoverRouteTest(unittest.TestCase):
     def test_rollback_accepts_a_retired_space(self):
         response, conn = self.post("rollback", self.conn("retired"))
         self.assertEqual(response["statusCode"], 202)
-        self.invoke.assert_called_once_with({"task": "rollback_space", "job_id": JOB_ID, "continuation": 0})
+        self.invoke.assert_called_once_with(
+            {"task": "rollback_space", "job_id": JOB_ID, "continuation": 0, "actor": ACTOR}
+        )
         self.assertEqual(conn.sql_with("INSERT INTO embedding_jobs")[0][1][1], "rollback")
 
     def test_rollback_refusals(self):
@@ -704,6 +721,58 @@ class CutoverRouteTest(unittest.TestCase):
         response, conn = self.post("activate", self.conn())
         self.assertEqual(response["statusCode"], 502)
         self.assertTrue(conn.sql_with("UPDATE embedding_jobs SET status = 'failed', finished_at = now()"))
+
+    # ── admin_audit (finding f-531c9569) ──────────────────────────────────────
+
+    def _record_commits_and_invokes(self, conn):
+        """Put COMMIT and INVOKE markers into conn.executed, in order."""
+        conn.commit = lambda: conn.executed.append(("COMMIT", None))
+        self.invoke.side_effect = lambda payload: conn.executed.append(("INVOKE", payload))
+        return conn
+
+    def test_activate_and_rollback_are_audited_with_their_job(self):
+        for suffix, status in (("activate", "validated"), ("rollback", "retired")):
+            with self.subTest(suffix):
+                self.invoke.reset_mock()
+                conn = self._record_commits_and_invokes(self.conn(status))
+                with self.assertLogs(level="INFO") as logs:
+                    response, conn = self.post(suffix, conn)
+                self.assertEqual(response["statusCode"], 202)
+                audit = conn.sql_with("INSERT INTO admin_audit")
+                self.assertEqual(len(audit), 1)
+                sub, email, action, target, request_id = audit[0][1]
+                self.assertEqual((sub, email, action, request_id),
+                                 ("admin-sub", "admin@example.org", f"embedding_space.{suffix}", "req-1"))
+                self.assertEqual(json.loads(target),
+                                 {"space_id": NEW, "name": "new", "job_id": JOB_ID, "from_space_id": OLD})
+                # Same transaction as the job row, committed before the worker starts.
+                statements = [sql for sql, _ in conn.executed]
+                job_at = next(i for i, s in enumerate(statements) if "INSERT INTO embedding_jobs" in s)
+                audit_at = statements.index(audit[0][0])
+                commit_at = statements.index("COMMIT", job_at)
+                self.assertLess(job_at, audit_at)
+                self.assertLess(audit_at, commit_at)
+                self.assertLess(commit_at, statements.index("INVOKE"))
+                self.assertTrue(any(f'"action": "embedding_space.{suffix}"' in line for line in logs.output))
+
+    def test_cutover_without_a_verified_admin_sub_is_refused(self):
+        for suffix, status in (("activate", "validated"), ("rollback", "retired")):
+            with self.subTest(suffix):
+                response, conn = self.post(suffix, self.conn(status), sub=None)
+                self.assertEqual(response["statusCode"], 401)
+                self.assertEqual(conn.executed, [])
+        self.invoke.assert_not_called()
+
+    def test_a_failed_audit_insert_records_and_starts_nothing(self):
+        conn = self._record_commits_and_invokes(self.conn())
+        conn.fail_next("INSERT INTO admin_audit", RuntimeError("audit down"))
+        response, conn = self.post("activate", conn)
+        self.assertEqual(response["statusCode"], 500)
+        statements = [sql for sql, _ in conn.executed]
+        job_at = next(i for i, s in enumerate(statements) if "INSERT INTO embedding_jobs" in s)
+        self.assertNotIn("COMMIT", statements[job_at:])
+        self.assertGreaterEqual(conn.rollbacks, 1)
+        self.invoke.assert_not_called()
 
 
 if __name__ == "__main__":

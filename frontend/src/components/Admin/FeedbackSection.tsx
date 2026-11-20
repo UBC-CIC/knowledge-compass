@@ -9,11 +9,12 @@ import {
   YAxis,
 } from "recharts";
 import {
+  Bookmark,
   ChevronRight,
+  Download,
   EyeOff,
   Inbox,
   MessageSquareText,
-  Star,
   ThumbsDown,
   ThumbsUp,
   Undo2,
@@ -37,6 +38,11 @@ import {
   type FeedbackLists,
 } from "@/hooks/useFeedbackTriage";
 import { API_ENDPOINT } from "@/lib/api";
+import {
+  buildReviewLaterDownload,
+  downloadPdfFile,
+  reviewLaterFileName,
+} from "@/lib/conversationPdf";
 
 // ------------------------------------------------------------------
 // Types and constants
@@ -89,10 +95,11 @@ const FEEDBACK_TABS: Array<{
     empty: "No written feedback in this range yet.",
   },
   {
+    // Stored as the starred flag. Shown to admins as Review later.
     id: "starred",
-    label: "Starred",
-    description: "Starred by any admin, from any date (up to 100).",
-    empty: "Nothing starred yet. Star a comment to keep it here.",
+    label: "Review later",
+    description: "Saved to review later by any admin, from any date (up to 100).",
+    empty: "Nothing saved to review later yet. Mark a comment to keep it here.",
   },
   {
     id: "dismissed",
@@ -156,7 +163,7 @@ function RatingPill({ rating }: { rating: "up" | "down" }) {
 }
 
 // ------------------------------------------------------------------
-// Star / dismiss / restore controls
+// Review later / dismiss / restore controls
 // ------------------------------------------------------------------
 
 type TriageActionsProps = {
@@ -210,11 +217,13 @@ function TriageActions({
         disabled={disabled}
         onClick={() => onStar(!starred)}
         aria-pressed={starred}
-        aria-label={labeled ? undefined : starred ? "Unstar this feedback" : "Star this feedback"}
-        title={starred ? "Unstar" : "Star"}
+        aria-label={
+          labeled ? undefined : starred ? "Remove from review later" : "Save to review later"
+        }
+        title={starred ? "Remove from review later" : "Review later"}
       >
-        <Star className={cn(starred && "fill-amber-400 text-amber-500")} aria-hidden="true" />
-        {labeled && (starred ? "Starred" : "Star")}
+        <Bookmark className={cn(starred && "fill-amber-400 text-amber-500")} aria-hidden="true" />
+        {labeled && (starred ? "In review later" : "Review later")}
       </Button>
       <Button
         type="button"
@@ -323,6 +332,9 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
 
   const [activeTab, setActiveTab] = useState<FeedbackTab>("recent");
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>("all");
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const tabRefs = useRef<Record<FeedbackTab, HTMLButtonElement | null>>({
     recent: null,
     starred: null,
@@ -403,6 +415,41 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
   };
 
   const selectedId = selectedFeedback?.chat_session_id ?? null;
+
+  const downloadConversations = async (
+    entries: FeedbackEntry[],
+    fileName: string,
+    all: boolean
+  ) => {
+    if (entries.length === 0 || downloadBusy) return;
+    setDownloadError(null);
+    setDownloadBusy(true);
+    setDownloadingAll(all);
+    try {
+      const { bytes, missingChats } = await buildReviewLaterDownload(
+        entries.map((entry) => ({
+          chatSessionId: entry.chat_session_id,
+          rating: entry.rating,
+          comment: entry.comment,
+          updatedAt: entry.updated_at,
+        }))
+      );
+      downloadPdfFile(bytes, fileName);
+      if (missingChats > 0) {
+        setDownloadError(
+          missingChats === entries.length
+            ? "The PDF downloaded, but the chats could not be loaded."
+            : "The PDF downloaded, but some chats could not be loaded."
+        );
+      }
+    } catch (err) {
+      console.error("Error downloading review later conversations:", err);
+      setDownloadError("Couldn't download that PDF. Please try again.");
+    } finally {
+      setDownloadBusy(false);
+      setDownloadingAll(false);
+    }
+  };
 
   return (
     <section className="space-y-4" aria-labelledby="feedback-heading">
@@ -498,7 +545,8 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
             </div>
           </div>
 
-          <div role="tablist" aria-label="Feedback comments" className="mt-3 flex gap-5">
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+            <div role="tablist" aria-label="Feedback comments" className="flex min-w-0 gap-5">
             {FEEDBACK_TABS.map((tab) => {
               const selected = tab.id === activeTab;
               const count = triage.lists[tab.id].length;
@@ -524,7 +572,7 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
                   )}
                 >
                   {tab.id === "starred" && (
-                    <Star
+                    <Bookmark
                       className={cn("h-3.5 w-3.5", selected && "fill-amber-400 text-amber-500")}
                       aria-hidden="true"
                     />
@@ -541,12 +589,29 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
                 </button>
               );
             })}
+            </div>
+            {activeTab === "starred" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mb-2 shrink-0"
+                disabled={comments.length === 0 || downloadBusy}
+                title="Download a PDF of these conversations, including each chat"
+                onClick={() =>
+                  void downloadConversations(comments, reviewLaterFileName(), true)
+                }
+              >
+                <Download aria-hidden="true" />
+                {downloadingAll ? "Preparing PDF..." : "Download PDF"}
+              </Button>
+            )}
           </div>
         </CardHeader>
 
-        {triage.error && (
+        {(triage.error || downloadError) && (
           <p role="alert" className="border-b border-red-200 bg-red-50 px-5 py-2 text-[12.5px] text-red-700">
-            {triage.error}
+            {triage.error ?? downloadError}
           </p>
         )}
 
@@ -560,7 +625,7 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
             <div className="flex flex-col items-center justify-center gap-2 px-5 py-14 text-center">
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-foreground/[0.05]">
                 {activeTab === "starred" ? (
-                  <Star className="h-5 w-5 text-foreground/45" aria-hidden="true" />
+                  <Bookmark className="h-5 w-5 text-foreground/45" aria-hidden="true" />
                 ) : (
                   <Inbox className="h-5 w-5 text-foreground/45" aria-hidden="true" />
                 )}
@@ -606,8 +671,8 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
                           </time>
                           {activeTab === "recent" && starred && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-px font-semibold text-amber-700">
-                              <Star className="h-3 w-3 fill-amber-400 text-amber-500" aria-hidden="true" />
-                              Starred
+                              <Bookmark className="h-3 w-3 fill-amber-400 text-amber-500" aria-hidden="true" />
+                              Review later
                             </span>
                           )}
                           <span className="inline-flex items-center gap-0.5 font-semibold text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -618,6 +683,26 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
                       </span>
                     </button>
                     <div className="flex shrink-0 gap-0.5 pt-3.5">
+                      {activeTab === "starred" && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-foreground/55 hover:text-foreground"
+                          disabled={downloadBusy}
+                          onClick={() =>
+                            void downloadConversations(
+                              [entry],
+                              reviewLaterFileName(entry.chat_session_id),
+                              false
+                            )
+                          }
+                          aria-label="Download this conversation as a PDF"
+                          title="Download conversation"
+                        >
+                          <Download aria-hidden="true" />
+                        </Button>
+                      )}
                       <TriageActions
                         starred={starred}
                         dismissed={activeTab === "dismissed"}
@@ -711,7 +796,26 @@ export default function FeedbackSection({ data }: { data: FeedbackSectionData })
           </div>
 
           {selectedFeedback && selectedId && (
-            <div className="flex items-center justify-end gap-2 border-t border-foreground/10 bg-foreground/[0.02] px-5 py-3">
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-foreground/10 bg-foreground/[0.02] px-5 py-3">
+              {triage.isStarred(selectedId) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mr-auto"
+                  disabled={downloadBusy}
+                  onClick={() =>
+                    void downloadConversations(
+                      [selectedFeedback],
+                      reviewLaterFileName(selectedId),
+                      false
+                    )
+                  }
+                >
+                  <Download aria-hidden="true" />
+                  {downloadBusy && !downloadingAll ? "Preparing PDF..." : "Download conversation"}
+                </Button>
+              )}
               <TriageActions
                 variant="labeled"
                 starred={triage.isStarred(selectedId)}

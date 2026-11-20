@@ -18,6 +18,8 @@ from typing import Any, Dict, Optional
 
 import boto3
 
+from helpers.worker_envelope import worker_payload
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -155,7 +157,7 @@ def invoke_self(payload: dict) -> None:
     _lambda_client().invoke(
         FunctionName=LAMBDA_FUNCTION_NAME,
         InvocationType="Event",
-        Payload=json.dumps(payload).encode("utf-8"),
+        Payload=worker_payload(payload),
     )
 
 

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FLOW_PRESETS,
+  LIMIT_CEILINGS,
   RECOMMENDED,
   changedSettings,
   flowPresetFor,
@@ -33,8 +34,8 @@ describe("flow presets", () => {
 
 describe("validation", () => {
   it("mirrors the API ranges", () => {
-    const errors = validateSettings({ ...RECOMMENDED, max_messages_per_day: 0, temperature: 2.5, top_p: Number.NaN, max_characters_per_user_message: 1.5, max_characters_per_day: 0 });
-    expect(Object.keys(errors).sort()).toEqual(["max_characters_per_day", "max_characters_per_user_message", "max_messages_per_day", "temperature", "top_p"]);
+    const errors = validateSettings({ ...RECOMMENDED, max_messages_per_day: 0, support_score_threshold: Number.NaN, max_characters_per_user_message: 1.5, max_characters_per_day: 0 });
+    expect(Object.keys(errors).sort()).toEqual(["max_characters_per_day", "max_characters_per_user_message", "max_messages_per_day", "support_score_threshold"]);
   });
 
   it("checks the floor against the ceiling in dynamic mode only", () => {
@@ -46,14 +47,14 @@ describe("validation", () => {
 
 describe("API helpers", () => {
   it("sends only changed fields", () => {
-    expect(changedSettings(RECOMMENDED, { ...RECOMMENDED, top_p: 0.6, routing_mode: "dynamic" })).toEqual({ top_p: 0.6, routing_mode: "dynamic" });
+    expect(changedSettings(RECOMMENDED, { ...RECOMMENDED, grounded_threshold: 0.6, routing_mode: "dynamic" })).toEqual({ grounded_threshold: 0.6, routing_mode: "dynamic" });
     expect(changedSettings(RECOMMENDED, RECOMMENDED)).toEqual({});
   });
 
   it("fills missing or bad values with the recommended ones", () => {
-    const s = fromApi({ temperature: "0.3", top_p: null, routing_mode: "weird", max_messages_per_day: 10 });
-    expect(s.temperature).toBe(0.3);
-    expect(s.top_p).toBe(RECOMMENDED.top_p);
+    const s = fromApi({ support_score_threshold: "0.3", grounded_threshold: null, routing_mode: "weird", max_messages_per_day: 10 });
+    expect(s.support_score_threshold).toBe(0.3);
+    expect(s.grounded_threshold).toBe(RECOMMENDED.grounded_threshold);
     expect(s.routing_mode).toBe("fixed");
     expect(s.max_messages_per_day).toBe(10);
   });
@@ -63,8 +64,6 @@ describe("recommended values stay in sync with the backend", () => {
   it("matches helpers/config.py", () => {
     const py = readFileSync(resolve(repo, "cdk/lambda/textGeneration/helpers/config.py"), "utf8");
     const num = (name: string) => Number(py.match(new RegExp(`^${name} = ([\\d.]+)`, "m"))?.[1]);
-    expect(num("TEMPERATURE")).toBe(RECOMMENDED.temperature);
-    expect(num("TOP_P")).toBe(RECOMMENDED.top_p);
     expect(num("MAX_MESSAGES_PER_DAY")).toBe(RECOMMENDED.max_messages_per_day);
     expect(num("MIN_EXCHANGES_BEFORE_SUGGEST")).toBe(RECOMMENDED.min_messages_before_suggest);
     expect(num("MIN_EXCHANGES_BEFORE_ANSWER")).toBe(RECOMMENDED.min_exchanges_before_answer);
@@ -76,6 +75,38 @@ describe("recommended values stay in sync with the backend", () => {
     expect(num("GROUNDED_THRESHOLD")).toBe(RECOMMENDED.grounded_threshold);
     expect(num("PARTIALLY_GROUNDED_THRESHOLD")).toBe(RECOMMENDED.partially_grounded_threshold);
     expect(py).toMatch(new RegExp(`^ROUTING_MODE = "${RECOMMENDED.routing_mode}"`, "m"));
+  });
+
+  it("uses 2000 as the missed-load cap everywhere a request can miss the database", () => {
+    const cap = RECOMMENDED.max_characters_per_user_message;
+    const read = (rel: string) => readFileSync(resolve(repo, rel), "utf8");
+    expect(read("cdk/lambda/handlers/systemMessagesHandler.js")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("cdk/lambda/websocket/messageLimit.js")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("frontend/src/pages/ChatInterface/ChatInterface.tsx")).toContain(
+      `const DEFAULT_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`
+    );
+    expect(read("frontend/src/components/ChatInterface/userInput.tsx")).toContain(`maxLength = ${cap},`);
+  });
+
+  it("uses the same limit ceilings in the frontend, adminHandler.js, config.py and the cap readers", () => {
+    const read = (rel: string) => readFileSync(resolve(repo, rel), "utf8");
+    const admin = read("cdk/lambda/handlers/adminHandler.js");
+    const adminBlock = admin.slice(admin.indexOf("const LIMIT_CEILINGS"), admin.indexOf("});", admin.indexOf("const LIMIT_CEILINGS")));
+    const py = read("cdk/lambda/textGeneration/helpers/config.py");
+    const pyBlock = py.slice(py.indexOf("LIMIT_CEILINGS = {"), py.indexOf("}", py.indexOf("LIMIT_CEILINGS = {")));
+    for (const [key, value] of Object.entries(LIMIT_CEILINGS)) {
+      expect(adminBlock).toContain(`${key}: ${value},`);
+      expect(pyBlock).toContain(`'${key}': ${value},`);
+      // Every ceiling is at or above the recommended value.
+      expect(value).toBeGreaterThanOrEqual(RECOMMENDED[key as keyof typeof LIMIT_CEILINGS]);
+    }
+    const cap = LIMIT_CEILINGS.max_characters_per_user_message;
+    expect(read("cdk/lambda/websocket/messageLimit.js")).toContain(`const ABSOLUTE_MAX_CHARACTERS_PER_USER_MESSAGE = ${cap};`);
+    expect(read("cdk/lambda/handlers/systemMessagesHandler.js")).toContain(`const MAX_CHARACTERS_PER_USER_MESSAGE_CEILING = ${cap};`);
   });
 
   it("matches the GET fallback in adminHandler.js", () => {

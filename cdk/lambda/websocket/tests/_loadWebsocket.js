@@ -12,6 +12,10 @@ const path = require("node:path");
 const SECRET = "test-jwt-secret";
 const ISSUER = "test-issuer";
 const USER = "2f0d8c1a-3e2e-4c5d-9c86-1f0a4f1c0d11";
+// WS_IP_HASH_SECRET and its ipHashKey (ipLimit.js), and the default client IP.
+const IP_HASH_SECRET_ID = "test-ip-hash-secret";
+const IP_HASH_KEY = "test-ip-hash-key-0123456789abcdef0123456789abcdef";
+const SOURCE_IP = "203.0.113.7";
 
 class FakeCommand {
   constructor(input) {
@@ -46,14 +50,28 @@ function accessToken(claims = {}, secret = SECRET) {
   return `signed:${Buffer.from(JSON.stringify({ payload, secret })).toString("base64url")}`;
 }
 
+const conditionFailed = () =>
+  Object.assign(new Error("conditional check failed"), { name: "ConditionalCheckFailedException" });
+
+// The three rate-limit UpdateItem shapes in connections.js consumeGenerateAllowance.
+const RL_INCREMENT = "attribute_exists(connectionId) AND rlWindow = :w AND rlCount < :max";
+const RL_START = "attribute_exists(connectionId) AND (attribute_not_exists(rlWindow) OR rlWindow < :w)";
+// The per-user and per-IP windows (consumeKeyedAllowance) live on "user#<id>" and
+// "ip#<scope>#<hmac>" items they may create.
+const USER_RL_INCREMENT = "rlWindow = :w AND rlCount < :max";
+const USER_RL_START = "attribute_not_exists(rlWindow) OR rlWindow < :w";
+
 /**
  * Fake @aws-sdk/client-dynamodb. `connections` is a Map<connectionId, userId>
- * (read, written and deleted) or an Error that every send throws. Every
- * command input is pushed to `calls` as { name, input }.
+ * (read, written and deleted) or an Error that every send throws. `rateState`
+ * is a Map<connectionId, { rlWindow, rlCount }> the UpdateItem fake evaluates;
+ * `updateError` is thrown by UpdateItem only. Every command input is pushed to
+ * `calls` as { name, input }.
  */
-function dynamoFake(connections, calls = []) {
+function dynamoFake(connections, calls = [], { rateState = new Map(), updateError } = {}) {
   class GetItemCommand extends FakeCommand {}
   class PutItemCommand extends FakeCommand {}
+  class UpdateItemCommand extends FakeCommand {}
   class DeleteItemCommand extends FakeCommand {}
   return {
     DynamoDBClient: class {
@@ -61,6 +79,42 @@ function dynamoFake(connections, calls = []) {
         calls.push({ name: command.constructor.name, input: command.input });
         if (connections instanceof Error) throw connections;
         const id = command.input.Key?.connectionId?.S ?? command.input.Item?.connectionId?.S;
+        if (command instanceof UpdateItemCommand) {
+          if (updateError) throw updateError;
+          if (id?.startsWith("user#") || id?.startsWith("ip#")) {
+            const values = command.input.ExpressionAttributeValues;
+            const w = Number(values[":w"].N);
+            const state = rateState.get(id);
+            const { ConditionExpression: condition } = command.input;
+            if (condition === USER_RL_INCREMENT) {
+              if (!state || state.rlWindow !== w || !(state.rlCount < Number(values[":max"].N))) throw conditionFailed();
+              state.rlCount += 1;
+              return {};
+            }
+            if (condition === USER_RL_START) {
+              if (state && !(state.rlWindow < w)) throw conditionFailed();
+              rateState.set(id, { rlWindow: w, rlCount: 1, expiresAt: Number(values[":exp"].N) });
+              return {};
+            }
+            throw new Error(`unexpected user UpdateItem shape: ${condition}`);
+          }
+          if (!connections.has(id)) throw conditionFailed();
+          const values = command.input.ExpressionAttributeValues;
+          const w = Number(values[":w"].N);
+          const state = rateState.get(id);
+          const { ConditionExpression: condition, UpdateExpression: update } = command.input;
+          if (condition === RL_INCREMENT && update === "ADD rlCount :one") {
+            if (!state || state.rlWindow !== w || !(state.rlCount < Number(values[":max"].N))) throw conditionFailed();
+            state.rlCount += 1;
+            return {};
+          }
+          if (condition === RL_START && update === "SET rlWindow = :w, rlCount = :one") {
+            if (state && !(state.rlWindow < w)) throw conditionFailed();
+            rateState.set(id, { rlWindow: w, rlCount: 1 });
+            return {};
+          }
+          throw new Error(`unexpected UpdateItem shape: ${condition}`);
+        }
         if (command instanceof GetItemCommand) {
           return connections.has(id)
             ? { Item: { connectionId: { S: id }, userId: { S: connections.get(id) } } }
@@ -68,7 +122,7 @@ function dynamoFake(connections, calls = []) {
         }
         if (command instanceof PutItemCommand) {
           if (command.input.ConditionExpression === "attribute_not_exists(connectionId)" && connections.has(id)) {
-            throw Object.assign(new Error("conditional check failed"), { name: "ConditionalCheckFailedException" });
+            throw conditionFailed();
           }
           connections.set(id, command.input.Item.userId.S);
           return {};
@@ -82,6 +136,7 @@ function dynamoFake(connections, calls = []) {
     },
     GetItemCommand,
     PutItemCommand,
+    UpdateItemCommand,
     DeleteItemCommand,
   };
 }
@@ -90,9 +145,13 @@ function dynamoFake(connections, calls = []) {
  * Fresh-require websocket/<name>.js. Options:
  *   connections - Map<connectionId, userId> or Error (see dynamoFake)
  *   secretError - Error thrown by Secrets Manager
- * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections }.
+ *   updateError - Error thrown by DynamoDB UpdateItem only
+ *   jwtSecret   - the JWT secret JSON (default { jwtSecret: SECRET })
+ *   ipSecretError - Error thrown when the IP hash secret is read
+ * Returns { handler, module, invocations, posts, deletes, dynamoCalls, connections, rateState }.
  */
-function load(name, { connections = new Map(), secretError } = {}) {
+function load(name, { connections = new Map(), secretError, ipSecretError, updateError, jwtSecret = { jwtSecret: SECRET } } = {}) {
+  const rateState = new Map();
   const invocations = [];
   const posts = [];
   const deletes = [];
@@ -103,9 +162,13 @@ function load(name, { connections = new Map(), secretError } = {}) {
     jsonwebtoken: fakeJwt,
     "@aws-sdk/client-secrets-manager": {
       SecretsManagerClient: class {
-        async send() {
+        async send(command) {
+          if (command.input?.SecretId === IP_HASH_SECRET_ID) {
+            if (ipSecretError) throw ipSecretError;
+            return { SecretString: JSON.stringify({ ipHashKey: IP_HASH_KEY }) };
+          }
           if (secretError) throw secretError;
-          return { SecretString: JSON.stringify({ jwtSecret: SECRET }) };
+          return { SecretString: JSON.stringify(jwtSecret) };
         }
       },
       GetSecretValueCommand: FakeCommand,
@@ -129,7 +192,14 @@ function load(name, { connections = new Map(), secretError } = {}) {
       PostToConnectionCommand,
       DeleteConnectionCommand,
     },
-    "@aws-sdk/client-dynamodb": dynamoFake(connections, dynamoCalls),
+    "@aws-sdk/client-dynamodb": dynamoFake(connections, dynamoCalls, { rateState, updateError }),
+    // messageLimit.js requires postgres at load time. Default-route tests never
+    // configure the database, so a call here is a test bug.
+    postgres: () => {
+      const sql = () => Promise.reject(new Error("unexpected database call"));
+      sql.end = async () => {};
+      return sql;
+    },
   };
 
   const dir = path.resolve(__dirname, "..");
@@ -143,7 +213,7 @@ function load(name, { connections = new Map(), secretError } = {}) {
   };
   try {
     const mod = require(path.join(dir, `${name}.js`));
-    return { handler: mod.handler, module: mod, invocations, posts, deletes, dynamoCalls, connections };
+    return { handler: mod.handler, module: mod, invocations, posts, deletes, dynamoCalls, connections, rateState };
   } finally {
     Module._load = originalLoad;
   }
@@ -153,9 +223,20 @@ const loadDefault = (options) => load("default", options);
 const loadConnect = (options) => load("connect", options);
 const loadDisconnect = (options) => load("disconnect", options);
 
-/** Set JWT_ISSUER and CONNECTIONS_TABLE_NAME for a test; returns a restore function. */
+/**
+ * Set JWT_ISSUER, CONNECTIONS_TABLE_NAME and WS_IP_HASH_SECRET for a test, with
+ * the WS_IP_* limits at their defaults; returns a restore function.
+ */
 function withEnv(overrides = {}) {
-  const values = { JWT_ISSUER: ISSUER, CONNECTIONS_TABLE_NAME: "test-connections", ...overrides };
+  const values = {
+    JWT_ISSUER: ISSUER,
+    CONNECTIONS_TABLE_NAME: "test-connections",
+    WS_IP_HASH_SECRET: IP_HASH_SECRET_ID,
+    WS_IP_CONNECT_RATE_LIMIT: undefined,
+    WS_IP_GENERATE_RATE_LIMIT: undefined,
+    WS_IP_RATE_WINDOW_SECONDS: undefined,
+    ...overrides,
+  };
   const saved = {};
   for (const [key, value] of Object.entries(values)) {
     saved[key] = process.env[key];
@@ -193,6 +274,8 @@ module.exports = {
   SECRET,
   ISSUER,
   USER,
+  IP_HASH_KEY,
+  SOURCE_IP,
   fakeJwt,
   accessToken,
   dynamoFake,

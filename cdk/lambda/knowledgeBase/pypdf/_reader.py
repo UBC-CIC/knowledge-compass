@@ -30,7 +30,7 @@
 import os
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from io import BytesIO, UnsupportedOperation
 from operator import itemgetter
 from pathlib import Path
@@ -38,9 +38,6 @@ from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Optional,
-    Union,
     cast,
 )
 
@@ -56,6 +53,9 @@ from ._utils import (
     WHITESPACES_AS_BYTES,
     StrByteType,
     StreamType,
+    _TraversalState,
+    get_stream_data,
+    get_stream_size,
     logger_warning,
     read_non_whitespace,
     read_previous_line,
@@ -74,6 +74,7 @@ from .errors import (
 )
 from .generic import (
     ArrayObject,
+    ByteStringObject,
     Destination,
     DictionaryObject,
     EncodedStreamObject,
@@ -113,26 +114,32 @@ class PdfReader(PdfDocCommon):
         root_object_recovery_limit: The maximum number of objects to query
             for recovering the Root object in non-strict mode. To disable
             this security measure, pass ``None``.
+        xref_stream_maximum_entries: The maximum number of entries which are
+            allowed inside a stream-based cross-reference stream.
 
     """
 
+    xref: dict[int, dict[Any, Any]]
+    trailer: DictionaryObject
+
     def __init__(
         self,
-        stream: Union[StrByteType, Path],
+        stream: StrByteType | Path,
         strict: bool = False,
-        password: Union[str, bytes, None] = None,
+        password: str | bytes | None = None,
         *,
-        root_object_recovery_limit: Optional[int] = 10_000,
+        root_object_recovery_limit: int | None = 10_000,
+        xref_stream_maximum_entries: int = 2_000_000,
     ) -> None:
         self.strict = strict
-        self.flattened_pages: Optional[list[PageObject]] = None
+        self.flattened_pages: list[PageObject] | None = None
 
         #: Storage of parsed PDF objects.
-        self.resolved_objects: dict[tuple[Any, Any], Optional[PdfObject]] = {}
+        self.resolved_objects: dict[tuple[Any, Any], PdfObject | None] = {}
 
         self._startxref: int = 0
         self.xref_index = 0
-        self.xref: dict[int, dict[Any, Any]] = {}
+        self.xref = {}
         self.xref_free_entry: dict[int, dict[Any, Any]] = {}
         self.xref_objStm: dict[int, tuple[Any, Any]] = {}
         self.trailer = DictionaryObject()
@@ -141,26 +148,29 @@ class PdfReader(PdfDocCommon):
         self._root_object_recovery_limit = (
             root_object_recovery_limit if isinstance(root_object_recovery_limit, int) else sys.maxsize
         )
+        self._xref_stream_maximum_entries = xref_stream_maximum_entries
+        self._xref_stream_entry_count = 0
         apply_legacy_configuration()
 
         # Map page indirect_reference number to page number
-        self._page_id2num: Optional[dict[Any, Any]] = None
+        self._page_id2num: dict[Any, Any] | None = None
 
-        self._validated_root: Optional[DictionaryObject] = None
+        self._validated_root: DictionaryObject | None = None
 
         self._initialize_stream(stream)
         self._known_objects: set[tuple[int, int]] = set()
 
         self._override_encryption = False
-        self._encryption: Optional[Encryption] = None
+        self._encryption: Encryption | None = None
         if self.is_encrypted:
             self._handle_encryption(password)
         elif password is not None:
             raise PdfReadError("Not an encrypted file")
 
-        self._named_destinations_cache: Optional[dict[str, Destination]] = None
+        self._named_destinations_cache: dict[str, Destination] | None = None
+        self._object_stream_resolution_stack: list[int] = []
 
-    def _initialize_stream(self, stream: Union[StrByteType, Path]) -> None:
+    def _initialize_stream(self, stream: StrByteType | Path) -> None:
         if hasattr(stream, "mode") and "b" not in stream.mode:
             logger_warning(
                 "PdfReader stream/file object is not in binary mode. "
@@ -175,14 +185,24 @@ class PdfReader(PdfDocCommon):
         self.read(stream)
         self.stream = stream
 
-    def _handle_encryption(self, password: Optional[Union[str, bytes]]) -> None:
+    def _handle_encryption(self, password: str | bytes | None) -> None:
         self._override_encryption = True
         # Some documents may not have a /ID, use two empty
         # byte strings instead. Solves
         # https://github.com/py-pdf/pypdf/issues/608
-        id_entry = self.trailer.get(TK.ID)
-        id1_entry = id_entry[0].get_object().original_bytes if id_entry else b""
-        encrypt_entry = cast(DictionaryObject, self.trailer[TK.ENCRYPT].get_object())
+        id_entry = self.trailer.get(TK.ID, NullObject()).get_object()
+        id1_entry = b""
+        if isinstance(id_entry, ArrayObject) and id_entry:
+            first_id_entry = id_entry[0].get_object()
+            if isinstance(first_id_entry, (ByteStringObject, TextStringObject)):
+                id1_entry = first_id_entry.original_bytes
+            else:
+                logger_warning("Ignoring non-string first /ID entry of the trailer", source=__name__)
+        elif not isinstance(id_entry, NullObject):
+            logger_warning("Ignoring malformed /ID entry of the trailer", source=__name__)
+        encrypt_entry = self.trailer[TK.ENCRYPT]
+        if not isinstance(encrypt_entry, DictionaryObject):
+            raise PdfReadError("/Encrypt entry of the trailer is not a dictionary")
         self._encryption = Encryption.read(encrypt_entry, id1_entry)
 
         # try empty password if no password provided
@@ -200,9 +220,9 @@ class PdfReader(PdfDocCommon):
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         self.close()
 
@@ -222,26 +242,35 @@ class PdfReader(PdfDocCommon):
         """Provide access to "/Root". Standardized with PdfWriter."""
         if self._validated_root:
             return self._validated_root
-        root = self.trailer.get(TK.ROOT)
+        root = self.trailer.get(TK.ROOT, NullObject()).get_object()
+        root_dictionary: DictionaryObject
+        if isinstance(root, DictionaryObject):
+            root_dictionary = root
+        else:
+            # The catalog has to be a dictionary. Anything else cannot be used,
+            # thus treat it like an empty one and attempt the recovery below.
+            root_dictionary = DictionaryObject()
         if is_null_or_none(root):
             logger_warning('Cannot find "/Root" key in trailer', source=__name__)
-        elif (
-            cast(DictionaryObject, cast(PdfObject, root).get_object()).get("/Type")
-            == "/Catalog"
-        ):
-            self._validated_root = cast(
-                DictionaryObject, cast(PdfObject, root).get_object()
-            )
+        elif root_dictionary.get("/Type") == "/Catalog":
+            self._validated_root = root_dictionary
         else:
             logger_warning("Invalid Root object in trailer", source=__name__)
         if self._validated_root is None:
             logger_warning('Searching object with "/Catalog" key', source=__name__)
             number_of_objects = cast(int, self.trailer.get("/Size", 0))
+            if not isinstance(number_of_objects, int):
+                # the trailer may be corrupted and carry a non-integer /Size;
+                # treat it like a missing one and fail with the regular
+                # PdfReadError for an unrecoverable root
+                number_of_objects = 0
             for i in range(number_of_objects):
                 if i >= self._root_object_recovery_limit:
                     raise LimitReachedError("Maximum Root object recovery limit reached.")
                 try:
                     obj = self.get_object(i + 1)
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:  # to be sure to capture all errors
                     obj = None
                 if isinstance(obj, DictionaryObject) and obj.get("/Type") == "/Catalog":
@@ -253,21 +282,19 @@ class PdfReader(PdfDocCommon):
                     )
                     break
         if self._validated_root is None:
-            if not is_null_or_none(root) and "/Pages" in cast(DictionaryObject, cast(PdfObject, root).get_object()):
+            if "/Pages" in root_dictionary:
                 logger_warning(
                     "Possible root found at %(root_ref)r, but missing /Catalog key",
                     source=__name__,
-                    root_ref=cast(PdfObject, root).indirect_reference,
+                    root_ref=root_dictionary.indirect_reference,
                 )
-                self._validated_root = cast(
-                    DictionaryObject, cast(PdfObject, root).get_object()
-                )
+                self._validated_root = root_dictionary
             else:
                 raise PdfReadError("Cannot find Root object in pdf")
         return self._validated_root
 
     @property
-    def _info(self) -> Optional[DictionaryObject]:
+    def _info(self) -> DictionaryObject | None:
         """
         Provide access to "/Info". Standardized with PdfWriter.
 
@@ -287,7 +314,7 @@ class PdfReader(PdfDocCommon):
         return info
 
     @property
-    def _ID(self) -> Optional[ArrayObject]:
+    def _ID(self) -> ArrayObject | None:
         """
         Provide access to "/ID". Standardized with PdfWriter.
 
@@ -295,11 +322,11 @@ class PdfReader(PdfDocCommon):
             /ID array; None if the entry does not exist
 
         """
-        id = self.trailer.get(TK.ID, None)
-        if is_null_or_none(id):
+        file_identifiers = self.trailer.get(TK.ID, None)
+        if is_null_or_none(file_identifiers):
             return None
-        assert id is not None, "mypy"
-        return cast(ArrayObject, id.get_object())
+        assert file_identifiers is not None, "mypy"
+        return cast(ArrayObject, file_identifiers.get_object())
 
     @property
     def pdf_header(self) -> str:
@@ -318,17 +345,21 @@ class PdfReader(PdfDocCommon):
         return pdf_file_version
 
     @property
-    def xmp_metadata(self) -> Optional[XmpInformation]:
+    def xmp_metadata(self) -> XmpInformation | None:
         """XMP (Extensible Metadata Platform) data."""
         try:
-            self._override_encryption = True
+            # The document-level metadata stream is exempt from encryption
+            # only if /EncryptMetadata is false (ISO 32000-2, Table 21).
+            self._override_encryption = (
+                self._encryption is not None and not self._encryption.EncryptMetadata
+            )
             return cast(XmpInformation, self.root_object.xmp_metadata)
         finally:
             self._override_encryption = False
 
     def _get_page_number_by_indirect(
-        self, indirect_reference: Union[int, NullObject, IndirectObject, None]
-    ) -> Optional[int]:
+        self, indirect_reference: int | NullObject | IndirectObject | None
+    ) -> int | None:
         """
         Retrieve the page number from an indirect reference.
 
@@ -357,112 +388,189 @@ class PdfReader(PdfDocCommon):
     def _get_object_from_stream(
         self, indirect_reference: IndirectObject
     ) -> PdfObject:
-        # indirect reference to object in object stream
-        # read the entire object stream into memory
-        stmnum, _idx = self.xref_objStm[indirect_reference.idnum]
-        obj_stm: EncodedStreamObject = IndirectObject(stmnum, 0, self).get_object()  # type: ignore[assignment]
-        # This is an xref to a stream, so its type better be a stream
-        assert cast(str, obj_stm["/Type"]) == "/ObjStm"
-        # Parse ALL objects in this stream in one pass and cache them.
-        # This avoids O(N²) behavior when many objects from the same stream
-        # are resolved individually (each call would re-parse the header).
-        stream_data = BytesIO(obj_stm.get_data())
-        n = int(obj_stm["/N"])  # type: ignore[call-overload]
-        first_offset = int(obj_stm["/First"])  # type: ignore[call-overload]
-
-        # ObjStm header format: "objnum offset objnum offset ..."
-        # smallest possible entry: "0 0" = 3 bytes (1 digit + 1 space + 1 digit)
-        # using // 4 would reject a valid 3-byte single entry (3 // 4 = 0)
-        max_n = stream_data.getbuffer().nbytes // 3
-        stream_data.seek(0)
-        if n > max_n:
-            if self.strict:
-                raise LimitReachedError(f"Value /N {n} for object {stmnum} exceeds maximum allowed value {max_n}.")
-            logger_warning(
-                "Value /N %(n)d for object %(stmnum)d exceeds maximum allowed value %(max_n)d. Limiting to %(max_n)d.",
-                source=__name__,
-                n=n,
-                stmnum=stmnum,
-                max_n=max_n,
-            )
-            n = max_n
-
-        # Phase 1: Read the index (objnum, offset) pairs from the header.
-        obj_index: list[tuple[int, int]] = []
-        for _i in range(n):
-            read_non_whitespace(stream_data)
-            stream_data.seek(-1, 1)
-            objnum = NumberObject.read_from_stream(stream_data)
-            read_non_whitespace(stream_data)
-            stream_data.seek(-1, 1)
-            offset = NumberObject.read_from_stream(stream_data)
-            read_non_whitespace(stream_data)
-            stream_data.seek(-1, 1)
-            obj_index.append((int(objnum), int(offset)))
-
-        # Phase 2: Parse each object and cache it.
-        target_obj: PdfObject = NullObject()
-        found = False
-        for i, (obj_num, obj_offset) in enumerate(obj_index):
-            # Skip objects already in the cache.
-            cached = self.cache_get_indirect_object(0, obj_num)
-            if cached is not None:
-                if obj_num == indirect_reference.idnum:
-                    target_obj = cached
-                    found = True
-                continue
-
-            stream_data.seek(first_offset + obj_offset, 0)
-
-            # To cope with case where the 'pointer' is on a white space
-            read_non_whitespace(stream_data)
-            stream_data.seek(-1, 1)
-
-            try:
-                obj = read_object(stream_data, self)
-            except PdfStreamError as exc:
-                # Stream object cannot be read. Normally, a critical error, but
-                # Adobe Reader doesn't complain, so continue (in strict mode?)
-                logger_warning(
-                    "Invalid stream (index %(index)d) within object %(obj_num)d 0: %(exc)s",
-                    source=__name__,
-                    index=i,
-                    obj_num=obj_num,
-                    exc=exc,
-                )
-                if self.strict:  # pragma: no cover
-                    raise PdfReadError(
-                        f"Cannot read object stream: {exc}"
-                    )  # pragma: no cover
-                obj = NullObject()  # pragma: no cover
-
-            # Only cache if this stream is the authoritative source for the object.
-            # Incremental updates may override objects originally in the stream;
-            # caching those stale versions would shadow the newer xref entry.
-            authoritative_stm, _idx = self.xref_objStm.get(obj_num, (None, None))
-            if authoritative_stm == stmnum:
-                self.cache_indirect_object(0, obj_num, obj)
-
-            if obj_num == indirect_reference.idnum:
-                target_obj = obj
-                found = True
-
-        if not found and self.strict:  # pragma: no cover
+        obj_id = indirect_reference.idnum
+        if obj_id in self._object_stream_resolution_stack:
+            start = self._object_stream_resolution_stack.index(obj_id)
+            cycle = [*self._object_stream_resolution_stack[start:], obj_id]
             raise PdfReadError(
-                "This is a fatal error in strict mode."
-            )  # pragma: no cover
-        return target_obj
+                "Circular object-stream reference detected: " + " -> ".join(map(str, cycle))
+            )
+        self._object_stream_resolution_stack.append(obj_id)
+
+        try:
+            # indirect reference to object in object stream
+            # read the entire object stream into memory
+            stmnum, _idx = self.xref_objStm[indirect_reference.idnum]
+            obj_stm: EncodedStreamObject = IndirectObject(stmnum, 0, self).get_object()  # type: ignore[assignment]
+            # This is an xref to a stream, so its type better be a stream
+            assert cast(str, obj_stm["/Type"]) == "/ObjStm"
+            # Parse ALL objects in this stream in one pass and cache them.
+            # This avoids O(N²) behavior when many objects from the same stream
+            # are resolved individually (each call would re-parse the header).
+            stream_data = BytesIO(obj_stm.get_data())
+            n_value = obj_stm.get("/N")
+            first_value = obj_stm.get("/First")
+            if not isinstance(n_value, NumberObject) or not isinstance(
+                first_value, NumberObject
+            ):
+                raise PdfReadError(
+                    f"Invalid /ObjStm header for object {stmnum}: "
+                    "/N or /First missing or not a number"
+                )
+            n = int(n_value)
+            first_offset = int(first_value)
+
+            stream_length = get_stream_size(stream_data)
+            if n < 0 or not 0 <= first_offset <= stream_length:
+                # A negative /N, or a /First outside the stream, cannot
+                # describe a valid object stream; treating it as empty
+                # avoids leaking a ValueError/OverflowError from a bad seek.
+                if self.strict:
+                    raise PdfReadError(
+                        f"Invalid /N ({n}) or /First ({first_offset}) in object stream {stmnum}."
+                    )
+                logger_warning(
+                    (
+                        "Invalid /N (%(n)d) or /First (%(first)d) in object stream "
+                        "%(stmnum)d; ignoring the stream."
+                    ),
+                    source=__name__,
+                    n=n,
+                    first=first_offset,
+                    stmnum=stmnum,
+                )
+                return NullObject()
+
+            # ObjStm header format: "objnum offset objnum offset ..."
+            # smallest possible entry: "0 0" = 3 bytes (1 digit + 1 space + 1 digit)
+            # using // 4 would reject a valid 3-byte single entry (3 // 4 = 0)
+            max_n = stream_length // 3
+            stream_data.seek(0)
+            if n > max_n:
+                if self.strict:
+                    raise LimitReachedError(f"Value /N {n} for object {stmnum} exceeds maximum allowed value {max_n}.")
+                logger_warning(
+                    (
+                        "Value /N %(n)d for object %(stmnum)d exceeds maximum allowed value %(max_n)d. "
+                        "Limiting to %(max_n)d."
+                    ),
+                    source=__name__,
+                    n=n,
+                    stmnum=stmnum,
+                    max_n=max_n,
+                )
+                n = max_n
+
+            # Phase 1: Read the index (objnum, offset) pairs from the header.
+            obj_index: list[tuple[int, int]] = []
+            last_offset: int = -1
+            for _i in range(n):
+                read_non_whitespace(stream_data)
+                stream_data.seek(-1, 1)
+                objnum = NumberObject.read_from_stream(stream_data)
+                read_non_whitespace(stream_data)
+                stream_data.seek(-1, 1)
+                offset = NumberObject.read_from_stream(stream_data)
+                read_non_whitespace(stream_data)
+                stream_data.seek(-1, 1)
+                if objnum < 0 or offset < 0 or first_offset + offset > stream_length:
+                    # An object number or target position outside the stream
+                    # cannot be valid; skipping the entry avoids leaking a
+                    # ValueError/OverflowError from a bad seek while keeping
+                    # the other entries.
+                    if self.strict:
+                        raise PdfReadError(
+                            f"Invalid object number ({objnum}) or offset ({offset}) "
+                            f"in object stream {stmnum}."
+                        )
+                    logger_warning(
+                        (
+                            "Invalid object number (%(objnum)d) or offset (%(offset)d) "
+                            "in object stream %(stmnum)d; skipping the entry."
+                        ),
+                        source=__name__,
+                        objnum=objnum,
+                        offset=offset,
+                        stmnum=stmnum,
+                    )
+                    continue
+                int_offset = int(offset)
+                if int_offset <= last_offset:
+                    raise PdfReadError(f"Invalid offset {offset} in object stream {stmnum}.")
+                last_offset = int_offset
+                obj_index.append((int(objnum), int_offset))
+
+            # Phase 2: Parse each object and cache it.
+            target_obj: PdfObject = NullObject()
+            found = False
+            for i, (obj_num, obj_offset) in enumerate(obj_index):
+                # Skip objects already in the cache.
+                cached = self.cache_get_indirect_object(0, obj_num)
+                if cached is not None:
+                    if obj_num == indirect_reference.idnum:
+                        target_obj = cached
+                        found = True
+                    continue
+
+                stream_data.seek(first_offset + obj_offset, 0)
+
+                # To cope with case where the 'pointer' is on a white space
+                read_non_whitespace(stream_data)
+                stream_data.seek(-1, 1)
+
+                try:
+                    obj = read_object(stream_data, self)
+                except PdfStreamError as exc:
+                    # Stream object cannot be read. Normally, a critical error, but
+                    # Adobe Reader doesn't complain, so continue (in strict mode?)
+                    logger_warning(
+                        "Invalid stream (index %(index)d) within object %(obj_num)d 0: %(exc)s",
+                        source=__name__,
+                        index=i,
+                        obj_num=obj_num,
+                        exc=exc,
+                    )
+                    if self.strict:  # pragma: no cover
+                        raise PdfReadError(
+                            f"Cannot read object stream: {exc}"
+                        ) from exc  # pragma: no cover
+                    obj = NullObject()  # pragma: no cover
+
+                # Only cache if this stream is the authoritative source for the object.
+                # Incremental updates may override objects originally in the stream;
+                # caching those stale versions would shadow the newer xref entry.
+                authoritative_stm, _idx = self.xref_objStm.get(obj_num, (None, None))
+                if authoritative_stm == stmnum:
+                    self.cache_indirect_object(0, obj_num, obj)
+
+                if obj_num == indirect_reference.idnum:
+                    target_obj = obj
+                    found = True
+
+            if not found and self.strict:  # pragma: no cover
+                raise PdfReadError(
+                    "This is a fatal error in strict mode."
+                )  # pragma: no cover
+            return target_obj
+        finally:
+            self._object_stream_resolution_stack.pop()
 
     def get_object(
-        self, indirect_reference: Union[int, IndirectObject]
-    ) -> Optional[PdfObject]:
+        self, indirect_reference: int | IndirectObject
+    ) -> PdfObject | None:
         if isinstance(indirect_reference, int):
             indirect_reference = IndirectObject(indirect_reference, 0, self)
+
         retval = self.cache_get_indirect_object(
             indirect_reference.generation, indirect_reference.idnum
         )
-        if retval is not None:
+        key = (
+            indirect_reference.generation,
+            indirect_reference.idnum,
+        )
+        if key in self.resolved_objects:
             return retval
+
         if (
             indirect_reference.generation == 0
             and indirect_reference.idnum in self.xref_objStm
@@ -485,14 +593,10 @@ class PdfReader(PdfDocCommon):
                     or generation != indirect_reference.generation
                 ):
                     raise PdfReadError("Not matching, we parse the file for it")
+            except MemoryError:  # pragma: no cover  # TODO: BLE001
+                raise
             except Exception:
-                if hasattr(self.stream, "getbuffer"):
-                    buf = bytes(self.stream.getbuffer())
-                else:
-                    p = self.stream.tell()
-                    self.stream.seek(0, 0)
-                    buf = self.stream.read(-1)
-                    self.stream.seek(p, 0)
+                buf = get_stream_data(self.stream)
                 m = re.search(
                     rf"\s{indirect_reference.idnum}\s+{indirect_reference.generation}\s+obj".encode(),
                     buf,
@@ -548,13 +652,7 @@ class PdfReader(PdfDocCommon):
                     strict=self.strict,
                 )
         else:
-            if hasattr(self.stream, "getbuffer"):
-                buf = bytes(self.stream.getbuffer())
-            else:
-                p = self.stream.tell()
-                self.stream.seek(0, 0)
-                buf = self.stream.read(-1)
-                self.stream.seek(p, 0)
+            buf = get_stream_data(self.stream)
             m = re.search(
                 rf"\s{indirect_reference.idnum}\s+{indirect_reference.generation}\s+obj".encode(),
                 buf,
@@ -639,23 +737,23 @@ class PdfReader(PdfDocCommon):
 
         try:
             return int(idnum), int(generation)
-        except (ValueError, OverflowError) as e:
+        except (ValueError, OverflowError) as exception:
             # Only raise a ValueError here as other types would break future processing.
             raise ValueError(
-                f"Invalid indirect object reference ({idnum!r} {generation!r} R): {e}"
-            ) from e
+                f"Invalid indirect object reference ({idnum!r} {generation!r} R): {exception}"
+            ) from exception
 
     def cache_get_indirect_object(
         self, generation: int, idnum: int
-    ) -> Optional[PdfObject]:
+    ) -> PdfObject | None:
         try:
             return self.resolved_objects.get((generation, idnum))
-        except RecursionError:
-            raise PdfReadError("Maximum recursion depth reached.")
+        except RecursionError as exception:  # pragma: no cover
+            raise PdfReadError("Maximum recursion depth reached.") from exception  # pragma: no cover
 
     def cache_indirect_object(
-        self, generation: int, idnum: int, obj: Optional[PdfObject]
-    ) -> Optional[PdfObject]:
+        self, generation: int, idnum: int, obj: PdfObject | None
+    ) -> PdfObject | None:
         if (generation, idnum) in self.resolved_objects:
             msg = "Overwriting cache for %(generation)d %(idnum)d"
             values = {"generation": generation, "idnum": idnum}
@@ -688,6 +786,16 @@ class PdfReader(PdfDocCommon):
         self._basic_validation(stream)
         self._find_eof_marker(stream)
         startxref = self._find_startxref_pos(stream)
+        if startxref < 0:
+            # A negative offset cannot point into the file. Treat it like the
+            # zero case (#3157) so the xref table is repaired instead of
+            # leaking a ValueError from a negative seek.
+            logger_warning(
+                "Negative startxref pointer (%(startxref)d), treating it as zero.",
+                source=__name__,
+                startxref=startxref,
+            )
+            startxref = 0
         self._startxref = startxref
 
         # check and eventually correct the startxref only if not strict
@@ -713,17 +821,17 @@ class PdfReader(PdfDocCommon):
                 xref_k = sorted(
                     xref_entry.keys()
                 )  # ensure ascending to prevent damage
-                for id in xref_k:
-                    stream.seek(xref_entry[id], 0)
+                for xref_id in xref_k:
+                    stream.seek(xref_entry[xref_id], 0)
                     try:
                         pid, _pgen = self.read_object_header(stream)
                     except ValueError:
                         self._rebuild_xref_table(stream)
                         break
-                    if pid == id - self.xref_index:
+                    if pid == xref_id - self.xref_index:
                         # fixing index item per item is required for revised PDF.
-                        self.xref[gen][pid] = self.xref[gen][id]
-                        del self.xref[gen][id]
+                        self.xref[gen][pid] = self.xref[gen][xref_id]
+                        del self.xref[gen][xref_id]
                     # if not, then either it's just plain wrong, or the
                     # non-zero-index is actually correct
             stream.seek(loc, 0)  # return to where it was
@@ -735,19 +843,19 @@ class PdfReader(PdfDocCommon):
                 if gen == 65535:
                     continue
                 ids = list(xref_entry.keys())
-                for id in ids:
-                    stream.seek(xref_entry[id], 0)
+                for xref_id in ids:
+                    stream.seek(xref_entry[xref_id], 0)
                     try:
                         self.read_object_header(stream)
                     except ValueError:
                         logger_warning(
                             "Ignoring wrong pointing object %(id)d %(gen)d (offset %(offset)d)",
                             source=__name__,
-                            id=id,
+                            id=xref_id,
                             gen=gen,
-                            offset=xref_entry[id],
+                            offset=xref_entry[xref_id],
                         )
-                        del xref_entry[id]  # we can delete the id, we are parsing ids
+                        del xref_entry[xref_id]  # we can delete the id, we are parsing ids
             stream.seek(loc, 0)  # return to where it was
 
     def _basic_validation(self, stream: StreamType) -> None:
@@ -755,8 +863,8 @@ class PdfReader(PdfDocCommon):
         stream.seek(0, os.SEEK_SET)
         try:
             header_byte = stream.read(5)
-        except UnicodeDecodeError:
-            raise UnsupportedOperation("cannot read header")
+        except UnicodeDecodeError as exception:
+            raise UnsupportedOperation("cannot read header") from exception
         if header_byte == b"":
             raise EmptyFileError("Cannot read an empty file")
         if header_byte != b"%PDF-":
@@ -775,11 +883,32 @@ class PdfReader(PdfDocCommon):
         According to the specs, the %%EOF marker should be at the very end of
         the file. Hence for standard-compliant PDF documents this function will
         read only the last part (DEFAULT_BUFFER_SIZE).
+
+        Producers that omit the line break before the marker (``startxref
+        256%%EOF`` or ``256%%EOF``) are accepted as well (#4127).
         """
         header_size = 8  # to parse whole file, Header is e.g. '%PDF-1.6'
         line = b""
         first = True
-        while not line.startswith(b"%%EOF"):
+        # Bytes of `line` end at this position. An inline %%EOF therefore
+        # begins at end_position - len(line) + marker_index.
+        end_position = stream.tell()
+        while True:
+            marker_index = line.find(b"%%EOF")
+            if marker_index == 0:
+                break
+            if marker_index > 0 and first:
+                # Only the trailing line is allowed to carry an inline marker.
+                # Earlier lines keep the historical "starts with %%EOF" rule so
+                # a %%EOF buried in stream data is not treated as the trailer.
+                # Leading whitespace in front of the marker is ignored.
+                if line[:marker_index].lstrip(WHITESPACES_AS_BYTES):
+                    logger_warning(
+                        "EOF marker not at start of line",
+                        source=__name__,
+                    )
+                    stream.seek(end_position - len(line) + marker_index)
+                break
             if line != b"" and first:
                 if any(
                     line.strip().endswith(tr) for tr in (b"%%EO", b"%%E", b"%%", b"%")
@@ -799,6 +928,7 @@ class PdfReader(PdfDocCommon):
                 if self.strict:
                     raise PdfReadError("EOF marker not found")
                 logger_warning("EOF marker not found", source=__name__)
+            end_position = stream.tell()
             line = read_previous_line(stream)
 
     def _find_startxref_pos(self, stream: StreamType) -> int:
@@ -831,11 +961,14 @@ class PdfReader(PdfDocCommon):
             )
         try:
             startxref = int(line)
-        except ValueError:
+        except ValueError as exception:  # pragma: no cover
             # 'startxref' may be on the same line as the location
             if not line.startswith(b"startxref"):
-                raise PdfReadError("startxref not found")
-            startxref = int(line[9:].strip())
+                raise PdfReadError("startxref not found") from exception
+            value = line[9:].strip()
+            if not self._is_valid_startxref_value(value):
+                raise PdfReadError("startxref not found") from exception
+            startxref = int(value)
             logger_warning("startxref on same line as offset", source=__name__)
         else:
             line = read_previous_line(stream)
@@ -857,6 +990,15 @@ class PdfReader(PdfDocCommon):
     # backwards scan.
     _MAX_STARTXREF_RECOVERY_LINES = 1000
 
+    @staticmethod
+    def _is_valid_startxref_value(value: bytes) -> bool:
+        if re.fullmatch(rb"[+-]?[0-9]+(?:_[0-9]+)*", value) is None:
+            return False
+        # Respect Python's integer conversion limit without attempting int().
+        max_digits = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        digits = value.lstrip(b"+-").replace(b"_", b"")
+        return not max_digits or len(digits) <= max_digits
+
     @classmethod
     def _find_previous_startxref_pos(cls, stream: StreamType) -> int:
         """
@@ -877,7 +1019,7 @@ class PdfReader(PdfDocCommon):
             The bytes offset of the recovered ``startxref``.
 
         """
-        offset: Optional[int] = None
+        offset: int | None = None
         for _ in range(cls._MAX_STARTXREF_RECOVERY_LINES):
             if stream.tell() <= 0:
                 break
@@ -890,7 +1032,10 @@ class PdfReader(PdfDocCommon):
                 continue
             if len(line) > 9:
                 # 'startxref' on the same line as the offset
-                return int(line[9:].strip())
+                value = line[9:].strip()
+                if not cls._is_valid_startxref_value(value):
+                    continue
+                return int(value)
             if offset is not None:
                 logger_warning(
                     "found startxref pointing to a previous revision after "
@@ -910,6 +1055,22 @@ class PdfReader(PdfDocCommon):
             cache[object_number] = (object_start, generation_number)
         return cache
 
+    def _read_standard_xref_table__handle_size(self, stream: StreamType) -> int | None:
+        size = cast(int, read_object(stream, self))
+        if not isinstance(size, int):
+            logger_warning(
+                "Invalid/Truncated xref table. Rebuilding it.",
+                source=__name__,
+            )
+            self._rebuild_xref_table(stream)
+            stream.read()
+            return None
+        # A valid entry has a size of 20 bytes.
+        size_limit = get_stream_size(stream) // 20
+        if size > size_limit:
+            raise LimitReachedError(f"Declared size {size} exceeds allowed limit of {size_limit}!")
+        return size
+
     def _read_standard_xref_table(self, stream: StreamType) -> None:
         # standard cross-reference table
         ref = stream.read(3)
@@ -918,7 +1079,8 @@ class PdfReader(PdfDocCommon):
         read_non_whitespace(stream)
         stream.seek(-1, 1)
         first_time = True  # check if the first time looking at the xref table
-        recovery_cache: Optional[dict[int, tuple[int, int]]] = None
+        recovery_cache: dict[int, tuple[int, int]] | None = None
+        previous_position: int | None = None
         while True:
             num = cast(int, read_object(stream, self))
             if first_time and num != 0:
@@ -933,14 +1095,8 @@ class PdfReader(PdfDocCommon):
             first_time = False
             read_non_whitespace(stream)
             stream.seek(-1, 1)
-            size = cast(int, read_object(stream, self))
-            if not isinstance(size, int):
-                logger_warning(
-                    "Invalid/Truncated xref table. Rebuilding it.",
-                    source=__name__,
-                )
-                self._rebuild_xref_table(stream)
-                stream.read()
+            size = self._read_standard_xref_table__handle_size(stream)
+            if size is None:
                 return
             read_non_whitespace(stream)
             stream.seek(-1, 1)
@@ -959,6 +1115,8 @@ class PdfReader(PdfDocCommon):
                 while line[0] in b"\x0D\x0A":
                     stream.seek(-20 + 1, 1)
                     line = stream.read(20)
+                    if len(line) != 20:
+                        raise PdfReadError("Unexpected EOF in Xref table.")
 
                 # On the other hand, some malformed PDF files
                 # use a single character EOL without a preceding
@@ -974,16 +1132,11 @@ class PdfReader(PdfDocCommon):
                     entry_type_b = line[17:18]
 
                     offset, generation = int(offset_b), int(generation_b)
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
-                    if hasattr(stream, "getbuffer"):
-                        buf = bytes(stream.getbuffer())
-                    else:
-                        p = stream.tell()
-                        stream.seek(0, 0)
-                        buf = stream.read(-1)
-                        stream.seek(p)
-
                     if recovery_cache is None:
+                        buf = get_stream_data(stream)
                         recovery_cache = self._load_recovery_cache(buf)
 
                     if num not in recovery_cache:
@@ -1018,10 +1171,14 @@ class PdfReader(PdfDocCommon):
                         self.xref[generation][num] = offset
                     try:
                         self.xref_free_entry[generation][num] = entry_type_b == b"f"
+                    except MemoryError:  # pragma: no cover  # TODO: BLE001
+                        raise
                     except Exception:
                         pass
                     try:
                         self.xref_free_entry[65535][num] = entry_type_b == b"f"
+                    except MemoryError:  # pragma: no cover  # TODO: BLE001
+                        raise
                     except Exception:
                         pass
                 cnt += 1
@@ -1038,19 +1195,28 @@ class PdfReader(PdfDocCommon):
                 stream.seek(-1, 1)
             stream.seek(-1, 1)
             trailer_tag = stream.read(7)
-            if trailer_tag != b"trailer":
-                # more xrefs!
-                stream.seek(-7, 1)
-            else:
+            if trailer_tag == b"trailer":
                 break
 
+            # More xrefs should move the parser to another section.
+            stream.seek(-7, 1)
+
+            # Detect a repeated read at the same position.
+            rewound_position = stream.tell()
+            if rewound_position == previous_position:
+                raise PdfReadError(
+                    f"Xref parsing stuck at position {rewound_position}: {trailer_tag!r}"
+                )
+            previous_position = rewound_position
+
     def _read_xref_tables_and_trailers(
-        self, stream: StreamType, startxref: Optional[int], xref_issue_nr: int
+        self, stream: StreamType, startxref: int | None, xref_issue_nr: int
     ) -> None:
         """Read the cross-reference tables and trailers in the PDF stream."""
         self.xref = {}
         self.xref_free_entry = {}
         self.xref_objStm = {}
+        self._xref_stream_entry_count = 0
         self.trailer = DictionaryObject()
         visited_xref_offsets: set[int] = set()
         while startxref is not None:
@@ -1074,20 +1240,22 @@ class PdfReader(PdfDocCommon):
                 try:
                     self._rebuild_xref_table(stream)
                     break
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     xref_issue_nr = 0
             elif x.isdigit():
                 try:
                     xrefstream = self._read_pdf15_xref_stream(stream)
-                except Exception as e:
+                except Exception as exception:  # pragma: no cover
                     if TK.ROOT in self.trailer:
                         logger_warning(
                             "Previous trailer cannot be read: %(args)s",
                             source=__name__,
-                            args=e.args,
+                            args=exception.args,
                         )
                         break
-                    raise PdfReadError(f"Trailer cannot be read: {e!s}")
+                    raise PdfReadError(f"Trailer cannot be read: {exception!s}") from exception  # pragma: no cover
                 self._process_xref_stream(xrefstream)
                 if "/Prev" in xrefstream:
                     startxref = cast(int, xrefstream["/Prev"])
@@ -1111,7 +1279,7 @@ class PdfReader(PdfDocCommon):
             self._read_pdf15_xref_stream(self.stream)
             self.stream.seek(p, 0)
 
-    def _read_xref(self, stream: StreamType) -> Optional[int]:
+    def _read_xref(self, stream: StreamType) -> int | None:
         self._read_standard_xref_table(stream)
         if stream.read(1) == b"":
             return None
@@ -1127,6 +1295,8 @@ class PdfReader(PdfDocCommon):
             stream.seek(cast(int, new_trailer["/XRefStm"]) + 1, 0)
             try:
                 self._read_pdf15_xref_stream(stream)
+            except MemoryError:  # pragma: no cover  # TODO: BLE001
+                raise
             except Exception:
                 logger_warning(
                     "XRef object at %(xref_stm)d can not be read, some object may be missing",
@@ -1140,7 +1310,7 @@ class PdfReader(PdfDocCommon):
 
     def _read_xref_other_error(
         self, stream: StreamType, startxref: int
-    ) -> Optional[int]:
+    ) -> int | None:
         # some PDFs have /Prev=0 in the trailer, instead of no /Prev
         if startxref == 0:
             if self.strict:
@@ -1174,9 +1344,9 @@ class PdfReader(PdfDocCommon):
             logger_warning("Invalid parent xref., rebuild xref", source=__name__)
             try:
                 self._rebuild_xref_table(stream)
-                return None
-            except Exception:
-                raise PdfReadError("Cannot rebuild xref")
+            except Exception as exception:  # pragma: no cover
+                raise PdfReadError("Cannot rebuild xref") from exception  # pragma: no cover
+            return None
         raise PdfReadError("Could not find xref table at specified location")
 
     def _sanitize_pdf15_xref_stream_index_pairs(
@@ -1204,6 +1374,16 @@ class PdfReader(PdfDocCommon):
             # `index_pairs` has the format `[start0, count0, start1, count1, ...]`
             # Only modify the counts here, but keep the start values.
             if index % 2 == 1:
+                if pair_value_int < 0:
+                    if self.strict:
+                        raise PdfStreamError(f"Negative XRef count {pair_value_int}.")
+                    logger_warning(
+                        "Negative XRef count %(count)d, using 0.",
+                        source=__name__,
+                        count=pair_value_int,
+                    )
+                    pair_value_int = 0
+
                 if total + pair_value_int > max_entries:
                     if self.strict:
                         raise LimitReachedError(
@@ -1248,9 +1428,16 @@ class PdfReader(PdfDocCommon):
             index_pairs=index_pairs, entry_sizes=entry_sizes, xref_stream=xref_stream
         )
 
+        self._xref_stream_entry_count += sum(index_pairs[1::2])
+        if self._xref_stream_entry_count > self._xref_stream_maximum_entries:
+            raise LimitReachedError(
+                f"Maximum XRef stream entry limit reached: "
+                f"{self._xref_stream_entry_count} > {self._xref_stream_maximum_entries}."
+            )
+
         stream_data = BytesIO(xref_stream.get_data())
 
-        def get_entry(i: int) -> Union[int, tuple[int, ...]]:
+        def get_entry(i: int) -> int | tuple[int, ...]:
             # Reads the correct number of bytes for each entry. See the
             # discussion of the W parameter in PDF spec table 17.
             if entry_sizes[i] > 0:
@@ -1263,7 +1450,7 @@ class PdfReader(PdfDocCommon):
                 return 1  # First value defaults to 1
             return 0
 
-        def used_before(num: int, generation: Union[int, tuple[int, ...]]) -> bool:
+        def used_before(num: int, generation: int | tuple[int, ...]) -> bool:
             # We move backwards through the xrefs, don't replace any.
             return num in self.xref.get(generation, []) or num in self.xref_objStm  # type: ignore[arg-type]
 
@@ -1339,7 +1526,12 @@ class PdfReader(PdfDocCommon):
             object_start = index_before_space + 1
 
             # Validate
-            if object_start < object_end and generation_start < generation_end:
+            if (
+                object_start < object_end
+                and object_end - object_start <= IndirectObject._MAXIMUM_PART_LENGTH
+                and generation_start < generation_end
+                and generation_end - generation_start <= IndirectObject._MAXIMUM_PART_LENGTH
+            ):
                 object_number = int(data[object_start:object_end])
                 generation_number = int(data[generation_start:generation_end])
 
@@ -1438,6 +1630,8 @@ class PdfReader(PdfDocCommon):
                     # Do not let the broad recovery below bypass the token-length limit
                     # when strict parsing is enabled.
                     raise
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:  # could be multiple causes
                     pass
 
@@ -1454,8 +1648,8 @@ class PdfReader(PdfDocCommon):
     def _read_xref_subsections(
         self,
         idx_pairs: list[int],
-        get_entry: Callable[[int], Union[int, tuple[int, ...]]],
-        used_before: Callable[[int, Union[int, tuple[int, ...]]], bool],
+        get_entry: Callable[[int], int | tuple[int, ...]],
+        used_before: Callable[[int, int | tuple[int, ...]], bool],
     ) -> None:
         """Read and process the subsections of the xref."""
         for start, size in self._pairs(idx_pairs):
@@ -1493,7 +1687,7 @@ class PdfReader(PdfDocCommon):
             yield array[i], array[i + 1]
             i += 2
 
-    def decrypt(self, password: Union[str, bytes]) -> PasswordType:
+    def decrypt(self, password: str | bytes) -> PasswordType:
         """
         When using an encrypted / secured PDF file with the PDF Standard
         encryption handler, this function will allow the file to be decrypted.
@@ -1528,7 +1722,7 @@ class PdfReader(PdfDocCommon):
         """
         return TK.ENCRYPT in self.trailer
 
-    def add_form_topname(self, name: str) -> Optional[DictionaryObject]:
+    def add_form_topname(self, name: str) -> DictionaryObject | None:
         """
         Add a top level form that groups all form fields below it.
 
@@ -1553,11 +1747,14 @@ class PdfReader(PdfDocCommon):
         interim = DictionaryObject()
         interim[NameObject("/T")] = TextStringObject(name)
         interim[NameObject("/Kids")] = acroform[NameObject("/Fields")]
-        self.cache_indirect_object(
-            0,
-            max(i for (g, i) in self.resolved_objects if g == 0) + 1,
-            interim,
-        )
+        # Allocate the new object_id beyond the source-file range and all cached object IDs.
+        object_id = max(
+            cast(int, self.trailer.get("/Size", 0)) - 1,
+            max((i for entries in self.xref.values() for i in entries), default=0),
+            max(self.xref_objStm, default=0),
+            max((i for _, i in self.resolved_objects), default=0),
+        ) + 1
+        self.cache_indirect_object(0, object_id, interim)
         arr = ArrayObject()
         arr.append(interim.indirect_reference)
         acroform[NameObject("/Fields")] = arr
@@ -1572,7 +1769,7 @@ class PdfReader(PdfDocCommon):
             obj[NameObject("/Parent")] = interim.indirect_reference
         return interim
 
-    def rename_form_topname(self, name: str) -> Optional[DictionaryObject]:
+    def rename_form_topname(self, name: str) -> DictionaryObject | None:
         """
         Rename top level form field that all form fields below it.
 
@@ -1602,8 +1799,8 @@ class PdfReader(PdfDocCommon):
 
     def _repr_mimebundle_(
         self,
-        include: Union[Iterable[str], None] = None,
-        exclude: Union[Iterable[str], None] = None,
+        include: Iterable[str] | None = None,
+        exclude: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         """
         Integration into Jupyter Notebooks.
@@ -1634,15 +1831,23 @@ class PdfReader(PdfDocCommon):
     def _get_named_destinations(
         self,
         *,
-        tree: Optional[DictionaryObject] = None,
-        retval: Optional[dict[str, Destination]] = None,
-        visited: Optional[set[int]] = None,
+        tree: DictionaryObject | None = None,
+        retval: dict[str, Destination] | None = None,
+        visited: set[int] | None = None,
+        depth: int = 0,
+        traversal_state: _TraversalState | None = None,
     ) -> dict[str, Destination]:
         """Override from PdfDocCommon. In the reader we can assume this is
         static, but not in the writer.
         """
         if tree or retval:
-            return super()._get_named_destinations(tree=tree, retval=retval, visited=visited)
+            return super()._get_named_destinations(
+                tree=tree,
+                retval=retval,
+                visited=visited,
+                depth=depth,
+                traversal_state=traversal_state,
+            )
 
         if self._named_destinations_cache is None:
             self._named_destinations_cache = super()._get_named_destinations()

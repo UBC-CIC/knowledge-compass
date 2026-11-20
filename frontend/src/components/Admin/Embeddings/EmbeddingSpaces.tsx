@@ -23,6 +23,7 @@ import {
   jobProgressText,
   purgeEligibilityText,
   type EmbeddingJob,
+  type EmbeddingModelOption,
   type EmbeddingSpace,
   type RegisterPayload,
   type SpaceStatus,
@@ -65,21 +66,54 @@ function Detail({ label, value }: { label: string; value: ReactNode }) {
 const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 
 export default function EmbeddingSpaces() {
-  const { state, loading, error, reload, register, startJob, validate, cutover, purge } = useEmbeddingSpaces();
+  const { state, loading, error, reload, loadModels, register, startJob, validate, cutover, purge } = useEmbeddingSpaces();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tracked, setTracked] = useState<{ spaceId: string; jobId: string } | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registerBusy, setRegisterBusy] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const [models, setModels] = useState<EmbeddingModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelAttempt, setModelAttempt] = useState(0);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [typedName, setTypedName] = useState("");
+  // Skip the golden-set comparison with the live index. Only for when the live model no
+  // longer works and cannot answer the test questions; coverage is always checked.
+  const [skipQuality, setSkipQuality] = useState(false);
+  const [confirmSkipQuality, setConfirmSkipQuality] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const typedId = useId();
+
+  // The model list is loaded when the register dialog opens, and again on Try again.
+  useEffect(() => {
+    if (!registerOpen) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    loadModels()
+      .then((next) => {
+        if (!cancelled) setModels(next);
+      })
+      .catch((e) => {
+        console.error(e);
+        if (!cancelled) {
+          setModels([]);
+          setModelsError(errorText(e, "Couldn't load embedding models from Amazon Bedrock."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [registerOpen, modelAttempt, loadModels]);
 
   // Keep "can be purged from ..." current without a reload.
   useEffect(() => {
@@ -131,9 +165,13 @@ export default function EmbeddingSpaces() {
 
   const validateSpace = (space: EmbeddingSpace) =>
     run(async () => {
-      const jobId = await validate(space.id);
+      const jobId = await validate(space.id, { skipQuality });
       setTracked({ spaceId: space.id, jobId });
-      setNotice("Validation started.");
+      setNotice(
+        skipQuality
+          ? "Validation started. Only coverage is checked; search quality is not compared with the live index."
+          : "Validation started."
+      );
     }, "Couldn't start the validation.");
 
   const submitRegister = async (payload: RegisterPayload) => {
@@ -156,6 +194,7 @@ export default function EmbeddingSpaces() {
     setConfirm({ kind, space });
     setConfirmError(null);
     setTypedName("");
+    setConfirmSkipQuality(false);
   };
   const closeConfirm = () => {
     if (!confirmBusy) setConfirm(null);
@@ -171,7 +210,7 @@ export default function EmbeddingSpaces() {
         await purge(space, typedName);
         setNotice(`"${space.name}" was purged. Its vectors and index were deleted.`);
       } else {
-        const jobId = await cutover(space.id, kind);
+        const jobId = await cutover(space.id, kind, { skipQuality: kind === "activate" && confirmSkipQuality });
         setTracked({ spaceId: space.id, jobId });
         setSelectedId(space.id);
         setNotice(
@@ -290,6 +329,8 @@ export default function EmbeddingSpaces() {
                 type="button"
                 onClick={() => {
                   setRegisterError(null);
+                  setModelsError(null);
+                  setModelsLoading(true);
                   setRegisterOpen(true);
                 }}
               >
@@ -339,7 +380,10 @@ export default function EmbeddingSpaces() {
                           variant={selected?.id === s.id ? "default" : "outline"}
                           aria-pressed={selected?.id === s.id}
                           aria-label={`Manage ${s.name}`}
-                          onClick={() => setSelectedId(s.id)}
+                          onClick={() => {
+                            if (s.id !== selected?.id) setSkipQuality(false);
+                            setSelectedId(s.id);
+                          }}
                         >
                           Manage
                         </Button>
@@ -407,6 +451,22 @@ export default function EmbeddingSpaces() {
                       ? "You have seen the estimate below. Rebuilding embeds only what this index is missing, and can be started again to resume."
                       : "Run a dry run first. Start rebuild turns on once the estimate has finished and you have read it."}
                   </p>
+                  <div className="space-y-1">
+                    <label className="flex min-h-11 cursor-pointer items-center gap-2 text-[13.5px] text-foreground/85">
+                      <input
+                        type="checkbox"
+                        checked={skipQuality}
+                        onChange={(e) => setSkipQuality(e.target.checked)}
+                        aria-describedby={`${typedId}-skip-hint`}
+                        className="size-[17px] accent-primary"
+                      />
+                      Skip the search quality comparison with the live index
+                    </label>
+                    <p id={`${typedId}-skip-hint`} className="text-xs text-foreground/70">
+                      Only use this if the live model has stopped working and cannot answer the test questions. Coverage is
+                      still checked, but nothing confirms the new index finds the right passages as well as the old one.
+                    </p>
+                  </div>
                 </div>
               ) : null}
 
@@ -482,6 +542,10 @@ export default function EmbeddingSpaces() {
             <RegisterSpaceForm
               busy={registerBusy}
               serverError={registerError}
+              models={models}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              onReloadModels={() => setModelAttempt((attempt) => attempt + 1)}
               onSubmit={submitRegister}
               onCancel={() => setRegisterOpen(false)}
             />
@@ -502,6 +566,24 @@ export default function EmbeddingSpaces() {
           onConfirm={runConfirm}
           onCancel={closeConfirm}
         >
+          {confirm.kind === "activate" ? (
+            <div className="space-y-1">
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-foreground/85">
+                <input
+                  type="checkbox"
+                  checked={confirmSkipQuality}
+                  onChange={(e) => setConfirmSkipQuality(e.target.checked)}
+                  aria-describedby={`${typedId}-activate-skip-hint`}
+                  className="size-[17px] accent-primary"
+                />
+                Skip the search quality checks during the switch
+              </label>
+              <p id={`${typedId}-activate-skip-hint`} className="text-xs text-foreground/70">
+                Only if the live model has stopped working. Coverage is still checked, and after the switch the check only
+                confirms the new index finds something.
+              </p>
+            </div>
+          ) : null}
           {confirm.kind === "purge" ? (
             <div className="space-y-1.5">
               <Label htmlFor={typedId}>Type {confirm.space.name} to confirm</Label>
