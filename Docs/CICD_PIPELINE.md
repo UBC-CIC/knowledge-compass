@@ -9,7 +9,7 @@ The source of truth is the CDK code. When this document and the code disagree, t
 | Container pipeline, ECR repositories, scan gate | `cdk/lib/cicd-stack.ts` |
 | Pipeline wiring (images built, branch, environment) | `cdk/bin/cdk.ts` (`CICDStack` props) |
 | Waiting for images on first deploy | `cdk/lib/ingestion-stack.ts`, `cdk/lambda/ecrImageWaiter/index.js` |
-| Frontend build and hosting | `cdk/lib/amplify-stack.ts` |
+| Frontend pipeline, deploy script, and hosting | `cdk/lib/amplify-stack.ts` |
 | CodeBuild log retention | `cdk/lib/log-retention.ts` |
 | Pipeline contract tests | `cdk/test/cicd-stack.test.ts` |
 
@@ -20,7 +20,7 @@ There are two independent automated delivery paths and one manual path.
 | What changes | How it is delivered | Trigger |
 |---|---|---|
 | Crawler and transcriber container images (`cdk/containers/`) | CodePipeline `<STACK-PREFIX>-CICD-DockerImagePipeline`: unit tests, then image build, scan, and push to ECR | Every push to the configured branch |
-| Frontend (`frontend/`) | Amplify Hosting build: lint, unit tests, production build, deploy | Every push to a branch connected to the Amplify app |
+| Frontend (`frontend/`) | CodePipeline `<STACK-PREFIX>-Amplify-FrontendPipeline`: lint, unit tests, production build, then a manual deployment to Amplify Hosting | Every push to the configured branch that changes a file under `frontend/` |
 | Infrastructure, Lambda handlers (Node.js and Python), database migrations, the pipeline itself | `npx cdk deploy --all` run by an operator | Manual |
 
 The CodePipeline runs the full backend test suite, but it does not deploy Lambda code or CloudFormation changes. A change to `cdk/lambda/` or `cdk/lib/` is live only after someone runs `cdk deploy`. See [Deploy the stacks](./DEPLOYMENT_GUIDE.md#deploy-the-stacks) for the command and context values.
@@ -53,7 +53,7 @@ It installs a pinned `boto3` (version set in `cdk/lib/cicd-stack.ts`) and runs, 
 5. `cdk/lambda/knowledgeBase`: `python -m unittest discover -s tests`
 6. `cdk`: `python -m unittest discover -s containers/tests` (crawler and transcriber tests, with heavy dependencies stubbed)
 
-Frontend tests do not run here. They run in the Amplify build.
+Frontend tests do not run here. They run in the frontend pipeline.
 
 ### Build stage
 
@@ -120,6 +120,9 @@ Allow-list changes are part of the CICD stack's buildspec, so they take effect o
 | Image builder role (`DockerBuildRole`) | Push, describe, read scan findings, and `PutImage` on the two pipeline repositories only; `ecr:GetAuthorizationToken` (no resource-level scoping exists); `lambda:GetFunction`/`UpdateFunctionCode`/`UpdateFunctionConfiguration` on the two configured function names |
 | Unit test project role | CDK defaults only (logs and pipeline artifacts) |
 | Image waiter role (Ingestion stack) | `ecr:DescribeImages`/`DescribeRepositories`/`BatchGetImage` on the two repositories; `codepipeline:StartPipelineExecution` on this pipeline |
+| Frontend source action role (Amplify stack) | `codeconnections:UseConnection` and `codestar-connections:UseConnection` on the GitHub connection (the IAM prefix must match the connection ARN's prefix) |
+| Frontend build project role (Amplify stack) | CDK defaults only (logs and pipeline artifacts) |
+| Frontend deploy project role (Amplify stack) | `amplify:GetApp` on the app; `amplify:CreateDeployment`/`StartDeployment`/`GetJob` on the deployment branch and its jobs |
 
 `cdk/test/cicd-stack.test.ts` asserts the ECR scoping, so a change that widens it fails the Test stage.
 
@@ -135,21 +138,41 @@ This is why the GitHub connection must be authorized within about 14 minutes of 
 
 See `cdk/lambda/ecrImageWaiter/README.md` for the waiter's properties, permissions, and troubleshooting.
 
-## Frontend delivery (Amplify Hosting)
+## Frontend pipeline (Amplify Hosting)
 
-The `<STACK-PREFIX>-Amplify` stack creates an Amplify app connected to the same GitHub repository. Amplify builds and hosts the frontend separately from CodePipeline.
+The `<STACK-PREFIX>-Amplify` stack creates an Amplify app with no repository connection and a CodePipeline that builds the frontend and deploys it to that app. No GitHub token is involved: the pipeline reads the repository through the CICD stack's CodeConnections connection, `<STACK-PREFIX>-CICD-github-conn`.
 
-- **Authentication:** a GitHub personal access token from Secrets Manager secret `github-personal-access-token`, JSON field `my-github-token`. Owner is `KC-owner-name`, as for the pipeline.
-- **Branches:** `main` is always connected. If `githubBranch` is set to another branch, that branch is connected too. Amplify builds a connected branch on every push to it.
-- **Pull request previews:** off, so unreviewed PR code is never built or served.
-- **Build spec** (app root `frontend`):
-  - `preBuild`: `nvm install 24`, `nvm use 24`, `npm ci`
-  - `build`: `npm run lint`, `npm test`, `npm run build`
-  - Artifacts: `frontend/dist`
-- **Environment:** Amplify injects the `VITE_*` values (Region, Cognito pool and client IDs, identity pool, REST and WebSocket endpoints) from the API stack at deploy time. Changing them requires `cdk deploy` of the Amplify stack and a new Amplify build.
-- **Response headers:** security headers (including the CSP) are set by the Amplify stack and apply from the next build of the branch.
+```
+GitHub push touching frontend/ ──► Source ──► Build (LintTestBuild) ──► Deploy (AmplifyDeploy) ──► Amplify branch
+```
 
-A lint error or failing frontend test stops the Amplify build, and the previous build keeps serving.
+- **Trigger:** a V2 pipeline trigger on the `githubBranch` branch (default `main`) with the file path filter `frontend/**`. Pushes that change nothing under `frontend/` do not start it. CloudFormation starts one run when the pipeline is created.
+- **Build stage:** the CodeBuild project `<STACK-PREFIX>-Amplify-FrontendBuild` runs on `STANDARD_7_0` with Node.js 24: `npm ci`, `npm run lint`, `npm test`, `npm run build` in `frontend/`. Its output artifact is the contents of `frontend/dist`. The project has no AWS permissions beyond the CodeBuild defaults, so the npm dependencies never run with deploy rights.
+- **Environment:** the build project receives the `VITE_*` values (Region, Cognito pool and client IDs, identity pool, REST and WebSocket endpoints) from the API stack. Changing them requires `cdk deploy` of the Amplify stack, then a new pipeline run.
+- **Deploy stage:** the CodeBuild project `<STACK-PREFIX>-Amplify-FrontendDeploy` runs `FRONTEND_DEPLOY_SCRIPT` from `cdk/lib/amplify-stack.ts`. It refuses to deploy if the Amplify app is still connected to a repository or the artifact has no `index.html`. It then zips the artifact, calls `amplify create-deployment`, uploads the zip to the returned presigned URL (never printed), calls `amplify start-deployment`, and polls `amplify get-job` every 10 seconds for up to 15 minutes. Any status other than `SUCCEED` fails the stage.
+- **Branches:** the Amplify branch `main` always exists, and so does `githubBranch` when it is another branch. Only `githubBranch` receives deployments. Auto build and pull request previews are off on both.
+- **Response headers:** security headers (including the CSP) are set on the Amplify app in the single-app `customHeaders` format and apply from the next deployment of the branch.
+
+A lint error, failing frontend test, or failed deployment stops the pipeline, and the previous deployment keeps serving.
+
+### Moving an existing deployment off the GitHub token
+
+Deployments created before this pipeline have an Amplify app that builds from GitHub with the `github-personal-access-token` secret. Deploying the Amplify stack updates that app in place, so its app ID and URL stay the same. After `npx cdk deploy <STACK-PREFIX>-Amplify`:
+
+1. Check the app no longer has a repository. The command should print `None` or nothing:
+
+   ```bash
+   aws amplify get-app --app-id <APP-ID> --query app.repository --output text --profile <YOUR-PROFILE-NAME>
+   ```
+
+   If it still prints the repository URL, the app kept its connection and the Deploy stage fails with "still connected". The site keeps serving its last build. Amplify accepts manual deployments only once the connection is gone. Replacing the app removes it but gives the app a new ID and URL, which also needs the AllowedOrigins parameter, the gateway origin, and the ingest bucket CORS updated, so plan that as a separate change.
+2. Wait for `<STACK-PREFIX>-Amplify-FrontendPipeline` to succeed, then check the security headers are served:
+
+   ```bash
+   curl -sI https://<githubBranch>.<APP-ID>.amplifyapp.com | grep -i content-security-policy
+   ```
+
+3. Delete the `github-personal-access-token` secret, and revoke the token in GitHub.
 
 ## Running and troubleshooting the pipeline
 
@@ -158,7 +181,7 @@ A lint error or failing frontend test stops the Amplify build, and the previous 
 | Re-run the latest commit | **CodePipeline → Pipelines →** `<STACK-PREFIX>-CICD-DockerImagePipeline` **→ Release change** |
 | See why a stage failed | Open the red stage, **View details**, then the CodeBuild log link |
 | Confirm a promoted image | **Amazon ECR →** `<stack-prefix>-cicd-crawler` / `-transcriber`: `latest` and the newest candidate tag share one digest |
-| Re-run a frontend build | **Amplify →** the app **→** branch **→ Redeploy this version** |
+| Re-run a frontend build and deploy | **CodePipeline → Pipelines →** `<STACK-PREFIX>-Amplify-FrontendPipeline` **→ Release change** |
 
 Common failures:
 
@@ -180,3 +203,5 @@ Common failures:
 - **No automated infrastructure or Lambda deployment.** Backend code and CloudFormation changes need a manual `cdk deploy`.
 - **No promotion between environments.** Each deployment (one `StackPrefix`) has its own pipeline watching the branch set by `githubBranch`. There is no approval stage and no path from one environment to another.
 - **Frontend and container paths are not coordinated.** A push can deploy a new frontend while the container pipeline fails, or the reverse.
+- **Only `githubBranch` gets frontend deployments.** When `githubBranch` is not `main`, the Amplify `main` branch still exists but no pipeline deploys to it.
+- **Frontend pipeline changes need a deploy.** Like the container pipeline, it does not update itself: changes to `cdk/lib/amplify-stack.ts` take effect after `npx cdk deploy <STACK-PREFIX>-Amplify`.

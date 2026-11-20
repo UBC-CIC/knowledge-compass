@@ -6,8 +6,6 @@
   - [Table of Contents](#table-of-contents)
   - [Requirements](#requirements)
     - [Request Higher Bedrock LLM Invocation Quotas](#request-higher-bedrock-llm-invocation-quotas)
-  - [Pre-Deployment](#pre-deployment)
-    - [Create GitHub Personal Access Token](#create-github-personal-access-token)
   - [Deployment](#deployment)
     - [Step 1: Fork \& Clone The Repository](#step-1-fork--clone-the-repository)
     - [Step 2: Upload Secrets \& Parameters](#step-2-upload-secrets--parameters)
@@ -18,7 +16,7 @@
       - [Stacks Deployed](#stacks-deployed)
     - [Step 4: Authorize the GitHub Connection and Build the Images](#step-4-authorize-the-github-connection-and-build-the-images)
   - [Post-Deployment](#post-deployment)
-    - [Step 1: Build AWS Amplify App](#step-1-build-aws-amplify-app)
+    - [Step 1: Check the Frontend Deployment](#step-1-check-the-frontend-deployment)
     - [Step 2: Configure Admin User](#step-2-configure-admin-user)
     - [Step 3: Visit Web App](#step-3-visit-web-app)
     - [Step 4: Add Content](#step-4-add-content)
@@ -43,13 +41,9 @@ Tools:
 
 Before launch, check the Bedrock "requests per minute" and "tokens per minute" quotas in the Service Quotas console for Claude Haiku 5.5 (`us.anthropic.claude-haiku-5-5`) and embedding model (Amazon Titan Text Embeddings V2). Request increases to match your expected traffic; approval can take 1–2 days. See [Bedrock service quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html#limits_bedrock).
 
-## Pre-Deployment
-
-### Create GitHub Personal Access Token
-
-Create a [fine-grained personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) with access to the KC repository only: read-only for Contents and Metadata, read and write for Webhooks and Commit statuses. Keep its value for Step 2.
-
 ## Deployment
+
+No GitHub personal access token is needed. Both pipelines read the repository through one AWS CodeConnections connection that you authorize in [Step 4](#step-4-authorize-the-github-connection-and-build-the-images).
 
 ### Step 1: Fork & Clone The Repository
 
@@ -63,18 +57,9 @@ cd ../frontend && npm ci
 
 ### Step 2: Upload Secrets & Parameters
 
-Commands in this guide use bash. On Windows, use Git Bash or WSL. In PowerShell, replace the line-continuation `\` with a backtick and escape the inner JSON double quotes as `\"` (see the example after the two secrets).
+Commands in this guide use bash. On Windows, use Git Bash or WSL. In PowerShell, replace the line-continuation `\` with a backtick and escape the inner JSON double quotes as `\"` (see the example after the database secret).
 
 Replace `<YOUR-PROFILE-NAME>` with your AWS CLI profile in every command.
-
-GitHub personal access token:
-
-```bash
-aws secretsmanager create-secret \
-  --name github-personal-access-token \
-  --secret-string '{"my-github-token": "<YOUR-GITHUB-TOKEN>"}' \
-  --profile <YOUR-PROFILE-NAME>
-```
 
 GitHub username (the owner of your fork):
 
@@ -96,14 +81,9 @@ aws secretsmanager create-secret \
 ```
 
 <details>
-<summary>PowerShell version of the two secrets</summary>
+<summary>PowerShell version of the database secret</summary>
 
 ```powershell
-aws secretsmanager create-secret `
-  --name github-personal-access-token `
-  --secret-string '{\"my-github-token\": \"<YOUR-GITHUB-TOKEN>\"}' `
-  --profile <YOUR-PROFILE-NAME>
-
 aws secretsmanager create-secret `
   --name KCSecrets `
   --secret-string '{\"DB_Username\": \"<YOUR-DB-USERNAME>\"}' `
@@ -220,7 +200,7 @@ Add any of these as `--context <flag>=<value>` to the deploy command. For any sh
 
 | Flag | Default | Effect |
 |---|---|---|
-| `githubBranch` | `main` | Adds an Amplify branch (when not `main`), sets the CICD source branch, and sets the origin written to AllowedOrigins (`https://<githubBranch>.<app-id>.amplifyapp.com`). The origin is written only when the Amplify stack is first created; if you change the branch later, add the new origin yourself ([Adding Custom Allowed Origins](#adding-custom-allowed-origins)) |
+| `githubBranch` | `main` | Adds an Amplify branch (when not `main`), sets the source branch of both the container and frontend pipelines, and sets the origin written to AllowedOrigins (`https://<githubBranch>.<app-id>.amplifyapp.com`). The origin is written only when the Amplify stack is first created; if you change the branch later, add the new origin yourself ([Adding Custom Allowed Origins](#adding-custom-allowed-origins)) |
 | `alarmEmail` | none | Subscribes the address to the operational alarm topic |
 | `lifecycleAlertEmail` / `lifecycleAlertEmailParam` | none | Subscribes to the model lifecycle alert topic. `lifecycleAlertEmailParam` is the name of an SSM String parameter holding the address; `lifecycleAlertEmail` wins if both are set |
 | `monthlyBudgetUsd` | none | Creates a monthly AWS Budget in `<PREFIX>-Cost` with 50/80/100 % alerts to the alarm topic |
@@ -241,7 +221,7 @@ The CDK deployment creates the following stacks in dependency order:
 | `<PREFIX>-CICD` | CodePipeline and the ECR repositories for the crawler and transcriber images |
 | `<PREFIX>-Ingestion` | ECS Fargate cluster and task definitions for the crawler and transcriber, the S3 ingest bucket, and the EventBridge relay that reports Transcribe and ECS task results to the knowledge base Lambda |
 | `<PREFIX>-Api` | API Gateway (REST + WebSocket), all Lambda functions, Cognito User Pool, guardrails, and the operational alarm topic |
-| `<PREFIX>-Amplify` | AWS Amplify app connected to your GitHub repository |
+| `<PREFIX>-Amplify` | AWS Amplify app that hosts the frontend, and the frontend CodePipeline that builds and deploys it |
 | `<PREFIX>-Cost` | Cost Anomaly Detection alerts, plus a monthly budget when `-c monthlyBudgetUsd=<amount>` is set |
 | `<PREFIX>-Eval` | Evaluation harness resources; deployed only with `-c enableEval=true` |
 | `<PREFIX>-EvalJobs` | Bedrock evaluation job resources in `evalJobRegion`; deployed only with `-c enableEval=true` when that Region differs from the stack Region |
@@ -281,16 +261,16 @@ This usually means the connection was approved too late, or the image scan block
 3. Wait until the pipeline shows every stage as **Succeeded**. You can confirm in **Amazon ECR → Repositories**: both `<stack-prefix>-cicd-crawler` and `<stack-prefix>-cicd-transcriber` should have an image tagged `latest`.
 4. Back in the terminal, from `cdk/`, run the same `npx cdk deploy --all ...` command from [Deploy the stacks](#deploy-the-stacks) again, with the same `--context` values and optional flags. Stacks that already finished are skipped, and the Ingestion, Api and Amplify stacks are created.
 
-You only do this on the first deployment. After that, every push to the deployed branch runs the pipeline, which tests the code and rebuilds both images (see [CICD_PIPELINE.md](./CICD_PIPELINE.md)).
+You only do this on the first deployment. After that, every push to the deployed branch runs the container pipeline, which tests the code and rebuilds both images, and every push that changes `frontend/` runs the frontend pipeline (see [CICD_PIPELINE.md](./CICD_PIPELINE.md)).
 
 ## Post-Deployment
 
-### Step 1: Build AWS Amplify App
+### Step 1: Check the Frontend Deployment
 
-1. In the AWS console, open **AWS Amplify** and select `<STACK-PREFIX>-Amplify-amplify` under **All apps**.
-2. Select the `main` branch (or your `githubBranch` if you set one).
-3. Click **Redeploy this version** and wait for the build (5–10 minutes).
-4. The app page shows the `Amplify App ID` and the web app domain.
+The `<STACK-PREFIX>-Amplify` stack creates the `<STACK-PREFIX>-Amplify-FrontendPipeline` pipeline, which starts on its own and deploys the frontend (5–10 minutes).
+
+1. In **CodePipeline → Pipelines**, open `<STACK-PREFIX>-Amplify-FrontendPipeline` and wait until every stage shows **Succeeded**. If a stage is red, click **View details**, fix the cause, then click **Release change**.
+2. In **AWS Amplify**, select `<STACK-PREFIX>-Amplify-amplify` under **All apps**. The app page shows the `Amplify App ID` and the web app domain.
 
 ### Step 2: Configure Admin User
 
@@ -311,7 +291,7 @@ Open the web app URL shown in the Amplify console: `https://<githubBranch>.<app-
 
 ### Step 4: Add Content
 
-A new deployment has no content, so the assistant cannot give grounded answers until you add some. Sign in to the admin console and add Inclusion Canada's websites, documents and videos from **Overview → Data sources**. Follow [Adding content](./USER_GUIDE.md#adding-content) in the User Guide for step-by-step instructions for websites, documents, video transcription, and CSV or Markdown files. Then ask a question in the chat to check that the new sources appear under the answer.
+A new deployment has no content, so the assistant cannot give grounded answers until you add some. Sign in to the admin console and add Inclusion Canada's websites, documents and videos from **Overview → Data sources**. Follow [How to Add Each Type of Source](./USER_GUIDE.md#how-to-add-each-type-of-source) in the User Guide for step-by-step instructions for websites, documents, video transcription, and CSV or Markdown files. Then ask a question in the chat to check that the new sources appear under the answer.
 
 ### Adding Custom Allowed Origins
 
@@ -416,7 +396,7 @@ Follow these steps in order, and wait for each stack to finish deleting before s
    - `<STACK-PREFIX>-Database`
    - `<STACK-PREFIX>-VpcStack`
 
-3. **Delete the secrets** in Secrets Manager: `github-personal-access-token`, `KCSecrets`, and any database credentials the stack created.
+3. **Delete the secrets** in Secrets Manager: `KCSecrets`, any database credentials the stack created, and `github-personal-access-token` if it is left over from a deployment that predates the frontend pipeline.
 
 4. **Delete the SSM parameters:** `KC-owner-name`, `/KC/AllowedEmailDomains`, `/KC/LLM/HaikuArn`, `/<STACK-PREFIX>-Api/API/AllowedOrigins`.
 
