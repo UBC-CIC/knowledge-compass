@@ -359,7 +359,9 @@ export class CICDStack extends cdk.Stack {
       description: "CDK contract tests, Node.js handler tests, and Python Lambda unit tests",
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-        computeType: codebuild.ComputeType.SMALL,
+        // MEDIUM (7 GB): Jest synthesizes the full stack set per suite, which
+        // ran out of memory on SMALL (3 GB).
+        computeType: codebuild.ComputeType.MEDIUM,
       },
       timeout: cdk.Duration.minutes(20),
       buildSpec: codebuild.BuildSpec.fromObject({
