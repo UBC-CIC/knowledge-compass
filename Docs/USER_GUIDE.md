@@ -29,6 +29,7 @@ This guide covers how to get started with using the platform, from both a user a
     - [Managing Existing Data Sources](#managing-existing-data-sources)
   - [Analytics](#analytics)
   - [Prompts](#prompts)
+    - [Guides or Journeys?](#guides-or-journeys)
     - [Shared by Every Journey](#shared-by-every-journey)
     - [Journeys](#journeys)
     - [Shown on Screen](#shown-on-screen)
@@ -191,6 +192,20 @@ Under the “review later” tab, administrators also have the option to downloa
 ![Review later tab](media/user-guide/analytics-review-later.png)
 
 ### Prompts
+
+#### Guides or Journeys?
+
+There are two ways to tell the assistant how to help families. The **Answer from uploaded guides** toggle on the **Guides** page decides which one the assistant uses. The choice applies to every family, and changes can take up to five minutes to reach new messages.
+
+| | Guides (toggle on) | Journeys (toggle off) |
+|---|---|---|
+| **Use it when** | Your team already has written guidance documents and wants the assistant to follow them closely. | You want to set up each situation yourself in the admin screens, or you don't have guidance documents. |
+| **What you do** | Upload Word, PDF or Markdown guides. The assistant reads each heading as a situation. You can rename detected situations, but you don't write prompts. | Add journeys and situations, then fill in who each journey is for, the words families use, the questions to ask and in what order, and how to give guidance. |
+| **How the assistant answers** | It picks the one guide section that best fits the family's situation and answers only from that section, following its steps and wording. If nothing fits, it asks a clarifying question. | It follows the typed prompts under **How it talks** and the matching journey to decide what to ask and when to give guidance. |
+
+Both options still use **Boundaries** and **Preferred language** from **The Assistant**, and both can point families to resources from **Data sources**. In guides mode, those resources can only support a step the guide already gives. They can't add or change advice.
+
+Switching between the two doesn't delete anything. Your journeys and typed prompts stay saved while guides mode is on, so you can switch back at any time.
 
 #### Shared by Every Journey
 
