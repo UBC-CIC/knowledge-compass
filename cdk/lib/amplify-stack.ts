@@ -155,7 +155,13 @@ export class AmplifyStack extends cdk.Stack {
     // below builds from the CICD stack's CodeConnections connection and
     // pushes the build to Amplify as a manual deployment. The app is static
     // hosting only; build settings and VITE_* variables live in the pipeline.
-    const amplifyApp = new App(this, `${id}-amplifyApp`, {
+    //
+    // Construct ID bumped to amplifyAppV2: an app first created with a GitHub
+    // token keeps its repository link even after CloudFormation removes the
+    // property, and Amplify rejects manual deployments for a linked app. A new
+    // logical ID makes CloudFormation create an unlinked app and delete the old
+    // one. The new app has a new ID and URL; the custom resources below follow it.
+    const amplifyApp = new App(this, `${id}-amplifyAppV2`, {
       appName: `${id}-amplify`,
       // No appRoot: without a repository there is no monorepo build spec, so
       // the headers use the single-app customHeaders format. Header changes
@@ -205,18 +211,22 @@ export class AmplifyStack extends cdk.Stack {
     // See Docs/DEPLOYMENT_GUIDE.md for instructions.
     // Lambda responses honor the full list. Gateway error and preflight CORS
     // can carry only this one SPA origin (stage variable allowedOrigin).
-    const updateAllowedOrigins = new cdk.custom_resources.AwsCustomResource(this, "UpdateSSMAllowedOrigins", {
-      onCreate: {
-        service: "SSM",
-        action: "putParameter",
-        parameters: {
-          Name: props.allowedOriginsParamName,
-          Value: amplifyUrl,
-          Type: "String",
-          Overwrite: true,
-        },
-        physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("UpdateSSMAllowedOrigins"),
+    // onUpdate runs only when amplifyUrl changes (a new app or branch). It
+    // resets the list to that one URL, so re-add any custom origins afterwards.
+    const putAllowedOrigins: cdk.custom_resources.AwsSdkCall = {
+      service: "SSM",
+      action: "putParameter",
+      parameters: {
+        Name: props.allowedOriginsParamName,
+        Value: amplifyUrl,
+        Type: "String",
+        Overwrite: true,
       },
+      physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("UpdateSSMAllowedOrigins"),
+    };
+    const updateAllowedOrigins = new cdk.custom_resources.AwsCustomResource(this, "UpdateSSMAllowedOrigins", {
+      onCreate: putAllowedOrigins,
+      onUpdate: putAllowedOrigins,
       policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter${props.allowedOriginsParamName}`,
@@ -257,25 +267,27 @@ export class AmplifyStack extends cdk.Stack {
     });
     pinGatewayAllowedOrigin.node.addDependency(updateAllowedOrigins);
 
-    new cdk.custom_resources.AwsCustomResource(this, "UpdateS3BucketCors", {
-      onCreate: {
-        service: "S3",
-        action: "putBucketCors",
-        parameters: {
-          Bucket: props.ingestBucketName,
-          CORSConfiguration: {
-            CORSRules: [
-              {
-                AllowedHeaders: ["*"],
-                AllowedMethods: ["GET", "PUT", "POST", "DELETE", "HEAD"],
-                AllowedOrigins: [amplifyUrl],
-                ExposeHeaders: ["ETag"],
-              },
-            ],
-          },
+    const putBucketCors: cdk.custom_resources.AwsSdkCall = {
+      service: "S3",
+      action: "putBucketCors",
+      parameters: {
+        Bucket: props.ingestBucketName,
+        CORSConfiguration: {
+          CORSRules: [
+            {
+              AllowedHeaders: ["*"],
+              AllowedMethods: ["GET", "PUT", "POST", "DELETE", "HEAD"],
+              AllowedOrigins: [amplifyUrl],
+              ExposeHeaders: ["ETag"],
+            },
+          ],
         },
-        physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("UpdateS3BucketCors"),
       },
+      physicalResourceId: cdk.custom_resources.PhysicalResourceId.of("UpdateS3BucketCors"),
+    };
+    new cdk.custom_resources.AwsCustomResource(this, "UpdateS3BucketCors", {
+      onCreate: putBucketCors,
+      onUpdate: putBucketCors,
       policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
         resources: [`arn:aws:s3:::${props.ingestBucketName}`],
       }),
