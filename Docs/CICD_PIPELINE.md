@@ -122,7 +122,7 @@ Allow-list changes are part of the CICD stack's buildspec, so they take effect o
 | Image waiter role (Ingestion stack) | `ecr:DescribeImages`/`DescribeRepositories`/`BatchGetImage` on the two repositories; `codepipeline:StartPipelineExecution` on this pipeline |
 | Frontend source action role (Amplify stack) | `codeconnections:UseConnection` and `codestar-connections:UseConnection` on the GitHub connection (the IAM prefix must match the connection ARN's prefix) |
 | Frontend build project role (Amplify stack) | CDK defaults only (logs and pipeline artifacts) |
-| Frontend deploy project role (Amplify stack) | `amplify:GetApp` on the app; `amplify:CreateDeployment`/`StartDeployment`/`GetJob` on the deployment branch and its jobs |
+| Frontend deploy project role (Amplify stack) | `amplify:GetApp` on the app; `amplify:CreateDeployment`/`StartDeployment`/`GetJob` on the deployment branch, its jobs, and its deployments |
 
 `cdk/test/cicd-stack.test.ts` asserts the ECR scoping, so a change that widens it fails the Test stage.
 

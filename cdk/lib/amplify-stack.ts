@@ -435,7 +435,9 @@ export class AmplifyStack extends cdk.Stack {
     deployProject.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["amplify:CreateDeployment", "amplify:StartDeployment", "amplify:GetJob"],
-        resources: [branchArn, `${branchArn}/jobs/*`],
+        // CreateDeployment is authorized against branches/<b>/deployments/*,
+        // not the branch ARN the Service Authorization Reference lists.
+        resources: [branchArn, `${branchArn}/jobs/*`, `${branchArn}/deployments/*`],
       })
     );
 
