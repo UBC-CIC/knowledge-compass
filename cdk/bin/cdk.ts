@@ -164,7 +164,10 @@ const amplifyStack = new AmplifyStack(app, `${StackPrefix}-Amplify`, apiStack, {
   githubBranch: githubBranch,
   ingestBucketName: ingestionStack.ingestBucket.bucketName,
   allowedOriginsParamName: apiStack.allowedOriginsParamName,
+  // The frontend pipeline reuses the CICD stack's GitHub connection (no token).
+  githubConnectionArn: cicdStack.githubConnectionArn,
 });
+amplifyStack.addDependency(cicdStack);
 amplifyStack.addDependency(apiStack);
 amplifyStack.addDependency(ingestionStack);
 

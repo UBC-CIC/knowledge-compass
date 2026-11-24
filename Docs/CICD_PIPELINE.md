@@ -35,7 +35,7 @@ GitHub push ──► Source ──► Test (UnitTests) ──► Build (Build_c
 
 ### Source stage
 
-- Uses an AWS CodeConnections GitHub connection named `<STACK-PREFIX>-CICD-github-conn`. The connection must be authorized once in the console after the first deploy (see [Step 4 of the Deployment Guide](./DEPLOYMENT_GUIDE.md#step-4-authorize-the-github-connection-and-build-the-images)).
+- Uses an AWS CodeConnections GitHub connection named `<STACK-PREFIX>-CICD-github-org-conn`. The connection must be authorized once in the console after the first deploy, by an organization owner or repository admin when the repository belongs to an organization (see [Step 4 of the Deployment Guide](./DEPLOYMENT_GUIDE.md#step-4-authorize-the-github-connection-and-build-the-images)). The older `<STACK-PREFIX>-CICD-github-conn` connection is no longer used by any pipeline and is kept only until a cleanup release removes it.
 - The repository owner comes from the SSM parameter `KC-owner-name`. The repository name comes from the `githubRepo` context value.
 - The branch is the `githubBranch` context value, which defaults to `main`.
 - `triggerOnPush` is on, so every push to that branch starts a run, whatever files changed.
@@ -140,7 +140,7 @@ See `cdk/lambda/ecrImageWaiter/README.md` for the waiter's properties, permissio
 
 ## Frontend pipeline (Amplify Hosting)
 
-The `<STACK-PREFIX>-Amplify` stack creates an Amplify app with no repository connection and a CodePipeline that builds the frontend and deploys it to that app. No GitHub token is involved: the pipeline reads the repository through the CICD stack's CodeConnections connection, `<STACK-PREFIX>-CICD-github-conn`.
+The `<STACK-PREFIX>-Amplify` stack creates an Amplify app with no repository connection and a CodePipeline that builds the frontend and deploys it to that app. No GitHub token is involved: the pipeline reads the repository through the CICD stack's CodeConnections connection, `<STACK-PREFIX>-CICD-github-org-conn`.
 
 ```
 GitHub push touching frontend/ ──► Source ──► Build (LintTestBuild) ──► Deploy (AmplifyDeploy) ──► Amplify branch
@@ -157,15 +157,23 @@ A lint error, failing frontend test, or failed deployment stops the pipeline, an
 
 ### Moving an existing deployment off the GitHub token
 
-Deployments created before this pipeline have an Amplify app that builds from GitHub with the `github-personal-access-token` secret. Deploying the Amplify stack updates that app in place, so its app ID and URL stay the same. After `npx cdk deploy <STACK-PREFIX>-Amplify`:
+Deployments created before this pipeline have an Amplify app that builds from GitHub with the `github-personal-access-token` secret. Deploying the Amplify stack updates that app in place, and CloudFormation removes the repository, build spec and environment variables from the template, but **Amplify keeps the app's existing GitHub link**. Confirmed on a dev deployment: the app still reports its repository afterwards, and `amplify create-deployment` fails with "Operation not supported. App is already connected a repository." The Deploy stage then stops with "still connected", while the site keeps serving its last build. Auto build is turned off, so no new frontend builds happen until the app is replaced.
 
-1. Check the app no longer has a repository. The command should print `None` or nothing:
+The existing app cannot be converted to manual deployments, so it has to be replaced with a new app that has no repository. That is a separate change with these consequences:
+
+- The site moves to a new URL, `https://<githubBranch>.<NEW-APP-ID>.amplifyapp.com`, and the old URL stops working.
+- The AllowedOrigins parameter, the gateway origin, and the ingest bucket CORS must follow the new URL.
+- Branch settings made by hand on the old app, such as basic auth, must be set again.
+- Authorize the GitHub connection first, so the new app gets its first deployment immediately instead of sitting empty.
+
+After the replacement:
+
+1. Check the app has no repository. The command should print `None` or nothing:
 
    ```bash
    aws amplify get-app --app-id <APP-ID> --query app.repository --output text --profile <YOUR-PROFILE-NAME>
    ```
 
-   If it still prints the repository URL, the app kept its connection and the Deploy stage fails with "still connected". The site keeps serving its last build. Amplify accepts manual deployments only once the connection is gone. Replacing the app removes it but gives the app a new ID and URL, which also needs the AllowedOrigins parameter, the gateway origin, and the ingest bucket CORS updated, so plan that as a separate change.
 2. Wait for `<STACK-PREFIX>-Amplify-FrontendPipeline` to succeed, then check the security headers are served:
 
    ```bash

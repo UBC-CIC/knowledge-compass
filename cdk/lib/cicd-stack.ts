@@ -200,6 +200,8 @@ export class CICDStack extends cdk.Stack {
   public readonly ecrRepositories: { [key: string]: ecr.Repository } = {};
   public readonly buildProjects: { [key: string]: codebuild.IProject } = {};
   public readonly pipelineName: string;
+  /** GitHub connection ARN; the Amplify stack's frontend pipeline uses it too. */
+  public readonly githubConnectionArn: string;
 
   constructor(scope: Construct, id: string, props: CICDStackProps) {
     super(scope, id, props);
@@ -298,7 +300,14 @@ export class CICDStack extends cdk.Stack {
     // Note: logical ID bumped to GitHubConnectionV2 because the previous
     // connection (GitHubConnection) was deleted outside of CloudFormation,
     // leaving the stack pointing at a physical ARN that no longer exists.
-    const githubConnection = new codeconnections.CfnConnection(
+    //
+    // GitHubConnectionV2 was authorized against a personal account's
+    // AWS Connector installation, and a connection cannot move to another
+    // installation. The pipelines now use GitHubConnectionV3, authorized
+    // against the repository owner's organization installation (a repo admin
+    // or org owner must complete the authorization). V2 and its export stay
+    // until the Amplify stack no longer imports it; remove both afterwards.
+    const legacyGithubConnection = new codeconnections.CfnConnection(
       this,
       "GitHubConnectionV2",
       {
@@ -306,6 +315,18 @@ export class CICDStack extends cdk.Stack {
         providerType: "GitHub",
       }
     );
+    this.exportValue(legacyGithubConnection.attrConnectionArn);
+
+    const githubConnection = new codeconnections.CfnConnection(
+      this,
+      "GitHubConnectionV3",
+      {
+        // Connection names are unique per account, so V3 cannot reuse V2's name.
+        connectionName: `${id}-github-org-conn`,
+        providerType: "GitHub",
+      }
+    );
+    this.githubConnectionArn = githubConnection.attrConnectionArn;
 
     // Output the connection ARN for reference
     new cdk.CfnOutput(this, "GitHubConnectionArn", {

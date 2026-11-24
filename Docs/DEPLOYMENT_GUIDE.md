@@ -43,7 +43,9 @@ Before launch, check the Bedrock "requests per minute" and "tokens per minute" q
 
 ## Deployment
 
-No GitHub personal access token is needed. Both pipelines read the repository through one AWS CodeConnections connection that you authorize in [Step 4](#step-4-authorize-the-github-connection-and-build-the-images).
+No GitHub personal access token is needed. Both pipelines read the repository through one AWS CodeConnections connection that you authorize in [Step 4](#step-4-authorize-the-github-connection-and-build-the-images). If the repository belongs to a GitHub organization, line up an organization owner or repository admin for that step before you deploy (see **Who** in Step 4).
+
+Upgrading a deployment that was created with a GitHub token? Its Amplify app cannot take pipeline deployments and has to be replaced, which changes the site URL. See [Moving an existing deployment off the GitHub token](./CICD_PIPELINE.md#moving-an-existing-deployment-off-the-github-token).
 
 ### Step 1: Fork & Clone The Repository
 
@@ -236,15 +238,28 @@ Do this step **while `cdk deploy --all` is still running**, in the AWS console i
 
 **When:** watch the terminal. Once it shows `<STACK-PREFIX>-CICD` as deployed, do the steps below. You have about 14 minutes before the Ingestion stack gives up waiting.
 
+**Who:** the person who authorizes the connection needs enough GitHub rights on the repository owner. Check this before you deploy, because the 14-minute window is short.
+
+| Repository owner | Who can authorize the connection |
+|---|---|
+| Your personal account (a fork) | You |
+| A GitHub organization (for example `UBC-CIC`) | An organization owner, or someone with the **Admin** role on the repository. **Maintain**, **Write** and lower roles are not enough |
+
+For an organization, the **AWS Connector for GitHub** app must also be installed on the organization with the repository included in its repository access (**Organization → Settings → GitHub Apps → AWS Connector for GitHub → Configure**). An organization can have only one installation of this app, so it may already be installed for other projects. If you are not an owner or repository admin, ask one to complete part 1 below while signed in to the AWS console.
+
+The repository owner is the SSM parameter `KC-owner-name` (see [Step 2](#step-2-upload-secrets--parameters)). A connection is tied to the one GitHub installation it was authorized against, so it cannot be moved from a personal account to an organization later. To change owners, create a new connection.
+
 **1. Approve the GitHub connection**
 
 1. Sign in to the AWS console with the same account and Region you are deploying to.
 2. In the search bar at the top, type **CodePipeline** and open it.
 3. In the left menu, expand **Settings** and click **Connections**.
-4. Click the connection named `<STACK-PREFIX>-CICD-github-conn`. Its status is **Pending**.
+4. Click the connection named `<STACK-PREFIX>-CICD-github-org-conn`. Its status is **Pending**.
 5. Click **Update pending connection**. A GitHub window opens.
-6. Sign in to GitHub if asked, and allow access for your GitHub account. When asked which repositories to allow, choose your `knowledge-compass` fork.
+6. Sign in to GitHub if asked. Under **GitHub Apps**, pick the installation for the repository owner: your account for a fork, or the organization. If it is not listed, choose **Install a new app** and install it on that owner, selecting the `knowledge-compass` repository.
 7. Click **Connect**. Back in the AWS console, the status changes to **Available**.
+
+If the connection stays **Pending**, or GitHub shows an error such as "Owner with access to installation must create connection", the GitHub account you used lacks the rights in the table above. Both pipelines fail at their Source stage with "No Branch [main] found" until the connection is **Available** with access to the repository.
 
 **2. Let the images build**
 
