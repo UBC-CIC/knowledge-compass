@@ -167,7 +167,7 @@ const normalizeChatSession = (session: ChatSessionRow): ChatSession => ({
   const createNewChatSession = async (): Promise<ChatSession | null> => {
     if (isDemoMode) {
       const newSession: ChatSession = {
-        id: `demo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `demo-${crypto.randomUUID()}`,
         name: "",
         user_id: userId || DEMO_USER_ID,
         created_at: new Date().toISOString(),
