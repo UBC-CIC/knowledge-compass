@@ -29,8 +29,9 @@ function withStartTime(url: string, start: string) {
   if (seconds === null) return url;
   try {
     const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
     const isYouTube =
-      parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtu.be");
+      host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
     if (!isYouTube) return url;
     parsed.searchParams.set("t", `${seconds}s`);
     return parsed.toString();
