@@ -272,7 +272,7 @@ def assess_response(
     answer_text: str,
     sources: List[Dict[str, Any]],
     llm_region: str,
-    verifier_model_id: str = "us.anthropic.claude-haiku-5-5",
+    verifier_model_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     LLM-only intervention scorer.
@@ -282,7 +282,8 @@ def assess_response(
     - answer_text: generated model answer
     - sources: retrieved source chunks
     - llm_region: AWS region for runtime
-    - verifier_model_id: model used for the verifier call
+    - verifier_model_id: model used for the verifier call; defaults to
+      config.HAIKU_ARN (/KC/LLM/HaikuArn), like every other generation call
 
     Returns:
     {
@@ -322,7 +323,7 @@ def assess_response(
         answer_text=answer_text,
         sources=sources,
         llm_region=llm_region,
-        verifier_model_id=verifier_model_id,
+        verifier_model_id=verifier_model_id or config.HAIKU_ARN,
     )
 
     data = verifier_result["data"]

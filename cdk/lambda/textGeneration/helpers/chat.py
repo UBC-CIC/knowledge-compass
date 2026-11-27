@@ -124,6 +124,36 @@ def answer_char_cap() -> int:
     return cap if cap > 0 else ANSWER_CHAR_CAP_FALLBACK
 
 
+# maxTokens for the answer call, derived from the character cap. Text past the
+# cap is never shown, so tokens beyond it are paid for and discarded. English
+# runs about 4 characters per token; 3 is used so a dense answer still fits.
+# The headroom covers the hidden tags written after the answer
+# (<cited_indices>, <journey_state>/<detective_state>, <guide_state>).
+CHARS_PER_TOKEN_ESTIMATE = 3
+HIDDEN_TAG_TOKEN_HEADROOM = 500
+
+
+def generation_max_tokens(char_cap: int) -> int:
+    """maxTokens for the answer: enough for char_cap plus the hidden tags, at most config.MAX_TOKENS."""
+    needed = -(-char_cap // CHARS_PER_TOKEN_ESTIMATE) + HIDDEN_TAG_TOKEN_HEADROOM
+    return min(config.MAX_TOKENS, needed)
+
+
+def _log_generation_usage(usage: Dict[str, Any], stop_reason: Optional[str], max_tokens: int) -> None:
+    """Token counts and stop reason only, never message text."""
+    logger.info(
+        "Generation usage: input=%s output=%s cache_read=%s cache_write=%s stop_reason=%s max_tokens=%d",
+        usage.get("inputTokens"),
+        usage.get("outputTokens"),
+        usage.get("cacheReadInputTokens", 0),
+        usage.get("cacheWriteInputTokens", 0),
+        stop_reason,
+        max_tokens,
+    )
+    if stop_reason == "max_tokens":
+        logger.warning("Generation stopped at maxTokens=%d; hidden tags may be missing", max_tokens)
+
+
 def cap_answer_length(text: str, cap: int) -> str:
     """
     Cut text to at most cap characters. The cut falls on the last whitespace
@@ -144,11 +174,13 @@ def _generate_session_title(
     query: str,
     answer_text: str,
     llm_region: str,
-    haiku_model_arn: str = "us.anthropic.claude-haiku-5-5"
+    haiku_model_arn: Optional[str] = None,
 ) -> Optional[str]:
     """
     Uses a fast, low-cost LLM call to generate a short, descriptive title for a
     chat session from its first exchange. Falls back to None on any error.
+    The model defaults to config.HAIKU_ARN (/KC/LLM/HaikuArn), like every
+    other generation call.
     """
     title_system_prompt = """
 <instructions>
@@ -172,7 +204,7 @@ Output ONLY the title text.
 """
     try:
         response = bedrock_runtime(llm_region).converse(
-            modelId=haiku_model_arn,
+            modelId=haiku_model_arn or config.HAIKU_ARN,
             messages=[{"role": "user", "content": [{"text": user_message}]}],
             system=[{"text": title_system_prompt}],
             # Haiku 5.5 rejects non-default temperature and thinks by default;
@@ -595,6 +627,9 @@ def get_response(
             "phase": None,
         }
 
+    char_cap = answer_char_cap()
+    max_tokens = generation_max_tokens(char_cap)
+
     # Structure the system array with the cache point
     request_payload = {
             "modelId": model_arn,
@@ -612,7 +647,7 @@ def get_response(
             # sampling settings are sent. Thinking is on by default there;
             # keep it off so the streamed reply starts with the answer.
             "inferenceConfig": {
-                "maxTokens": config.MAX_TOKENS,
+                "maxTokens": max_tokens,
             },
             "additionalModelRequestFields": {
                 "thinking": {"type": "disabled"},
@@ -622,7 +657,8 @@ def get_response(
     bedrock = bedrock_runtime(llm_region)
     
     full_response_text = ""
-    char_cap = answer_char_cap()
+    usage: Dict[str, Any] = {}
+    stop_reason = None
     answer_started = False
     answer_text = ""
     generation_failed = False
@@ -661,6 +697,10 @@ def get_response(
         response = bedrock.converse_stream(**request_payload)
         stream = response.get("stream", [])
         for event in stream:
+            if "messageStop" in event:
+                stop_reason = event["messageStop"].get("stopReason")
+            elif "metadata" in event:
+                usage = event["metadata"].get("usage") or {}
             if "contentBlockDelta" in event:
                 delta = event["contentBlockDelta"]["delta"]
                 if "text" in delta:
@@ -720,6 +760,7 @@ def get_response(
         if screener is not None and screener.stopped:
             _close_stream(stream)
         else:
+            _log_generation_usage(usage, stop_reason, max_tokens)
             # Parse final answer text properly
             final_answer_match = re.search(r'<answer>(.*?)</answer>', full_response_text, re.DOTALL)
             if final_answer_match:
@@ -891,7 +932,8 @@ def get_response(
                 query=query,
                 answer_text=answer_text,
                 sources=used_sources,
-                llm_region=llm_region
+                llm_region=llm_region,
+                verifier_model_id=config.HAIKU_ARN,
             )
             warning_text = intervention_result.get("warning_text")
         except Exception as e:
@@ -990,7 +1032,9 @@ def get_response(
             current_title = get_session_title(db_connection, chat_session_id)
             is_untitled = current_title is None or current_title.strip() in ("", "New Session")
             if is_untitled and get_exchange_count(chat_session_id, db_connection) == 1:
-                generated_title = _generate_session_title(query, final_answer_text, llm_region)
+                generated_title = _generate_session_title(
+                    query, final_answer_text, llm_region, haiku_model_arn=config.HAIKU_ARN
+                )
                 if generated_title:
                     update_session_title(db_connection, chat_session_id, generated_title)
                     db_connection.commit()
