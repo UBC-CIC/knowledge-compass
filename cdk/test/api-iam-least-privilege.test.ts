@@ -606,6 +606,19 @@ describe("Bedrock invoke scope", () => {
     ].sort());
   });
 
+  test.each(["lambdaTextGen", "lambdaKnowledgeBase"])("%s: Cohere v3 is granted in this region only", (fnId) => {
+    const cohere = invokeResources(fnId).filter((r) => r.includes("cohere.embed-english-v3"));
+    expect(cohere).toEqual([`arn:aws:bedrock:${env.region}::foundation-model/cohere.embed-english-v3`]);
+  });
+
+  test("the knowledge base can invoke and converse but not stream", () => {
+    const actions = allowActionsFor(roleOf("lambdaKnowledgeBase")).filter((a) => a.startsWith("bedrock:"));
+    expect(actions).toEqual(expect.arrayContaining(["bedrock:InvokeModel", "bedrock:Converse"]));
+    for (const a of ["bedrock:InvokeModelWithResponseStream", "bedrock:ConverseStream", "bedrock:GetInferenceProfile"]) {
+      expect(actions).not.toContain(a);
+    }
+  });
+
   test("no Claude model other than Haiku 5.5 is invokable", () => {
     for (const fnId of ["lambdaTextGen", "lambdaKnowledgeBase"]) {
       const claude = invokeResources(fnId).filter((r) => r.includes("anthropic.claude"));

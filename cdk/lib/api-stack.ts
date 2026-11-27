@@ -1940,19 +1940,11 @@ export class ApiGatewayStack extends cdk.Stack {
     }));
 
 
-    // Bedrock permissions
-    const textGenBedrockPolicyStatement = new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        "bedrock:GetInferenceProfile",
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream", // Add streaming permission
-        "bedrock:Converse",
-        "bedrock:ConverseStream",
-      ],
-      resources: [
+    // Bedrock permissions. Every embedding call is made from this region (REGION,
+    // or the Lambda's own AWS_REGION when no region is passed), so Cohere v3 is
+    // granted here only.
+    const bedrockModelResources = [
         `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-english-v3`,
-        `arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3`,
         // Candidate embedding models. Model ids / inference-profile ARNs are
         // configuration on the embedding_spaces row; these grants enable
         // candidates and do not assert availability in this region. Embedding
@@ -1976,7 +1968,17 @@ export class ApiGatewayStack extends cdk.Stack {
         ...generationModelRegions(this.region).map(
           (r) => `arn:aws:bedrock:${r}::foundation-model/${GENERATION_FOUNDATION_MODEL}`,
         ),
+    ];
+    const textGenBedrockPolicyStatement = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        "bedrock:GetInferenceProfile",
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream", // Add streaming permission
+        "bedrock:Converse",
+        "bedrock:ConverseStream",
       ],
+      resources: bedrockModelResources,
     });
     lambdaTextGen.addToRolePolicy(textGenBedrockPolicyStatement);
 
@@ -2075,10 +2077,14 @@ export class ApiGatewayStack extends cdk.Stack {
     }));
 
     // Bedrock for the knowledge base: embeddings (Cohere v3 and the candidate
-    // embedding models) and Haiku Converse for guideline-mode labelling. It used
-    // to get these through the role shared with lambdaTextGen; with its own role
-    // it needs the statement explicitly. Same statement object, plain ARNs.
-    lambdaKnowledgeBase.addToRolePolicy(textGenBedrockPolicyStatement);
+    // embedding models, InvokeModel) and Haiku Converse for guideline-mode
+    // labelling. Same model ARNs as text generation, but no streaming or
+    // GetInferenceProfile: this function never streams a reply.
+    lambdaKnowledgeBase.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["bedrock:InvokeModel", "bedrock:Converse"],
+      resources: bedrockModelResources,
+    }));
 
     // Search-index registration asks the Bedrock control plane which embedding
     // models this account can call, and which id or inference-profile ARN to
