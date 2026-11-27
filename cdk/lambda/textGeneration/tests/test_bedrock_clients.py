@@ -29,8 +29,16 @@ class BedrockRuntimeClientTests(unittest.TestCase):
             b = bedrock_clients.bedrock_runtime("us-east-1")
         self.assertIsNot(a, b)
         self.assertEqual(make.call_count, 2)
-        make.assert_any_call("bedrock-runtime", region_name="ca-central-1")
-        make.assert_any_call("bedrock-runtime", region_name="us-east-1")
+        make.assert_any_call("bedrock-runtime", region_name="ca-central-1", config=bedrock_clients.CLIENT_CONFIG)
+        make.assert_any_call("bedrock-runtime", region_name="us-east-1", config=bedrock_clients.CLIENT_CONFIG)
+
+    def test_timeouts_and_retries_fit_the_lambda_budget(self):
+        # Worst case per call is about max_attempts * read_timeout; it must stay
+        # well inside the 60 s text generation timeout.
+        cfg = bedrock_clients.CLIENT_CONFIG
+        self.assertEqual(cfg.retries, {"mode": "standard", "max_attempts": 2})
+        self.assertLessEqual(cfg.read_timeout * cfg.retries["max_attempts"], 45)
+        self.assertLessEqual(cfg.connect_timeout, 10)
 
 
 if __name__ == "__main__":
